@@ -1,0 +1,23 @@
+---
+description: Docker Compose, images, env files, and dependency discipline
+globs: "{Dockerfile*,docker-compose*.yml,docker-compose*.yaml,compose*.yml,**/.github/**}"
+alwaysApply: false
+---
+
+# DevOps
+
+MVP target: `docker compose up` runs API, worker, Redis, frontend, and FFmpeg-capable worker image. CPU-only; no GPU required.
+
+## Images and Compose
+
+Multi-stage builds, non-root where practical, healthchecks, explicit env files. No secrets in Dockerfiles or committed `.env`. Separate dev vs production bind-mounts and debug flags.
+
+Do not bake models, API keys, or host paths into images.
+
+## Dependencies
+
+Add a package only after checking: existing lib, maintenance, license, security, size, runtime cost, necessity. Do not add deps for one-liners the stdlib already covers.
+
+## Observability
+
+Structured logs: `job_id`, `chunk_id`, provider, model, `source_language`, `target_language`, duration, character count, status, retry count, `error_type`. Correlation via `job_id`. No secrets, no full story payloads.

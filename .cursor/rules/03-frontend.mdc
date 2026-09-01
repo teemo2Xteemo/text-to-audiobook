@@ -1,0 +1,31 @@
+---
+description: React TypeScript UI conventions and language/voice sourcing
+globs: frontend/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Frontend
+
+React + TypeScript, **strict** mode. UI components stay presentational; API calls and job polling live in a typed client/hooks layer.
+
+## State and data
+
+- Explicit `idle | loading | success | error` for async views.
+- Typed client + typed responses. Do not duplicate backend validation or pipeline logic.
+- Language and voice options come from backend capabilities, filtered by `target_language`. Do not ship a hard-coded world language/voice table.
+
+```ts
+// BAD
+const VOICES = ["vi-VN-NamMinhNeural"];
+const TARGETS = ["Vietnamese"];
+
+// GOOD
+const { languages, voices } = await api.getCapabilities();
+const voicesForTarget = voices.filter((v) => v.language === targetLanguage);
+```
+
+## UX
+
+Progress must reflect job stages and chunk counts from the API (translating 12/35, generating audio 8/35). User-facing errors use `error_type` messages, never stack traces.
+
+Accessible, responsive controls. Native elements + labels; keyboard-reachable generate/cancel. Do not block the tab on generation — poll job status.

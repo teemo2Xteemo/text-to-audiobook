@@ -1,0 +1,38 @@
+---
+description: Translation, narration, TTS ports, and audio merge rules
+globs: backend/**/*.py
+alwaysApply: false
+---
+
+# Pipeline providers
+
+Business logic calls ports. Vendor SDKs stay in `providers/`.
+
+## Translation
+
+`translate(text, source_language, target_language)` — natural narration in the **target** language, not word-for-word. Map provider language codes **inside** the adapter (`zh` → `zho` for NLLB). `source_language` may be `auto` if the provider/detector supports it.
+
+```python
+# BAD
+if provider == "nllb":
+    ...
+if source_language == "zh":
+    ...
+
+# GOOD
+await translation_provider.translate(text, source_language, target_language)
+```
+
+## Narration
+
+Do not send raw translation to TTS. A dedicated narration stage may normalize punctuation, pauses, dialogue, numbers, abbreviations, and sentence boundaries **without changing meaning**.
+
+## TTS
+
+`synthesize(text, language, voice, settings)`. Voice must be compatible with `target_language`. Voices are listed by the provider and chosen by the user (or config default **for that language**), never a single global Vietnamese (or any) voice.
+
+Edge TTS is the **MVP adapter**, not the domain model. Piper, XTTS, Chatterbox, ElevenLabs, Azure, Google must plug in without changing domain/application orchestration.
+
+## Audio
+
+Providers do not share codec/rate/channels. Normalize with FFmpeg **before** merge. Incremental/file-based processing; do not load the whole story audio into memory. See security rule for subprocess invocation.

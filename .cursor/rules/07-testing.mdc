@@ -1,0 +1,31 @@
+---
+description: Test strategy — domain isolation and no live providers in unit tests
+globs: "**/{tests,test}/**/*.{py,ts,tsx}"
+alwaysApply: false
+---
+
+# Testing
+
+Unit tests must not call Edge TTS, NLLB, ElevenLabs, network translation APIs, or real FFmpeg unless marked as explicit integration tests.
+
+Fake/mock **ports**. Test application/domain in isolation.
+
+## Must cover
+
+- Domain: language validation, job transitions, chunking, cache keys, retry, idempotency
+- Translation/TTS ports: source/target handling, unsupported language, provider failure, voice/language compatibility
+- Jobs: happy path, partial chunk failure, retry, resume, cancellation if implemented
+- API: validation, job create/status, error envelope
+
+```python
+# BAD
+def test_translate():
+    NLLBProvider().translate("你好", "zh", "vi")  # network/model
+
+# GOOD
+class FakeTranslator:
+    async def translate(self, text, source_language, target_language) -> str:
+        return f"[{target_language}] {text}"
+```
+
+External/GPU tests are opt-in. CI default = unit tests + linters.

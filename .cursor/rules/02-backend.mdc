@@ -1,0 +1,38 @@
+---
+description: FastAPI/Python backend conventions, API shape, and configuration
+globs: backend/**/*.py
+alwaysApply: false
+---
+
+# Backend
+
+Python 3.12+ / FastAPI. Type-annotate public functions. Validate I/O with Pydantic. Inject dependencies; do not use global mutable clients.
+
+## Routes
+
+No business logic, no provider SDKs, no FFmpeg in handlers. Return/raise structured errors mapped to HTTP.
+
+```python
+# BAD
+@router.post("/generate")
+async def generate(file: UploadFile):
+    text = await file.read()
+    audio = await edge_tts.Communicate(text, "vi-VN-NamMinhNeural").save(...)
+
+# GOOD
+@router.post("/api/jobs", status_code=202)
+async def create_job(payload: CreateJobRequest, service: JobService = Depends(get_job_service)):
+    job = await service.enqueue(payload)
+    return JobCreatedResponse(job_id=job.id, status=job.status)
+```
+
+## API
+
+- Jobs are async: `POST /api/jobs` → `{ job_id, status }`; `GET /api/jobs/{job_id}` for progress.
+- Capabilities: languages/voices come from providers (`GET /api/capabilities` or equivalent), not from a hard-coded frontend list.
+- Timeouts: never hold an HTTP request for translation/TTS of a full story.
+- Errors: stable `error_type` codes (`INVALID_INPUT`, `UNSUPPORTED_LANGUAGE`, `TRANSLATION_FAILED`, `TTS_FAILED`, `AUDIO_PROCESSING_FAILED`, `STORAGE_FAILED`, `PROVIDER_RATE_LIMIT`, `TIMEOUT`). No stack traces to clients.
+
+## Code shape
+
+Small functions, explicit dependencies, enums for job states (no raw status strings). Async I/O for network/subprocess. Structured logs with `job_id` / `chunk_id` — never API keys or full story text.

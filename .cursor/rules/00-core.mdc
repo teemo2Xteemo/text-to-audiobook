@@ -1,0 +1,39 @@
+---
+description: Core product constraints, language-agnostic design, and rule priority
+alwaysApply: true
+---
+
+# Core constraints
+
+This product is a **multilingual story → audiobook** pipeline. Requirements: `text-story-to-audiobook-requirements.md`.
+
+Domain vocabulary: `source_language`, `target_language`, `language_code`, `locale`, `voice`. Supported languages come from **provider capabilities + config**, never from a hard-coded pair.
+
+## Never in business logic
+
+- A source or target language (Chinese, Vietnamese, English, Japanese, Korean, or any other)
+- A language pair (`zh → vi` is an **example acceptance path**, not the architecture)
+- A universal default voice ID
+- Provider-specific codes (`zho`, Edge voice names) outside adapters
+
+```python
+# BAD
+translate_zh_to_vi(text)
+voice = "vi-VN-NamMinhNeural"
+
+# GOOD
+translation_provider.translate(text, source_language=src, target_language=tgt)
+tts_provider.synthesize(text, language=tgt, voice=selected_voice, settings=settings)
+```
+
+## Priority when rules conflict
+
+1. Security → 2. Correctness → 3. Product requirements → 4. Architecture → 5. Maintainability → 6. Scalability → 7. Performance → 8. Convenience
+
+## Long-running work
+
+HTTP never blocks on translation/TTS. Create a job, return `job_id`, process in a worker.
+
+## Ambiguity
+
+Document `Assumption / Impact / Alternatives / Recommendation`. Do not invent product behavior silently.

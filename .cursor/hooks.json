@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "python3 .cursor/hooks/session_start.py",
+        "timeout": 5
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "python3 .cursor/hooks/before_shell.py",
+        "timeout": 5
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "python3 .cursor/hooks/after_file_edit.py",
+        "timeout": 35
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "python3 .cursor/hooks/post_tool_use.py",
+        "matcher": "Write|StrReplace|EditNotebook",
+        "timeout": 8
+      }
+    ]
+  }
+}

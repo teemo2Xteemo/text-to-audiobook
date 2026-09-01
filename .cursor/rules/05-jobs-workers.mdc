@@ -1,0 +1,36 @@
+---
+description: Job state machine, workers, chunk retry, cache, and resume
+globs: backend/**/*.py
+alwaysApply: false
+---
+
+# Jobs, chunks, workers
+
+## State machine
+
+Use one enum. Invalid transitions must fail.
+
+`QUEUED → PARSING → TRANSLATING → PREPARING_TTS → GENERATING_AUDIO → MERGING → COMPLETED`
+
+Any state → `FAILED`. Optional later: `CANCELLED`. Do not scatter raw strings.
+
+## Chunks
+
+Stable `chunk_id`s. Each chunk is independently translatable/synthesizable, cacheable, retryable, and checkpointed.
+
+```text
+chunk-001 ✓  chunk-002 ✓  chunk-003 ✗  chunk-004 ✓
+→ retry only chunk-003
+```
+
+If work stops at chunk 37/100, resume from the last valid checkpoint. Do not recompute completed chunks.
+
+## Idempotency and cache
+
+Safe to retry. Cache keys must include operation + text + `source_language` + `target_language` + provider + model + voice + relevant settings — **not text alone**.
+
+## Workers
+
+Queue (Redis) + worker process. Bounded, **configurable** concurrency. Respect provider rate limits. Do not maximize parallelism by default.
+
+Job progress (`stage`, `chunk_current`, `chunk_total`) is persisted so `GET /api/jobs/{id}` can render the UI.

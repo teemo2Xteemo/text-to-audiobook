@@ -1,0 +1,45 @@
+---
+description: Pipeline stages, project layout, and dependency direction
+alwaysApply: true
+---
+
+# Architecture
+
+Intended layout (see `docs/ai/target-structure.md`). Do not invent a parallel tree.
+
+```text
+backend/app/{api,application,domain,infrastructure,providers,workers,config}
+frontend/   Docker Compose   Redis queue   FFmpeg
+```
+
+## Pipeline stages (separate modules)
+
+Input → language detect/select → parse → chunk → **translate** → **narration** → **TTS** → audio normalize/merge → output
+
+Do not put the whole pipeline in one service, route, or worker function.
+
+## Dependency direction
+
+`api → application → domain ← providers/infrastructure`
+
+- Domain defines ports (`TranslationProvider`, `TTSProvider`, chunking, job state).
+- Application orchestrates one stage at a time.
+- Adapters live under `providers/` / `infrastructure/`.
+- Routes parse HTTP and call application services only.
+
+```python
+# BAD — domain imports a vendor
+from edge_tts import Communicate
+
+# GOOD — domain depends on a port
+class TranslationProvider(Protocol):
+    async def translate(self, text: str, source_language: str, target_language: str) -> str: ...
+```
+
+## New architecture
+
+Only add a pattern if it solves a real gap, is simpler than alternatives, and stays testable. Prefer the smallest design that meets the requirements.
+
+## Config boundaries
+
+Domain config (chunk limits, job states) ≠ application config ≠ provider config ≠ infrastructure config. No secrets or provider URLs in source.

@@ -1,0 +1,32 @@
+---
+description: Required workflow for AI coding agents before and after changes
+alwaysApply: true
+---
+
+# AI agent workflow
+
+```text
+Understand task → read relevant rules → inspect existing code → reuse patterns
+→ identify boundaries → plan smallest change → implement → tests
+→ formatter/linter/typecheck → review git diff → architecture check → report
+```
+
+Never jump from a prompt to a large rewrite.
+
+## Do not
+
+- Touch unrelated files or drive-by refactors
+- Replace libraries or add architecture without a documented gap
+- Silently change public APIs, env vars, schemas, or provider behavior
+- Hard-code languages, voices, or vendor SDKs into domain/application/API
+- Implement the whole product when asked for one slice
+
+## Search first
+
+Reuse ports, enums, error types, cache key helpers, and tests. If a provider/adapter already exists, extend it.
+
+## After a change
+
+Run the narrowest tests. Summarize files changed, behavior, and any new Assumption/Impact/Alternatives/Recommendation. Leave the tree in a state another agent can continue.
+
+Governance index: `docs/ai/README.md`.

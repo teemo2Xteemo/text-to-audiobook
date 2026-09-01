@@ -1,0 +1,50 @@
+# Secrets and local env
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+credentials.json
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/build/
+*.tsbuildinfo
+npm-debug.log*
+
+# Job / media artifacts
+storage/
+data/jobs/
+*.mp3
+*.wav
+*.ogg
+*.flac
+!docs/**/*.mp3
+
+# Docker / OS
+.docker/
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp

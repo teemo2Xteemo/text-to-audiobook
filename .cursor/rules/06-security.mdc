@@ -1,0 +1,35 @@
+---
+description: Upload safety, secret handling, and safe FFmpeg/subprocess use
+alwaysApply: true
+---
+
+# Security
+
+Treat uploads, pasted text, filenames, and job IDs as untrusted.
+
+## Uploads and paths
+
+Size limits, MIME/type checks, sanitized filenames, no path traversal, job-scoped temp dirs, delete temps on success **and** failure. Check job ownership before read/download/retry.
+
+## Secrets
+
+No API keys in source, Dockerfiles, logs, or client bundles. Config via environment. Never print env vars that hold credentials.
+
+## Subprocess / FFmpeg
+
+Never build a shell string from user values. Use argument lists (`subprocess.run([exe, ...])`). No `shell=True`, no `os.system`, no `eval`.
+
+```python
+# BAD
+os.system(f"ffmpeg -i {user_path} {out}")
+subprocess.run(f"ffmpeg -i {user_path}", shell=True)
+
+# GOOD
+subprocess.run(
+    ["ffmpeg", "-i", str(safe_input), str(safe_output)],
+    check=True,
+    capture_output=True,
+)
+```
+
+FFmpeg inputs must be paths the job already stored, not raw client strings. Rate-limit public job creation when the app is exposed.
