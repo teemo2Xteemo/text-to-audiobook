@@ -22,7 +22,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN groupadd --system --gid 1000 app \
-    && useradd --system --uid 1000 --gid app --home /app --no-create-home app
+    && useradd --system --uid 1000 --gid app --home /app --no-create-home app \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
 

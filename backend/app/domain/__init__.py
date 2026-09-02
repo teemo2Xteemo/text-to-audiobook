@@ -25,6 +25,7 @@ from app.domain.languages import (
     resolve_source_language,
 )
 from app.domain.ports import (
+    AudioProcessor,
     JobQueue,
     JobStore,
     LanguageDetector,
@@ -41,6 +42,7 @@ __all__ = [
     "SPEED_MAX",
     "SPEED_MIN",
     "AudioArtifact",
+    "AudioProcessor",
     "Chunk",
     "DomainError",
     "ErrorType",

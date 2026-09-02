@@ -47,7 +47,7 @@ M10 chunk retry  →  M11 checkpoint resume  →  M12 translation/TTS cache
 M13 Compose completeness + AC-09/AC-10/AC demo
 ```
 
-M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 may run in parallel after M5; M9 needs the FFmpeg helper from M4. Do not start M8/M9 before M2 ports exist.
+M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 may run in parallel after M5; M9 reuses the M4 **concat** argv helper and adds **normalize** argv. Do not start M8/M9 before M2 ports exist.
 
 ---
 
@@ -136,16 +136,19 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 **Adds/changes:**
 
 - Application pipeline, **one stage module at a time**: parse → chunk → translate → narrate → TTS → normalize → merge.
+- Orchestrator updates `JobStatus`, `chunk_current`, and `chunk_total` through an injected `JobStore` (in-memory/fake in tests). M5 worker: load job → call this orchestrator → persist Redis/FS. No pipeline stage loops in `app.workers`.
 - Fakes for translation, TTS, narration, language detection. TTS writes tiny fixture bytes under `storage/jobs/{id}/audio/`.
-- FFmpeg helper: **argv list only**. Default unit tests use an `AudioProcessor` **port** + fake concatenator; `@pytest.mark.integration` if `ffmpeg` is on PATH.
-- Checkpoint after each successful chunk. Idempotent skip if artifact already valid.
+- `AudioProcessor` is a **domain port** implemented in `infrastructure/` (FFmpeg argv helper + test fake). Not a vendor adapter under `providers/`. No `if provider == "ffmpeg"` in domain/application/routes.
+- FFmpeg helper: **argv list only** (`subprocess` argument list; never `shell=True`). M4 ships **concat argv** plus a **fake/pass-through normalize** on `AudioProcessor`. Unit tests use the fake concatenator; they do not require real normalize argv. Resolve the binary **host PATH first**, then the project copy `backend/bin/ffmpeg`. Compose/API image still installs ffmpeg via apt so PATH works in the container. `@pytest.mark.integration` runs concat when either location exists. Real codec/rate/channel normalize argv is **M9**.
+- Checkpoint: one file `storage/jobs/{id}/checkpoint.json` — JSON list of `{chunk_id, stage, artifact_path}` with `stage` ∈ `{translated, narrated, tts, normalized}`. Do **not** use `JobStatus` values as checkpoint stages. `status.json` remains the job FSM (M3). Idempotent skip if the matching record exists **and** the artifact file is non-empty. Do not split into per-chunk JSON files in MVP.
+- Backend **Dockerfile** installs the ffmpeg **binary** (apt), not a Python ffmpeg binding (`ffmpeg-python` or similar).
 - Fake translator threads `target_language` into output so tests prove no hard-coded pair.
 
-**Explicitly excludes:** RQ worker process, real NLLB/Edge, retry backoff, content-addressed cache, frontend.
+**Explicitly excludes:** RQ worker process, real NLLB/Edge, retry backoff, content-addressed cache, frontend, real FFmpeg normalize/encode flags.
 
 **Acceptance check:** pytest on a 3-sentence fixture through fakes; output file exists; `chunk_total >= 1`; domain still vendor-free.
 
-**Maps to:** pipeline shape for AC-02/03/05/12; ADR 0004/0005.
+**Maps to:** pipeline shape for AC-02/03/05/12; ADR 0004/0005. Checkpoint contract and FFmpeg split: §4.
 
 ---
 
@@ -156,7 +159,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Adds/changes:**
 
-- RQ worker: load job, call pipeline, update Redis + FS; **bounded concurrency** (default 1).
+- RQ worker: load job, call the M4 orchestrator, persist Redis + FS; **bounded concurrency** (default 1). No pipeline stage loops in `app.workers`.
 - Composition root: `TRANSLATION_PROVIDER=fake`, `TTS_PROVIDER=fake`. Name → adapter **only** in config/registry, never in domain/application/routes.
 - `GET /api/capabilities`: language intersection of translation + TTS ports; voices filtered by query `language`.
 - Compose **worker** (FFmpeg). API image stays without PyTorch.
@@ -249,7 +252,7 @@ Start with sentence boundaries, pause/ellipsis, quote cleanup; add number expans
 **Adds/changes:**
 
 - `EdgeTTSProvider`: `voices_for(language)`, `synthesize` with `TTSSettings` (speed; pitch/volume if SDK allows). Voice IDs stay in adapter/config.
-- Normalize Edge output with FFmpeg **before** merge.
+- Normalize Edge output with FFmpeg **before** merge: implement real FFmpeg normalize argv (codec/rate/channels); reuse the M4 concat helper. The M4 normalize **stage** stays; only the argv/encoder is filled in here.
 - `TTS_PROVIDER=edge`; capabilities list real voices for `target_language`.
 - Unit tests with mocked Edge client; voice/language mismatch → typed error. Optional live integration marker.
 
@@ -291,7 +294,7 @@ Start with sentence boundaries, pause/ellipsis, quote cleanup; add number expans
 
 **Adds/changes:**
 
-- On worker start: load checkpoint, skip valid artifacts, continue at first incomplete/failed chunk.
+- On worker start: load `storage/jobs/{id}/checkpoint.json` (M4 contract, §4), skip valid artifacts, continue at first incomplete/failed chunk. Do not invent a second checkpoint layout or reuse `JobStatus` as per-chunk `stage`.
 - Test: stop after chunk 2 of 5; re-invoke; fakes show 1–2 not regenerated.
 - Optional `POST /api/jobs/{id}/retry` for `FAILED` jobs (same id, reuse checkpoints).
 
@@ -400,6 +403,22 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 - **Decided (M3):** Dual-write; `storage/jobs/{id}/status.json` is resume source of truth; Redis is the GET cache (extends ADR 0003). Redis flush alone must not make resume impossible.
 
+### Checkpoint on-disk contract (M4) — decided
+
+- **Decided (M4):** One file `storage/jobs/{id}/checkpoint.json`. JSON list of `{chunk_id, stage, artifact_path}` with `stage` ∈ `{translated, narrated, tts, normalized}`. Skip when the matching record exists **and** the artifact file is non-empty. Do not use `JobStatus` values here. `status.json` stays the job FSM. No per-chunk checkpoint files in MVP.
+
+### FFmpeg concat vs normalize (M4, M9) — decided
+
+- **Decided (M4/M9):** M4 ships **concat argv** plus a **fake/pass-through normalize** on `AudioProcessor`. Unit tests do not require real normalize argv. M9 implements real FFmpeg normalize argv (codec/rate/channels) before merge and reuses the M4 concat helper. The normalize **pipeline stage** exists in M4 (fake). Resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`. Backend image installs the ffmpeg **binary** (apt) so containers have PATH. No Python ffmpeg binding.
+
+### AudioProcessor layer (M4) — decided
+
+- **Decided (M4):** `AudioProcessor` is a domain port implemented in `infrastructure/` (FFmpeg argv + test fake). Not a vendor adapter under `providers/`. Application never switches on `ffmpeg` as a provider name.
+
+### Pipeline FSM owner (M4, M5) — decided
+
+- **Decided (M4/M5):** The M4 orchestrator advances `JobStatus` / `chunk_current` / `chunk_total` via injected ports. M5 worker loads the job, calls the orchestrator, and persists Redis/FS. No pipeline loops in `app.workers`.
+
 ### Retry (M10)
 
 - **A:** `RETRY_MAX_ATTEMPTS=3`, backoff 1s / 2s / 4s.
@@ -411,6 +430,7 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 - **A:** Slim API; worker has torch + ffmpeg + edge-tts.
 - **Alt:** one image, never load NLLB in API process.
 - **R:** Two images.
+- **M4:** Resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`. `backend/Dockerfile` also installs the ffmpeg **binary** (apt) so Compose has PATH. That does not add PyTorch to the API image. M5 still adds a worker image for torch + Edge.
 
 ### Compose default providers (M5, M13)
 

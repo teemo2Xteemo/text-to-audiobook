@@ -1,8 +1,9 @@
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Protocol
 
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
-from app.domain.jobs import Job
+from app.domain.jobs import Job, OutputFormat
 from app.domain.languages import LanguageDetection
 
 
@@ -43,4 +44,26 @@ class JobQueue(Protocol):
 class SourceTextStorage(Protocol):
     async def write_source(self, job_id: str, text: str) -> None: ...
 
+    async def read_source(self, job_id: str) -> str: ...
+
     async def delete_job(self, job_id: str) -> None: ...
+
+
+class AudioProcessor(Protocol):
+    async def normalize(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        output_format: OutputFormat,
+        bitrate_kbps: int,
+    ) -> AudioArtifact: ...
+
+    async def merge(
+        self,
+        sources: Sequence[Path],
+        destination: Path,
+        *,
+        output_format: OutputFormat,
+        bitrate_kbps: int,
+    ) -> AudioArtifact: ...
