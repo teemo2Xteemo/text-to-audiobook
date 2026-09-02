@@ -6,16 +6,13 @@ Chinese → Vietnamese is a common example, not the only supported pair.
 
 ## Current status
 
-This repository currently contains:
-
 - Product requirements: [`text-story-to-audiobook-requirements.md`](text-story-to-audiobook-requirements.md)
 - AI coding rules: [`.cursor/rules/`](.cursor/rules/)
-- Hooks: [`.cursor/hooks.json`](.cursor/hooks.json)
 - Agent docs: [`docs/ai/`](docs/ai/)
 - Implementation plan: [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md)
 - Architecture decisions: [`docs/adr/`](docs/adr/)
 
-**Application code is not implemented yet.** Follow [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md) (milestones M1–M13). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
+**M1** is in place: FastAPI + Redis via Docker Compose (`GET /health`). Later milestones (jobs, pipeline, frontend, NLLB, Edge TTS) are not implemented yet. Follow [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
 
 ## For coding agents
 
@@ -23,8 +20,18 @@ Start at [`AGENTS.md`](AGENTS.md) and [`docs/ai/README.md`](docs/ai/README.md). 
 
 ## Run
 
-Once Compose exists:
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+API is bound to localhost: `http://127.0.0.1:8000/health` should return `{"status":"ok","service":"api"}`. Redis is on `127.0.0.1:6379`.
+
+Backend unit tests (Redis not required):
 
 ```bash
-docker compose up
+cd backend
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest
 ```
