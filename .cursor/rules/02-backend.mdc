@@ -30,6 +30,7 @@ async def create_job(payload: CreateJobRequest, service: JobService = Depends(ge
 
 - Jobs are async: `POST /api/jobs` → `{ job_id, status }`; `GET /api/jobs/{job_id}` for progress.
 - Capabilities: languages/voices come from providers (`GET /api/capabilities` or equivalent), not from a hard-coded frontend list.
+- MVP paths are unversioned (`/health`, `/api/...`). Do not add `/v1`. FastAPI `version=` is OpenAPI metadata only.
 - Timeouts: never hold an HTTP request for translation/TTS of a full story.
 - Errors: stable `error_type` codes (`INVALID_INPUT`, `UNSUPPORTED_LANGUAGE`, `TRANSLATION_FAILED`, `TTS_FAILED`, `AUDIO_PROCESSING_FAILED`, `STORAGE_FAILED`, `PROVIDER_RATE_LIMIT`, `TIMEOUT`). No stack traces to clients.
 

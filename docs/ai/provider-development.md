@@ -4,6 +4,8 @@ Adapters implement domain ports. Orchestration never imports vendor SDKs.
 
 ## Ports (conceptual)
 
+Vendor adapters implement `TranslationProvider` and `TTSProvider` under `backend/app/providers/`. Exact types live in `backend/app/domain` — do not copy a second interface into the worker, application, or a later milestone.
+
 ```python
 class TranslationProvider(Protocol):
     async def translate(self, text: str, source_language: str, target_language: str) -> str: ...
@@ -14,7 +16,17 @@ class TTSProvider(Protocol):
     def voices_for(self, language: str) -> Sequence[Voice]: ...
 ```
 
-Exact types live in `backend/app/domain` once that package exists. Do not copy a second interface into the worker.
+Pipeline-stage and detection ports also live in `backend/app/domain`. They are **not** a third vendor family under `providers/translation` or `providers/tts` (ADR 0005).
+
+```python
+class NarrationProcessor(Protocol):
+    def process(self, text: str, language: str) -> str: ...
+
+class LanguageDetector(Protocol):
+    async def detect(self, text: str) -> LanguageDetection: ...  # language_code + confidence
+```
+
+M7 implements `NarrationProcessor`. A CPU `LanguageDetector` adapter may appear in M8; BCP-47 / `auto` → vendor codes still stay inside translation/TTS adapters. Low-confidence threshold is M8, not a domain constant.
 
 ## Adding a translation adapter
 

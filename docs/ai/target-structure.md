@@ -1,6 +1,6 @@
 # Target structure
 
-The application is **not implemented yet**. New code should create this tree rather than a novel layout.
+Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1** (API + Redis Compose) and **M2** (`backend/app/domain`) already exist. Fill later layers in milestone order (`implementation-plan.md`). Reuse existing ports — do not re-scaffold `domain/`.
 
 ```text
 .

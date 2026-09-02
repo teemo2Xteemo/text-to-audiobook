@@ -15,7 +15,7 @@ The product is a **multilingual story → audiobook** pipeline. Requirements: [`
 | Doc | Purpose |
 | --- | --- |
 | [architecture-rules.md](architecture-rules.md) | Why the architecture exists and requirements conflicts |
-| [target-structure.md](target-structure.md) | Intended repo layout (not yet implemented) |
+| [target-structure.md](target-structure.md) | Required repo layout (fill missing folders in plan order) |
 | [implementation-plan.md](implementation-plan.md) | Accepted MVP milestone sequence (M1–M13) |
 | [coding-workflow.md](coding-workflow.md) | Step-by-step agent workflow |
 | [provider-development.md](provider-development.md) | How to add translation/TTS adapters |
@@ -25,4 +25,4 @@ The product is a **multilingual story → audiobook** pipeline. Requirements: [`
 
 ## What this repo is today
 
-Governance plus an accepted implementation plan. **M1** (API + Redis Compose, `GET /health`) is implemented. Later application layers are not. **Do not treat missing `frontend/` or empty domain/worker packages as a license to invent an unrelated stack.** Follow `target-structure.md`, ADR 0010, and `implementation-plan.md`.
+Governance plus an accepted implementation plan. **M1** (API + Redis Compose, `GET /health`) and **M2** (domain ports, chunker, cache key, job FSM) are implemented. Next is **M3** (job HTTP, storage, enqueue). Missing `frontend/`, workers, and providers are not a license to invent an unrelated stack. Reuse `backend/app/domain` — do not duplicate ports. Follow `target-structure.md`, ADR 0010, and `implementation-plan.md`.
