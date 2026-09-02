@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
+from app.domain.jobs import Job
 from app.domain.languages import LanguageDetection
 
 
@@ -25,3 +26,21 @@ class NarrationProcessor(Protocol):
 
 class LanguageDetector(Protocol):
     async def detect(self, text: str) -> LanguageDetection: ...
+
+
+class JobStore(Protocol):
+    async def save(self, job: Job) -> None: ...
+
+    async def get(self, job_id: str) -> Job | None: ...
+
+    async def delete(self, job_id: str) -> None: ...
+
+
+class JobQueue(Protocol):
+    async def enqueue(self, job_id: str) -> None: ...
+
+
+class SourceTextStorage(Protocol):
+    async def write_source(self, job_id: str, text: str) -> None: ...
+
+    async def delete_job(self, job_id: str) -> None: ...

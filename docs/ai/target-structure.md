@@ -1,6 +1,6 @@
 # Target structure
 
-Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1** (API + Redis Compose) and **M2** (`backend/app/domain`) already exist. Fill later layers in milestone order (`implementation-plan.md`). Reuse existing ports — do not re-scaffold `domain/`.
+Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1** (API + Redis Compose), **M2** (`backend/app/domain`), and **M3** (`application/`, `infrastructure/`, job HTTP) already exist. Fill later layers in milestone order (`implementation-plan.md`). Next is **M4**. Reuse existing ports — do not re-scaffold `domain/`.
 
 ```text
 .

@@ -25,4 +25,4 @@ The product is a **multilingual story → audiobook** pipeline. Requirements: [`
 
 ## What this repo is today
 
-Governance plus an accepted implementation plan. **M1** (API + Redis Compose, `GET /health`) and **M2** (domain ports, chunker, cache key, job FSM) are implemented. Next is **M3** (job HTTP, storage, enqueue). Missing `frontend/`, workers, and providers are not a license to invent an unrelated stack. Reuse `backend/app/domain` — do not duplicate ports. Follow `target-structure.md`, ADR 0010, and `implementation-plan.md`.
+Governance plus an accepted implementation plan. **M1** (API + Redis Compose, `GET /health`), **M2** (domain ports, chunker, cache key, job FSM), and **M3** (job HTTP, FS storage, RQ enqueue) are implemented. Next is **M4** (pipeline orchestrator with fakes). Missing `frontend/`, workers, and providers are not a license to invent an unrelated stack. Reuse `backend/app/domain` — do not duplicate ports. Follow `target-structure.md`, ADR 0010, and `implementation-plan.md`.

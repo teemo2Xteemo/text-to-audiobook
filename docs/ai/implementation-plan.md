@@ -102,14 +102,16 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 ### M3 — Job HTTP, storage, enqueue
 
 **Depends on:** M2  
-**Touches layers:** api, application, infrastructure
+**Touches layers:** api, application, infrastructure, config
 
 **Adds/changes:**
 
-- `POST /api/jobs` → **202** `{ job_id, status: queued }`. Multipart **or** JSON paste. Fields: `source_language`, `target_language`, optional `voice`, `speed`, `output_format` (`mp3` / `wav`).
-- `GET /api/jobs/{job_id}` → status, stage, `chunk_current` / `chunk_total` (zeros until worker), `error_type` / message, no stack traces.
-- Upload rules: size limit, `.txt` / text MIME, sanitized filename, no `../`; write `storage/jobs/{job_id}/source.txt`.
-- Redis job record + RQ enqueue (job id only). API does **not** run translation/TTS.
+- `POST /api/jobs` → **202** `{ job_id, status: queued }`. Multipart **or** JSON paste. Fields: `source_language`, `target_language`; optional `voice`, `speed`, `output_format` (`mp3` / `wav`). Exactly one of `text` or `file`.
+- `GET /api/jobs/{job_id}` → `status` and `stage` both serialize `JobStatus` (same string in M3), `chunk_current` / `chunk_total` (zeros until worker), `error_type` / message, no stack traces. Result locator / audio URL is **M5**, not M3.
+- Upload rules: `MAX_UPLOAD_BYTES` (default `2000000`) for paste and file, `.txt` / text MIME, sanitized filename, no `../`; write `storage/jobs/{job_id}/source.txt`.
+- Redis job record + RQ enqueue (`job_id` only; queue name `jobs`; func path `app.workers.process_job` — callable arrives in M5). API does **not** run translation/TTS.
+- Routes call `JobService` only. Domain ports: `JobStore`, `JobQueue`, `SourceTextStorage`. Redis/RQ/FS adapters in `infrastructure/`. Wire in `config/` (M5 extends this factory for providers — do not add a second composition root in `application/`).
+- Errors: envelope `{ "error_type", "message" }`; 400 validation; 404 unknown job (`INVALID_INPUT`, no new enum); 503 `STORAGE_FAILED`.
 - `TestClient` tests with a fake application service.
 
 **Explicitly excludes:** worker execution, NLLB/Edge, download until audio exists, auth.
@@ -118,10 +120,11 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Maps to:** AC-01, §4, §19, §29, §36, ADR 0003.
 
-**API decision:** one endpoint for paste (`text`) and `file`. Unversioned paths (`/health`, `/api/jobs`) — no `/v1` prefix; FastAPI `version` is OpenAPI metadata only (see §4).  
-**Auth decision:** no auth in MVP; UUID is the capability; bind localhost in Compose (see §4).
+**API decision:** one endpoint for paste (`text`) and `file`. Unversioned paths (`/health`, `/api/jobs`) — no `/v1` prefix; FastAPI `version` is OpenAPI metadata only (see §4). Error envelope and upload conflict rule as above.  
+**Auth decision:** no auth in MVP; UUID is the capability; bind localhost in Compose (see §4).  
+**Decided:** dual-write `status.json` + Redis; `speed` on create; `OUTPUT_BITRATE_KBPS` / `MAX_UPLOAD_BYTES` — see §4.
 
-Prefer **dual-write** job status: `storage/jobs/{id}/status.json` as source of truth for resume; Redis as cache for GET (extends ADR 0003 slightly — do this in M3 so M11 is not a retrofit).
+**Env (new):** `OUTPUT_BITRATE_KBPS`, `MAX_UPLOAD_BYTES`.
 
 ---
 
@@ -393,12 +396,9 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 - **Alt:** hide Auto until detector exists.
 - **R:** Auto in UI; low confidence → user must set source.
 
-### Job metadata (M3)
+### Job metadata (M3) — decided
 
-- **A:** Redis + FS blobs (ADR 0003) **and** `status.json` on disk as resume source of truth.
-- **I:** Redis flush alone must not make resume impossible.
-- **Alt:** Redis-only status.
-- **R:** Dual-write; FS wins for resume.
+- **Decided (M3):** Dual-write; `storage/jobs/{id}/status.json` is resume source of truth; Redis is the GET cache (extends ADR 0003). Redis flush alone must not make resume impossible.
 
 ### Retry (M10)
 
@@ -424,16 +424,13 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 - **Alt:** `.env.example` sets `DEFAULT_TARGET_LANGUAGE=vi-VN` for the operator demo.
 - **R:** Env-driven preselect if set; never TS/Python literals for zh/vi.
 
-### Auth (M3, M13)
+### Auth (M3, M13) — decided
 
-- **A:** Single-user; UUID capability URLs.
-- **I:** LAN exposure leaks audio.
-- **R:** Localhost bind; auth when public (§36).
+- **Decided (M3):** No auth in MVP; UUID is the capability; Compose binds localhost (`127.0.0.1`). Auth when public (§36).
 
-### Bitrate / speed (M3, M9)
+### Bitrate / speed (M3, M9) — decided
 
-- **A:** Default MP3 128 kbps (`OUTPUT_BITRATE_KBPS`); speed on job request in M3 so M9 does not change the public API.
-- **R:** Do not offer 320 in MVP UI. No `CANCELLED` state in MVP.
+- **Decided (M3):** `speed` on `POST /api/jobs` (float, default `1.0`, range `0.5`–`2.0`); `OUTPUT_BITRATE_KBPS` env default `128`, not a request field. Do not offer 320 in MVP UI. No `CANCELLED` state in MVP. M9 must not change this public API.
 
 ---
 
