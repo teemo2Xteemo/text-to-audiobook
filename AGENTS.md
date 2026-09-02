@@ -1,6 +1,6 @@
 # Agent instructions
 
-This repository is a **multilingual story → audiobook** system. Product requirements live in `text-story-to-audiobook-requirements.md`. Application code is not the current contents of this repo; implement against the target architecture in `docs/ai/` and `.cursor/rules/`.
+This repository is a **multilingual story → audiobook** system. Product requirements live in `text-story-to-audiobook-requirements.md`. Implement the **next** milestone against `docs/ai/` and `.cursor/rules/`. Search for existing ports, types, and tests first — **M2 domain contracts live in `backend/app/domain`**. Do not re-scaffold layers that already exist.
 
 ## Before writing code
 

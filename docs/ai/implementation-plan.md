@@ -84,18 +84,18 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Adds/changes:**
 
-- Types: BCP-47 `source_language` / `target_language` (`auto` allowed for source only), `JobStatus` enum + legal transitions, `error_type` codes from `.cursor/rules/02-backend.mdc`, `Chunk` (stable ids, e.g. `chunk-001`), `TTSSettings`, `Voice`, `AudioArtifact`.
-- Ports (no vendor imports): `TranslationProvider`, `TTSProvider`, `NarrationProcessor`, `LanguageDetector` (for `auto`). Method names match `docs/ai/provider-development.md`.
-- Pure functions: unicode **character-budget chunker** (language-agnostic), **cache-key** helper (operation + text + languages + provider + model + voice + settings), job transition guard.
+- Types: BCP-47 `source_language` / `target_language` (`auto` allowed for source only), `JobStatus` StrEnum with **lowercase values** (`queued`, `parsing`, `translating`, `preparing_tts`, `generating_audio`, `merging`, `completed`, `failed`) + legal transitions (only non-terminal → `FAILED`; `COMPLETED` and `FAILED` are terminal), `error_type` codes from `.cursor/rules/02-backend.mdc`, `Chunk` (stable ids, e.g. `chunk-001`), `TTSSettings`, `Voice`, `AudioArtifact`.
+- Ports (no vendor imports): `TranslationProvider` / `TTSProvider` match `docs/ai/provider-development.md`. `NarrationProcessor` is a pipeline-stage port (ADR 0005): `process(text, language) -> str`. `LanguageDetector`: `detect(text) -> LanguageDetection(language_code, confidence)` (low-confidence threshold is M8). Reuse `backend/app/domain` — do not copy a second interface into the worker.
+- Pure functions: unicode **character-budget chunker** (language-agnostic, default `max_chars=1200`), **cache-key** helper (operation + text + languages + provider + model + voice + settings), job transition guard.
 - Tests: transitions, illegal transitions, mixed-script chunking, cache miss when `target_language` or voice changes, detector not used when source is explicit.
 
 **Explicitly excludes:** FastAPI, Redis, FFmpeg, `edge_tts`, `transformers`, HTTP schemas.
 
-**Acceptance check:** `pytest backend/tests` (domain only). No vendor SDKs under `app/domain`.
+**Acceptance check:** `pytest backend/tests` (suite includes M1 health/settings plus domain). No vendor SDKs under `app/domain`.
 
 **Maps to:** AC-06, AC-11 (ports exist), ADR 0001/0002/0004/0005/0006.
 
-**Open:** `CHUNK_MAX_CHARS` — see §4.
+**Decided:** chunk budget 1200 Unicode chars as a domain parameter — see §4.
 
 ---
 
@@ -118,7 +118,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Maps to:** AC-01, §4, §19, §29, §36, ADR 0003.
 
-**API decision:** one endpoint for paste (`text`) and `file`.  
+**API decision:** one endpoint for paste (`text`) and `file`. Unversioned paths (`/health`, `/api/jobs`) — no `/v1` prefix; FastAPI `version` is OpenAPI metadata only (see §4).  
 **Auth decision:** no auth in MVP; UUID is the capability; bind localhost in Compose (see §4).
 
 Prefer **dual-write** job status: `storage/jobs/{id}/status.json` as source of truth for resume; Redis as cache for GET (extends ADR 0003 slightly — do this in M3 so M11 is not a retrofit).
@@ -199,6 +199,7 @@ Prefer **dual-write** job status: `storage/jobs/{id}/status.json` as source of t
 
 **Adds/changes:**
 
+- Implement the existing domain `NarrationProcessor` port (`process(text, language) -> str` in `backend/app/domain/ports.py`). Do not define a second protocol.
 - Real narration: punctuation, pauses, dialogue, numbers, abbreviations, symbols, quotes — **without changing meaning** (ADR 0005). Conservative; fixtures in multiple scripts, not zh/vi-only.
 - Replace fake narrator in DI.
 - Tests: no dropped clauses; TTS input ≠ raw translation.
@@ -366,14 +367,17 @@ Not in AC scope: §32 quality dashboard, §33 YouTube analysis, Phase 2–4 feat
 
 ## 4. Open decisions
 
-Resolve with Assumption / Impact / Alternatives / Recommendation before or during the named milestone. Do not silently invent product behavior.
+Resolve with Assumption / Impact / Alternatives / Recommendation before or during the named milestone. Do not silently invent product behavior. Items marked **decided** are locked; do not re-open them.
 
-### Chunk budget (M2)
+### Chunk budget (M2) — decided
 
-- **A:** `CHUNK_MAX_CHARS=1200` Unicode chars; pack paragraphs then sentences.
-- **I:** Small → more TTS calls; large → timeouts.
-- **Alt:** per-adapter token split.
-- **R:** Domain char budget; adapter may further split with suffix ids (`chunk-003.2`) only if needed — then a short ADR.
+- **Decided (M2):** Domain chunker default `max_chars=1200` Unicode characters. Pack paragraphs then sentences; oversize units hard-split by character with ids `chunk-00N` (no suffix in domain). Not an env/`Settings` field in M2 (domain config ≠ application config).
+- Adapter may further split with suffix ids (`chunk-003.2`) only if needed — then a short ADR.
+
+### API URL version (M1, M3) — decided
+
+- **Decided:** Unversioned paths as already specified: `GET /health`, `POST /api/jobs`, `GET /api/jobs/{job_id}`, `GET /api/capabilities`. No `/api/v1` (or other version segment). FastAPI app `version` (e.g. `0.1.0`) is OpenAPI metadata only, not a URL prefix.
+- Revisit when there is a second public consumer or a breaking API; do not add `/v1` in MVP.
 
 ### NLLB model (M8)
 

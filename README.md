@@ -12,7 +12,7 @@ Chinese → Vietnamese is a common example, not the only supported pair.
 - Implementation plan: [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md)
 - Architecture decisions: [`docs/adr/`](docs/adr/)
 
-**M1** is in place: FastAPI + Redis via Docker Compose (`GET /health`). Later milestones (jobs, pipeline, frontend, NLLB, Edge TTS) are not implemented yet. Follow [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
+**M1** (API + Redis Compose, `GET /health`) and **M2** (domain contracts in `backend/app/domain`) are in place. Next is **M3** (job HTTP, storage, enqueue). Follow [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
 
 ## For coding agents
 

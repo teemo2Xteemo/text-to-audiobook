@@ -12,7 +12,7 @@ Use one enum. Invalid transitions must fail.
 
 `QUEUED → PARSING → TRANSLATING → PREPARING_TTS → GENERATING_AUDIO → MERGING → COMPLETED`
 
-Any state → `FAILED`. Optional later: `CANCELLED`. Do not scatter raw strings.
+Any **non-terminal** state → `FAILED`. `COMPLETED` and `FAILED` are terminal. Optional later: `CANCELLED`. Serialize as lowercase enum values (`queued`, `failed`, …). Do not scatter raw strings.
 
 ## Chunks
 
