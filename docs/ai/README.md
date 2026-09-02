@@ -25,4 +25,4 @@ The product is a **multilingual story → audiobook** pipeline. Requirements: [`
 
 ## What this repo is today
 
-Governance plus an accepted implementation plan. Application code is still not implemented. **Do not treat missing `backend/` or `frontend/` as a license to invent an unrelated stack.** Follow `target-structure.md`, ADR 0010, and `implementation-plan.md`.
+Governance plus an accepted implementation plan. **M1** (API + Redis Compose, `GET /health`) is implemented. Later application layers are not. **Do not treat missing `frontend/` or empty domain/worker packages as a license to invent an unrelated stack.** Follow `target-structure.md`, ADR 0010, and `implementation-plan.md`.

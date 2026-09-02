@@ -1,0 +1,35 @@
+[project]
+name = "text-to-audiobook-api"
+version = "0.1.0"
+description = "API for the multilingual story-to-audiobook pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "pydantic-settings>=2.6,<3",
+    "uvicorn[standard]>=0.32,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.27,<1",
+    "pytest>=8.3,<9",
+    "ruff>=0.8,<1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
