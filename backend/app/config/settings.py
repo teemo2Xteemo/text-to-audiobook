@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
     redis_url: str = Field(default="redis://localhost:6379/0")
     storage_path: Path = Field(default=Path("storage"))
+    output_bitrate_kbps: int = Field(default=128)
+    max_upload_bytes: int = Field(default=2_000_000)
 
 
 @lru_cache
