@@ -21,4 +21,4 @@ This repository is a **multilingual story → audiobook** system. Product requir
 
 Understand → read rules → inspect code → plan → smallest change → tests → formatter/linter/typecheck → review diff → report.
 
-Details: `docs/ai/coding-workflow.md`. Hook behavior: `docs/ai/hooks.md`.
+Details: `docs/ai/coding-workflow.md`. Implementation sequence: `docs/ai/implementation-plan.md`. Hook behavior: `docs/ai/hooks.md`.

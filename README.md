@@ -12,9 +12,10 @@ This repository currently contains:
 - AI coding rules: [`.cursor/rules/`](.cursor/rules/)
 - Hooks: [`.cursor/hooks.json`](.cursor/hooks.json)
 - Agent docs: [`docs/ai/`](docs/ai/)
+- Implementation plan: [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md)
 - Architecture decisions: [`docs/adr/`](docs/adr/)
 
-**Application code is not implemented yet.** The intended stack is React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose. See [`docs/adr/0010-stack-and-project-layout.md`](docs/adr/0010-stack-and-project-layout.md).
+**Application code is not implemented yet.** Follow [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md) (milestones M1–M13). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
 
 ## For coding agents
 
