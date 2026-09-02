@@ -237,6 +237,29 @@ def test_checkpoint_skips_completed_translate_chunk(tmp_path: Path) -> None:
     assert translated.read_text(encoding="utf-8") == "already-translated"
 
 
+def test_checkpoint_does_not_skip_empty_translate_artifact(tmp_path: Path) -> None:
+    job = _job()
+    chunks = chunk_text(THREE_SENTENCES, max_chars=20)
+    assert len(chunks) >= 2
+    orchestrator, workspace, translation, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, max_chars=20
+    )
+    workspace.mkdir(parents=True)
+    translated = workspace / "chunks" / f"{chunks[0].id}.translated.txt"
+    translated.parent.mkdir(parents=True)
+    translated.write_bytes(b"")
+    CheckpointStore(workspace).record(chunks[0].id, STAGE_TRANSLATED, translated)
+    assert translated.stat().st_size == 0
+
+    result = _run(orchestrator, job, workspace)
+    assert result.status is JobStatus.COMPLETED
+    translated_texts = [call[0] for call in translation.calls]
+    assert chunks[0].text in translated_texts
+    assert chunks[1].text in translated_texts
+    assert translated.stat().st_size > 0
+    assert f"[{job.target_language}]" in translated.read_text(encoding="utf-8")
+
+
 def test_legal_status_walk_on_success(tmp_path: Path) -> None:
     job = _job()
     store = RecordingJobStore()

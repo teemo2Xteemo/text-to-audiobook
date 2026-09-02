@@ -295,6 +295,7 @@ Start with sentence boundaries, pause/ellipsis, quote cleanup; add number expans
 **Adds/changes:**
 
 - On worker start: load `storage/jobs/{id}/checkpoint.json` (M4 contract, §4), skip valid artifacts, continue at first incomplete/failed chunk. Do not invent a second checkpoint layout or reuse `JobStatus` as per-chunk `stage`.
+- TODO: move checkpoint FS I/O (`checkpoint.json` read/write) from `application/pipeline/checkpoint.py` into `infrastructure/` when opening resume orchestration. Keep the skip rule (matching record **and** non-empty artifact) in application.
 - Test: stop after chunk 2 of 5; re-invoke; fakes show 1–2 not regenerated.
 - Optional `POST /api/jobs/{id}/retry` for `FAILED` jobs (same id, reuse checkpoints).
 
