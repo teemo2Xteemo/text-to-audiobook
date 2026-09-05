@@ -34,8 +34,10 @@ Avoid: new frameworks, renaming the pipeline, “while I’m here” refactors, 
 
 From repo root (commands will land with the app; do not invent extra task runners):
 
-- Backend: `ruff`, `pytest` for `backend/tests`
+- Backend: `ruff check` / `ruff format --check`, `pytest -m "not integration"` for `backend/tests`
 - Frontend: `tsc --noEmit`, unit tests if present
-- Compose: `docker compose up` for integration only when asked
+- Policy: `python3 .cursor/hooks/selftest.py` and `python3 .github/scripts/scan_repo.py`
+- Compose: `docker compose up` for integration only when asked; CI only validates `docker compose config`
+- GitHub Actions: `.github/workflows/ci.yml` runs the same unit/lint/policy checks on `main` and pull requests
 
 Hooks may auto-format after edits. They do **not** replace running tests.

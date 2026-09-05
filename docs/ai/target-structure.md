@@ -28,6 +28,7 @@ Required layout. Create **missing** folders from this tree; do not invent a para
 ├── docker-compose.yml
 ├── docs/ai/                  # this folder
 ├── docs/adr/
+├── .github/                  # CI workflow + secret/policy scan script
 ├── .cursor/rules/
 └── text-story-to-audiobook-requirements.md
 ```
