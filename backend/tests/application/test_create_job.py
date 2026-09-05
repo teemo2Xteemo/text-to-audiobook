@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,7 @@ def _service(
         source_storage=storage,
         queue=queued,
         output_bitrate_kbps=128,
+        storage_path=Path("storage"),
     )
     return service, store, storage, queued
 

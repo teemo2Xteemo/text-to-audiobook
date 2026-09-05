@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     storage_path: Path = Field(default=Path("storage"))
     output_bitrate_kbps: int = Field(default=128)
     max_upload_bytes: int = Field(default=2_000_000)
+    translation_provider: str = Field(default="fake")
+    tts_provider: str = Field(default="fake")
+    worker_concurrency: int = Field(default=1, ge=1)
 
 
 @lru_cache

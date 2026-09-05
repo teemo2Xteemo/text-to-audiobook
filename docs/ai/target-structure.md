@@ -1,6 +1,6 @@
 # Target structure
 
-Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1** (API + Redis Compose), **M2** (`backend/app/domain`), **M3** (`application/`, `infrastructure/`, job HTTP), and **M4** (pipeline orchestrator with fakes, FFmpeg argv helper) already exist. Fill later layers in milestone order (`implementation-plan.md`). Next is **M5**. Reuse existing ports — do not re-scaffold `domain/`.
+Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M5** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker). Fill later layers in milestone order (`implementation-plan.md`). Next is **M6**. Reuse existing ports — do not re-scaffold `domain/`.
 
 ```text
 .
@@ -17,7 +17,8 @@ Required layout. Create **missing** folders from this tree; do not invent a para
 │   │   └── config/           # Settings from environment
 │   ├── tests/
 │   ├── pyproject.toml
-│   └── Dockerfile
+│   ├── Dockerfile            # Slim API (no PyTorch / FFmpeg)
+│   └── Dockerfile.worker     # Worker + FFmpeg (torch/Edge later)
 ├── frontend/
 │   ├── src/
 │   ├── package.json

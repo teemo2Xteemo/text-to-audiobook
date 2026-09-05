@@ -4,6 +4,7 @@ import logging
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
@@ -32,11 +33,13 @@ class JobService:
         source_storage: SourceTextStorage,
         queue: JobQueue,
         output_bitrate_kbps: int,
+        storage_path: Path,
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
         self._queue = queue
         self._output_bitrate_kbps = output_bitrate_kbps
+        self._storage_path = storage_path
 
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
@@ -84,6 +87,13 @@ class JobService:
 
     async def get(self, job_id: str) -> Job | None:
         return await self._jobs.get(job_id)
+
+    def output_audio_path(self, job: Job) -> Path:
+        jobs_root = (self._storage_path / "jobs").resolve()
+        directory = (jobs_root / job.id).resolve()
+        if not directory.is_relative_to(jobs_root):
+            raise DomainError(ErrorType.INVALID_INPUT, "invalid job_id")
+        return directory / f"output.{job.output_format.value}"
 
     async def _cleanup(self, job_id: str) -> None:
         with suppress(Exception):
