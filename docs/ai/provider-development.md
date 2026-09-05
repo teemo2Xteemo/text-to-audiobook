@@ -26,7 +26,7 @@ class LanguageDetector(Protocol):
     async def detect(self, text: str) -> LanguageDetection: ...  # language_code + confidence
 ```
 
-M7 implements `NarrationProcessor`. A CPU `LanguageDetector` adapter may appear in M8; BCP-47 / `auto` → vendor codes still stay inside translation/TTS adapters. Low-confidence threshold is M8, not a domain constant.
+M7 implements `NarrationProcessor`. M8 adds a CPU `LanguageDetector` adapter at `backend/app/providers/language_detection/` (not under `translation/` or `tts/`). BCP-47 / `auto` → vendor codes still stay inside translation/TTS adapters. Low-confidence threshold is adapter/config, not a domain constant.
 
 ## Adding a translation adapter
 

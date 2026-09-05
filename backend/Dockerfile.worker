@@ -1,5 +1,5 @@
-# Worker image: FFmpeg now; torch / Edge TTS land in later milestones.
-# Do not add CUDA or secrets.
+# Worker image: FFmpeg + CPU torch. Edge TTS lands in M9.
+# Do not add CUDA or secrets. Do not COPY model weights into the image.
 
 FROM python:3.12-slim AS builder
 
@@ -13,19 +13,23 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY pyproject.toml ./
 COPY app ./app
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir .
+    && pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir ".[nllb]"
 
 FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/opt/venv/bin:$PATH" \
+    HF_HOME=/data/huggingface
 
 RUN groupadd --system --gid 1000 app \
     && useradd --system --uid 1000 --gid app --home /app --no-create-home app \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg libgomp1 \
+    && mkdir -p /data/huggingface \
+    && chown app:app /data/huggingface \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv

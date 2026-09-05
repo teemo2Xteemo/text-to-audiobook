@@ -9,9 +9,14 @@ from app.application.capabilities import CapabilitiesService
 from app.application.jobs import JobService
 from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
-from app.application.pipeline.passthrough import FixedLanguageDetector
 from app.config.settings import Settings
-from app.domain.ports import AudioProcessor, NarrationProcessor, TranslationProvider, TTSProvider
+from app.domain.ports import (
+    AudioProcessor,
+    LanguageDetector,
+    NarrationProcessor,
+    TranslationProvider,
+    TTSProvider,
+)
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.job_store import DualWriteJobStore
@@ -49,7 +54,7 @@ def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
         translation=build_translation_provider(settings),
         tts=build_tts_provider(settings),
         narration=build_narration_processor(),
-        detector=FixedLanguageDetector(),
+        detector=build_language_detector(settings),
         audio=build_audio_processor(settings),
         jobs=store,
     )
@@ -69,7 +74,17 @@ def build_translation_provider(settings: Settings) -> TranslationProvider:
     name = settings.translation_provider.strip().lower()
     if name == "fake":
         return FakeTranslationProvider()
+    if name == "nllb":
+        from app.providers.translation.nllb import NllbTranslationProvider
+
+        return NllbTranslationProvider(model_id=settings.nllb_model_id)
     raise UnknownProviderError(f"unknown TRANSLATION_PROVIDER: {settings.translation_provider}")
+
+
+def build_language_detector(settings: Settings) -> LanguageDetector:
+    from app.providers.language_detection.cpu import CpuLanguageDetector
+
+    return CpuLanguageDetector(min_confidence=settings.language_detect_min_confidence)
 
 
 def build_tts_provider(settings: Settings) -> TTSProvider:
