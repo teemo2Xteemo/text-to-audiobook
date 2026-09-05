@@ -46,7 +46,13 @@ npm ci
 npm run dev
 ```
 
-Backend unit tests (Redis not required):
+Backend unit tests (Redis not required). From the **repo root**, `pytest.ini` registers the `integration` marker:
+
+```bash
+backend/.venv/bin/pytest -m "not integration"
+```
+
+Or from `backend/` (same marker, via `pyproject.toml`):
 
 ```bash
 cd backend

@@ -3,7 +3,9 @@ from __future__ import annotations
 import ast
 import asyncio
 import os
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -12,6 +14,7 @@ from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import AUTO_SOURCE_LANGUAGE
 from app.providers.translation.nllb import (
     NllbTranslationProvider,
+    TransformersNllbEngine,
     bcp47_to_flores,
 )
 from app.providers.tts.fake import FakeTTSProvider
@@ -133,6 +136,93 @@ def test_nllb_module_has_no_top_level_torch_import() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert imported.isdisjoint({"torch", "transformers"})
+
+
+def test_nllb_module_does_not_use_language_detector() -> None:
+    tree = ast.parse(NLLB_PATH.read_text(encoding="utf-8"))
+    imported_roots: set[str] = set()
+    imported_modules: set[str] = set()
+    imported_names: set[str] = set()
+    used_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported_roots.add(alias.name.split(".")[0])
+                imported_modules.add(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_roots.add(node.module.split(".")[0])
+            imported_modules.add(node.module)
+            imported_names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Name):
+            used_names.add(node.id)
+    assert imported_roots.isdisjoint({"langdetect"})
+    assert all("language_detection" not in module.split(".") for module in imported_modules)
+    assert imported_names.isdisjoint({"LanguageDetector", "CpuLanguageDetector"})
+    assert used_names.isdisjoint({"LanguageDetector", "CpuLanguageDetector"})
+
+
+class _FakeTensor:
+    shape = (1, 4)
+
+    def to(self, _device: object) -> _FakeTensor:
+        return self
+
+
+class _RecordingTokenizer:
+    def __init__(self) -> None:
+        self.src_lang: str | None = None
+        self.calls: list[dict[str, object]] = []
+
+    def __call__(self, text: str, **kwargs: object) -> dict[str, _FakeTensor]:
+        self.calls.append({"text": text, **kwargs})
+        return {"input_ids": _FakeTensor(), "attention_mask": _FakeTensor()}
+
+    def convert_tokens_to_ids(self, _token: str) -> int:
+        return 2
+
+    def batch_decode(self, _generated: object, skip_special_tokens: bool = True) -> list[str]:
+        del skip_special_tokens
+        return ["ok"]
+
+
+class _FakeSeq2SeqModel:
+    config = type("Config", (), {"max_position_embeddings": 1024})()
+
+    def generate(self, **kwargs: object) -> list[str]:
+        del kwargs
+        return ["tokens"]
+
+
+def test_transformers_engine_tokenizes_with_truncation_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = TransformersNllbEngine("unused-id")
+    tokenizer = _RecordingTokenizer()
+    engine._tokenizer = tokenizer
+    engine._model = _FakeSeq2SeqModel()
+    engine._device = "cpu"
+    engine._ensure_loaded = lambda: None  # type: ignore[method-assign]
+
+    assert engine.count_tokens("hello", "eng_Latn") == 4
+
+    class _NoGrad:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *args: object) -> bool:
+            del args
+            return False
+
+    fake_torch = ModuleType("torch")
+    fake_torch.no_grad = lambda: _NoGrad()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    assert engine.generate("hello", "eng_Latn", "vie_Latn") == "ok"
+    assert len(tokenizer.calls) == 2
+    for call in tokenizer.calls:
+        assert call["truncation"] is False
+        assert call["return_tensors"] == "pt"
+        assert call["text"] == "hello"
 
 
 @pytest.mark.integration

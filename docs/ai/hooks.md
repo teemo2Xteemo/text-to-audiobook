@@ -43,7 +43,7 @@ Enable these when the corresponding commands exist and stay under ~30s:
 | When | Hook | Command (planned) |
 | --- | --- | --- |
 | After backend Python is scaffolded | `stop` or `afterFileEdit` | `ruff check` on changed files |
-| After `pyproject.toml` + tests | `stop` (loop_limit 1) | `pytest backend/tests -q` if the change is under `backend/` |
+| After `pyproject.toml` + tests | `stop` (loop_limit 1) | `pytest -m "not integration"` from the repo root (root `pytest.ini`) if the change is under `backend/` |
 | After frontend scaffold | `stop` | `npx tsc --noEmit` in `frontend/` |
 | CI (not a Cursor hook) | GitHub Actions (`.github/workflows/ci.yml`) | unit tests + linters + secret/policy scan |
 

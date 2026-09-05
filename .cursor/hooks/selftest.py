@@ -44,7 +44,7 @@ def main() -> int:
 
     out = run(
         "before_shell.py",
-        {"command": "pytest backend/tests -q", "cwd": str(ROOT), "sandbox": False},
+        {"command": "pytest -m \"not integration\"", "cwd": str(ROOT), "sandbox": False},
     )
     assert out["permission"] == "allow", out
 
