@@ -5,21 +5,10 @@ import pytest
 from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import (
     AUTO_SOURCE_LANGUAGE,
-    LanguageDetection,
     ensure_valid_languages,
     resolve_source_language,
 )
-
-
-class FakeLanguageDetector:
-    def __init__(self, language_code: str = "ja-JP", confidence: float = 0.92) -> None:
-        self.language_code = language_code
-        self.confidence = confidence
-        self.calls: list[str] = []
-
-    async def detect(self, text: str) -> LanguageDetection:
-        self.calls.append(text)
-        return LanguageDetection(language_code=self.language_code, confidence=self.confidence)
+from tests.fakes import FakeLanguageDetector
 
 
 def test_detector_not_used_when_source_is_explicit() -> None:

@@ -29,7 +29,9 @@ frontend/build/
 *.tsbuildinfo
 npm-debug.log*
 
-# Job / media artifacts
+# Optional local ffmpeg fallback (host PATH is preferred)
+backend/bin/ffmpeg
+backend/bin/ffmpeg.exe
 storage/
 data/jobs/
 *.mp3

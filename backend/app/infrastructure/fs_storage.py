@@ -23,6 +23,15 @@ class FilesystemJobStorage:
         except OSError as exc:
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to write source text") from exc
 
+    async def read_source(self, job_id: str) -> str:
+        path = self._job_dir(job_id) / _SOURCE_FILENAME
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise DomainError(ErrorType.STORAGE_FAILED, "source text not found") from exc
+        except OSError as exc:
+            raise DomainError(ErrorType.STORAGE_FAILED, "failed to read source text") from exc
+
     async def save_job(self, job: Job) -> None:
         directory = self._job_dir(job.id)
         try:

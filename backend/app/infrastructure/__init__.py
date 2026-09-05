@@ -1,3 +1,4 @@
+from app.infrastructure.ffmpeg import concat_argv, resolve_ffmpeg_executable, write_concat_list
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.job_store import DualWriteJobStore
 from app.infrastructure.redis_job_store import RedisJobCache
@@ -9,4 +10,7 @@ __all__ = [
     "FilesystemJobStorage",
     "RQJobQueue",
     "RedisJobCache",
+    "concat_argv",
+    "resolve_ffmpeg_executable",
+    "write_concat_list",
 ]

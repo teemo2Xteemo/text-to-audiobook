@@ -1,8 +1,10 @@
 import asyncio
 from pathlib import Path
 
+import pytest
 from redis.exceptions import RedisError
 
+from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.job_store import DualWriteJobStore
@@ -44,6 +46,14 @@ def test_filesystem_writes_source_and_status(tmp_path: Path) -> None:
     assert (job_dir / "source.txt").read_text(encoding="utf-8") == "hello"
     loaded = asyncio.run(storage.get_job(job.id))
     assert loaded == job
+    assert asyncio.run(storage.read_source(job.id)) == "hello"
+
+
+def test_filesystem_read_source_missing(tmp_path: Path) -> None:
+    storage = FilesystemJobStorage(tmp_path)
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(storage.read_source(_job().id))
+    assert exc.value.error_type is ErrorType.STORAGE_FAILED
 
 
 def test_dual_write_get_falls_back_to_filesystem(tmp_path: Path) -> None:
