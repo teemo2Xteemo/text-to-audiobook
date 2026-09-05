@@ -73,7 +73,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Env (new):** `REDIS_URL`, `STORAGE_PATH`. Assumption: local bind-mount. Alternatives: S3. Recommendation: filesystem (ADR 0003).
 
-**Open:** API vs worker image split — recommend two images from M5; M1 may be slim API only.
+**Image split:** resolved in **M5** — slim API `Dockerfile` (no FFmpeg/PyTorch); worker `Dockerfile.worker` (see §4 Images).
 
 ---
 
@@ -139,9 +139,9 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 - Orchestrator updates `JobStatus`, `chunk_current`, and `chunk_total` through an injected `JobStore` (in-memory/fake in tests). M5 worker: load job → call this orchestrator → persist Redis/FS. No pipeline stage loops in `app.workers`.
 - Fakes for translation, TTS, narration, language detection. TTS writes tiny fixture bytes under `storage/jobs/{id}/audio/`.
 - `AudioProcessor` is a **domain port** implemented in `infrastructure/` (FFmpeg argv helper + test fake). Not a vendor adapter under `providers/`. No `if provider == "ffmpeg"` in domain/application/routes.
-- FFmpeg helper: **argv list only** (`subprocess` argument list; never `shell=True`). M4 ships **concat argv** plus a **fake/pass-through normalize** on `AudioProcessor`. Unit tests use the fake concatenator; they do not require real normalize argv. Resolve the binary **host PATH first**, then the project copy `backend/bin/ffmpeg`. Compose/API image still installs ffmpeg via apt so PATH works in the container. `@pytest.mark.integration` runs concat when either location exists. Real codec/rate/channel normalize argv is **M9**.
+- FFmpeg helper: **argv list only** (`subprocess` argument list; never `shell=True`). M4 ships **concat argv** plus a **fake/pass-through normalize** on `AudioProcessor`. Unit tests use the fake concatenator; they do not require real normalize argv. Resolve the binary **host PATH first**, then the project copy `backend/bin/ffmpeg`. Compose installs ffmpeg via apt **only in `Dockerfile.worker`** (M5); the slim API image does **not** ship FFmpeg. `@pytest.mark.integration` runs concat when either host PATH or `backend/bin/ffmpeg` exists. Real codec/rate/channel normalize argv is **M9**.
 - Checkpoint: one file `storage/jobs/{id}/checkpoint.json` — JSON list of `{chunk_id, stage, artifact_path}` with `stage` ∈ `{translated, narrated, tts, normalized}`. Do **not** use `JobStatus` values as checkpoint stages. `status.json` remains the job FSM (M3). Idempotent skip if the matching record exists **and** the artifact file is non-empty. Do not split into per-chunk JSON files in MVP.
-- Backend **Dockerfile** installs the ffmpeg **binary** (apt), not a Python ffmpeg binding (`ffmpeg-python` or similar).
+- No Python ffmpeg binding (`ffmpeg-python` or similar). Compose FFmpeg binary lands in the **worker** image (M5), not the API image.
 - Fake translator threads `target_language` into output so tests prove no hard-coded pair.
 
 **Explicitly excludes:** RQ worker process, real NLLB/Edge, retry backoff, content-addressed cache, frontend, real FFmpeg normalize/encode flags.
@@ -155,21 +155,22 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 ### M5 — Worker, DI, capabilities, Compose worker
 
 **Depends on:** M3, M4  
-**Touches layers:** workers, application (composition root), api, devops
+**Touches layers:** workers, config (composition root), api, devops
 
 **Adds/changes:**
 
-- RQ worker: load job, call the M4 orchestrator, persist Redis + FS; **bounded concurrency** (default 1). No pipeline stage loops in `app.workers`.
-- Composition root: `TRANSLATION_PROVIDER=fake`, `TTS_PROVIDER=fake`. Name → adapter **only** in config/registry, never in domain/application/routes.
-- `GET /api/capabilities`: language intersection of translation + TTS ports; voices filtered by query `language`.
-- Compose **worker** (FFmpeg). API image stays without PyTorch.
-- Download when `COMPLETED` (`GET /api/jobs/{id}/audio` or equivalent).
+- RQ worker: load job, call the M4 orchestrator, persist Redis + FS. **Bounded concurrency default 1** = one RQ worker process in Compose; `WORKER_CONCURRENCY` is reserved for later scaling (replicas/processes), not multi-job in one process in M5. No pipeline stage loops in `app.workers`.
+- Composition root in `config/` only: default `TRANSLATION_PROVIDER=fake`, `TTS_PROVIDER=fake`. Name → adapter **only** in config/registry, never in domain/application/routes. Do not add a second composition root under `application/`.
+- When `TTS_PROVIDER=fake`, the composition root wires **`FakeAudioProcessor`** (pass-through normalize/merge). Having FFmpeg in the worker **image** does not mean the pipeline uses FFmpeg yet — real FFmpeg `AudioProcessor` arrives in **M9** with non-fake TTS. Not an `AUDIO_PROVIDER` switch in application.
+- `GET /api/capabilities`: response `{ "languages": [...], "voices": [ { "id", "language", "label" } ] }`. Languages = translation `supported_languages()` ∩ languages with ≥1 TTS voice. Query `language` is **optional**: omit → voices for all intersection languages; present → filter. No Edge `*Neural` IDs in api/application.
+- Two Compose images: slim API (`Dockerfile`, no PyTorch/FFmpeg); worker (`Dockerfile.worker`, FFmpeg binary now; torch/Edge later). Shared `storage` volume.
+- Download when `COMPLETED`: `GET /api/jobs/{job_id}/audio`. `GET /api/jobs/{job_id}` includes `audio_url` (`"/api/jobs/{job_id}/audio"` when `COMPLETED`, else `null`).
 
 **Explicitly excludes:** NLLB weights, Edge network calls, frontend.
 
 **Acceptance check:** Compose api + redis + worker; POST short job using fake capabilities; poll `COMPLETED`; download fixture audio. Capabilities must not hard-code Edge voice IDs in api/application.
 
-**Maps to:** AC-10 (worker), §17–20, AC-11 (factory).
+**Maps to:** AC-10 (worker), §17–20, AC-11 (factory). Decisions: §4 Images, Compose defaults, Capabilities, Audio download.
 
 **Env (new):** `TRANSLATION_PROVIDER`, `TTS_PROVIDER`, `WORKER_CONCURRENCY`.
 
@@ -252,7 +253,7 @@ Start with sentence boundaries, pause/ellipsis, quote cleanup; add number expans
 **Adds/changes:**
 
 - `EdgeTTSProvider`: `voices_for(language)`, `synthesize` with `TTSSettings` (speed; pitch/volume if SDK allows). Voice IDs stay in adapter/config.
-- Normalize Edge output with FFmpeg **before** merge: implement real FFmpeg normalize argv (codec/rate/channels); reuse the M4 concat helper. The M4 normalize **stage** stays; only the argv/encoder is filled in here.
+- Normalize Edge output with FFmpeg **before** merge: implement real FFmpeg normalize argv (codec/rate/channels); reuse the M4 concat helper. The M4 normalize **stage** stays; only the argv/encoder is filled in here. Composition root switches from `FakeAudioProcessor` (M5 fake TTS) to the real FFmpeg `AudioProcessor` when TTS is non-fake.
 - `TTS_PROVIDER=edge`; capabilities list real voices for `target_language`.
 - Unit tests with mocked Edge client; voice/language mismatch → typed error. Optional live integration marker.
 
@@ -383,8 +384,16 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 ### API URL version (M1, M3) — decided
 
-- **Decided:** Unversioned paths as already specified: `GET /health`, `POST /api/jobs`, `GET /api/jobs/{job_id}`, `GET /api/capabilities`. No `/api/v1` (or other version segment). FastAPI app `version` (e.g. `0.1.0`) is OpenAPI metadata only, not a URL prefix.
+- **Decided:** Unversioned paths as already specified: `GET /health`, `POST /api/jobs`, `GET /api/jobs/{job_id}`, `GET /api/jobs/{job_id}/audio`, `GET /api/capabilities`. No `/api/v1` (or other version segment). FastAPI app `version` (e.g. `0.1.0`) is OpenAPI metadata only, not a URL prefix.
 - Revisit when there is a second public consumer or a breaking API; do not add `/v1` in MVP.
+
+### Capabilities (M5) — decided
+
+- **Decided (M5):** `GET /api/capabilities` returns `{ "languages": [...], "voices": [ { "id", "language", "label" } ] }`. Languages = translation ∩ TTS (≥1 voice). Query `language` is optional (omit = all intersection voices; present = filter). Fixtures for fake providers live only under `providers/`, never as domain/UI constants.
+
+### Audio download / result locator (M5) — decided
+
+- **Decided (M5):** `GET /api/jobs/{job_id}/audio` serves the artifact when `COMPLETED`. Status JSON includes `audio_url`: `"/api/jobs/{job_id}/audio"` when `COMPLETED`, else `null` (relative path, not an absolute URL).
 
 ### NLLB model (M8)
 
@@ -410,11 +419,13 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 ### FFmpeg concat vs normalize (M4, M9) — decided
 
-- **Decided (M4/M9):** M4 ships **concat argv** plus a **fake/pass-through normalize** on `AudioProcessor`. Unit tests do not require real normalize argv. M9 implements real FFmpeg normalize argv (codec/rate/channels) before merge and reuses the M4 concat helper. The normalize **pipeline stage** exists in M4 (fake). Resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`. Backend image installs the ffmpeg **binary** (apt) so containers have PATH. No Python ffmpeg binding.
+- **Decided (M4/M9):** M4 ships **concat argv** plus a **fake/pass-through normalize** on `AudioProcessor`. Unit tests do not require real normalize argv. M9 implements real FFmpeg normalize argv (codec/rate/channels) before merge and reuses the M4 concat helper. The normalize **pipeline stage** exists in M4 (fake). Resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`. Compose installs the ffmpeg **binary** (apt) in **`Dockerfile.worker` only** (M5); slim API image has no FFmpeg. No Python ffmpeg binding.
 
-### AudioProcessor layer (M4) — decided
+### AudioProcessor layer (M4, M5, M9) — decided
 
 - **Decided (M4):** `AudioProcessor` is a domain port implemented in `infrastructure/` (FFmpeg argv + test fake). Not a vendor adapter under `providers/`. Application never switches on `ffmpeg` as a provider name.
+- **Decided (M5):** When `TTS_PROVIDER=fake`, composition root selects `FakeAudioProcessor` (pass-through). Worker image may still contain the ffmpeg binary for readiness; the pipeline does not use it until M9.
+- **Decided (M9):** Real FFmpeg `AudioProcessor` with non-fake TTS (Edge).
 
 ### Pipeline FSM owner (M4, M5) — decided
 
@@ -426,18 +437,13 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 - **I:** Latency vs Edge rate limits.
 - **R:** Configurable via env.
 
-### Images (M1, M5)
+### Images (M1, M5) — decided
 
-- **A:** Slim API; worker has torch + ffmpeg + edge-tts.
-- **Alt:** one image, never load NLLB in API process.
-- **R:** Two images.
-- **M4:** Resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`. `backend/Dockerfile` also installs the ffmpeg **binary** (apt) so Compose has PATH. That does not add PyTorch to the API image. M5 still adds a worker image for torch + Edge.
+- **Decided (M5):** Two images as in `docs/ai/target-structure.md`: slim API `backend/Dockerfile` (no PyTorch, no FFmpeg); worker `backend/Dockerfile.worker` (FFmpeg now; torch + Edge TTS in M8/M9). Local/integration resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`.
 
-### Compose default providers (M5, M13)
+### Compose default providers (M5, M13) — decided
 
-- **A:** Default `fake` / `fake` so `compose up` works offline.
-- **I:** Demo needs documented override.
-- **R:** Fakes default; `.env.example` describes nllb+edge profile.
+- **Decided (M5):** Default `TRANSLATION_PROVIDER=fake`, `TTS_PROVIDER=fake` so `compose up` works offline. M8/M9 override via env/profile (`nllb` / `edge`). `.env.example` documents the override.
 
 ### UI defaults (M6)
 

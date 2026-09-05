@@ -1,4 +1,5 @@
-# Slim API image — no PyTorch, no FFmpeg. Worker image owns media tooling.
+# Worker image: FFmpeg now; torch / Edge TTS land in later milestones.
+# Do not add CUDA or secrets.
 
 FROM python:3.12-slim AS builder
 
@@ -22,11 +23,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN groupadd --system --gid 1000 app \
-    && useradd --system --uid 1000 --gid app --home /app --no-create-home app
+    && useradd --system --uid 1000 --gid app --home /app --no-create-home app \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
 
 USER app
-EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["rq", "worker", "--url", "redis://redis:6379/0", "jobs"]

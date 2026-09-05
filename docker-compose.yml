@@ -20,6 +20,8 @@ services:
       STORAGE_PATH: ${STORAGE_PATH:-/data/storage}
       OUTPUT_BITRATE_KBPS: ${OUTPUT_BITRATE_KBPS:-128}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2000000}
+      TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-fake}
+      TTS_PROVIDER: ${TTS_PROVIDER:-fake}
     volumes:
       - ./storage:/data/storage
     depends_on:
@@ -38,3 +40,28 @@ services:
       retries: 5
       start_period: 10s
 
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      STORAGE_PATH: ${STORAGE_PATH:-/data/storage}
+      OUTPUT_BITRATE_KBPS: ${OUTPUT_BITRATE_KBPS:-128}
+      TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-fake}
+      TTS_PROVIDER: ${TTS_PROVIDER:-fake}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+    volumes:
+      - ./storage:/data/storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Single RQ process (one job at a time). Scale with replicas later.
+    command:
+      [
+        "rq",
+        "worker",
+        "--url",
+        "redis://redis:6379/0",
+        "jobs",
+      ]

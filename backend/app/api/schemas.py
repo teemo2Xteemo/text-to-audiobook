@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from app.domain.audio import SPEED_DEFAULT
+from app.domain.audio import SPEED_DEFAULT, Voice
 from app.domain.jobs import Job, JobStatus, OutputFormat
 
 
@@ -29,9 +29,11 @@ class JobStatusResponse(BaseModel):
     voice: str | None
     speed: float
     output_format: OutputFormat
+    audio_url: str | None = None
 
     @classmethod
     def from_job(cls, job: Job) -> JobStatusResponse:
+        audio_url = f"/api/jobs/{job.id}/audio" if job.status is JobStatus.COMPLETED else None
         return cls(
             job_id=job.id,
             status=job.status,
@@ -45,6 +47,7 @@ class JobStatusResponse(BaseModel):
             voice=job.voice,
             speed=job.speed,
             output_format=job.output_format,
+            audio_url=audio_url,
         )
 
 
@@ -55,3 +58,18 @@ class CreateJobJsonBody(BaseModel):
     voice: str | None = None
     speed: float = SPEED_DEFAULT
     output_format: str = Field(default=OutputFormat.MP3.value)
+
+
+class VoiceResponse(BaseModel):
+    id: str
+    language: str
+    label: str
+
+    @classmethod
+    def from_voice(cls, voice: Voice) -> VoiceResponse:
+        return cls(id=voice.id, language=voice.language, label=voice.label)
+
+
+class CapabilitiesResponse(BaseModel):
+    languages: list[str]
+    voices: list[VoiceResponse]
