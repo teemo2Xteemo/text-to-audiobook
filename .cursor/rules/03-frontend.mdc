@@ -28,4 +28,4 @@ const voicesForTarget = voices.filter((v) => v.language === targetLanguage);
 
 Progress must reflect job stages and chunk counts from the API (translating 12/35, generating audio 8/35). User-facing errors use `error_type` messages, never stack traces.
 
-Accessible, responsive controls. Native elements + labels; keyboard-reachable generate/cancel. Do not block the tab on generation — poll job status.
+Accessible, responsive controls. Native elements + labels; keyboard-reachable Generate. Do not ship a Cancel control until `CANCELLED` is in the job FSM and API. Do not block the tab on generation — poll job status.
