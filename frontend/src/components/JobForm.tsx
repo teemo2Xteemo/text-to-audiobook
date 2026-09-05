@@ -52,6 +52,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     hasVoice: Boolean(voiceId),
     text,
     file,
+    speed,
   });
 
   function handleTextChange(value: string) {

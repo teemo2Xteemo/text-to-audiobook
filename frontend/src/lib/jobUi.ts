@@ -1,4 +1,4 @@
-import { AUTO_SOURCE_LANGUAGE } from "./constants";
+import { AUTO_SOURCE_LANGUAGE, SPEED_MAX, SPEED_MIN } from "./constants";
 import type { JobStatus, Voice } from "../api/types";
 
 export function voicesForTarget(voices: readonly Voice[], targetLanguage: string): Voice[] {
@@ -41,8 +41,12 @@ export function canGenerate(input: {
   hasVoice: boolean;
   text: string;
   file: File | null;
+  speed: number;
 }): boolean {
   if (!input.capabilitiesLoaded || !input.targetLanguage || !input.hasVoice) {
+    return false;
+  }
+  if (!Number.isFinite(input.speed) || input.speed < SPEED_MIN || input.speed > SPEED_MAX) {
     return false;
   }
   const hasText = input.text.trim().length > 0;

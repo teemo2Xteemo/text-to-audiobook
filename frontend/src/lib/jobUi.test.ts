@@ -54,11 +54,29 @@ describe("jobUi", () => {
       hasVoice: true,
       text: "",
       file: null,
+      speed: 1,
     };
     expect(canGenerate(base)).toBe(false);
     expect(canGenerate({ ...base, text: "Once upon a time" })).toBe(true);
     const file = new File(["story"], "story.txt", { type: "text/plain" });
     expect(canGenerate({ ...base, file })).toBe(true);
     expect(canGenerate({ ...base, text: "paste", file })).toBe(false);
+  });
+
+  it("rejects speed outside 0.5–2.0", () => {
+    const ready = {
+      capabilitiesLoaded: true,
+      targetLanguage: "ja-JP",
+      hasVoice: true,
+      text: "Once upon a time",
+      file: null,
+      speed: 1,
+    };
+    expect(canGenerate(ready)).toBe(true);
+    expect(canGenerate({ ...ready, speed: 0.5 })).toBe(true);
+    expect(canGenerate({ ...ready, speed: 2 })).toBe(true);
+    expect(canGenerate({ ...ready, speed: 0.49 })).toBe(false);
+    expect(canGenerate({ ...ready, speed: 2.01 })).toBe(false);
+    expect(canGenerate({ ...ready, speed: Number.NaN })).toBe(false);
   });
 });
