@@ -34,7 +34,7 @@ Avoid: new frameworks, renaming the pipeline, “while I’m here” refactors, 
 
 From repo root (commands will land with the app; do not invent extra task runners):
 
-- Backend: `ruff check` / `ruff format --check`, `pytest -m "not integration"` for `backend/tests`
+- Backend: from the repo root, `pytest -m "not integration"` (root `pytest.ini` registers the `integration` marker and `backend/tests`). From `backend/`, the same command uses `backend/pyproject.toml`. Then `ruff check` / `ruff format --check` in `backend/`.
 - Frontend: `tsc --noEmit`, unit tests if present
 - Policy: `python3 .cursor/hooks/selftest.py` and `python3 .github/scripts/scan_repo.py`
 - Compose: `docker compose up` for integration only when asked; CI only validates `docker compose config`

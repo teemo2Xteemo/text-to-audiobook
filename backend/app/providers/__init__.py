@@ -1,1 +1,1 @@
-"""Vendor adapters for translation and TTS ports."""
+"""Vendor adapters for translation, TTS, and language-detection ports."""

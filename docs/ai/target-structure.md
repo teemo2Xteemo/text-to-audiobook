@@ -1,6 +1,6 @@
 # Target structure
 
-Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M7** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI, conservative narration). Fill later layers in milestone order (`implementation-plan.md`). Next is **M8**. Reuse existing ports — do not re-scaffold `domain/`.
+Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M8** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI, conservative narration, NLLB adapter + CPU detector). Fill later layers in milestone order (`implementation-plan.md`). Next is **M9**. Reuse existing ports — do not re-scaffold `domain/`.
 
 ```text
 .
@@ -10,15 +10,16 @@ Required layout. Create **missing** folders from this tree; do not invent a para
 │   │   ├── application/      # Use-cases / pipeline orchestration
 │   │   ├── domain/           # Ports, job state, chunking, errors
 │   │   ├── infrastructure/   # Redis, filesystem storage, FFmpeg runner
-│   │   ├── providers/        # Translation + TTS adapters
+│   │   ├── providers/        # Translation, TTS, and language-detection adapters
 │   │   │   ├── translation/
-│   │   │   └── tts/
+│   │   │   ├── tts/
+│   │   │   └── language_detection/
 │   │   ├── workers/          # Queue consumers
 │   │   └── config/           # Settings from environment
 │   ├── tests/
 │   ├── pyproject.toml
 │   ├── Dockerfile            # Slim API (no PyTorch / FFmpeg)
-│   └── Dockerfile.worker     # Worker + FFmpeg (torch/Edge later)
+│   └── Dockerfile.worker     # Worker + FFmpeg + CPU torch (Edge later)
 ├── frontend/
 │   ├── src/
 │   ├── package.json

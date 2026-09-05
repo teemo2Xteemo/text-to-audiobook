@@ -22,6 +22,8 @@ services:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2000000}
       TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-fake}
       TTS_PROVIDER: ${TTS_PROVIDER:-fake}
+      NLLB_MODEL_ID: ${NLLB_MODEL_ID:-facebook/nllb-200-distilled-600M}
+      LANGUAGE_DETECT_MIN_CONFIDENCE: ${LANGUAGE_DETECT_MIN_CONFIDENCE:-0.5}
     volumes:
       - ./storage:/data/storage
     depends_on:
@@ -51,8 +53,12 @@ services:
       TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-fake}
       TTS_PROVIDER: ${TTS_PROVIDER:-fake}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      NLLB_MODEL_ID: ${NLLB_MODEL_ID:-facebook/nllb-200-distilled-600M}
+      LANGUAGE_DETECT_MIN_CONFIDENCE: ${LANGUAGE_DETECT_MIN_CONFIDENCE:-0.5}
+      HF_HOME: /data/huggingface
     volumes:
       - ./storage:/data/storage
+      - huggingface-cache:/data/huggingface
     depends_on:
       redis:
         condition: service_healthy
@@ -85,3 +91,6 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+
+volumes:
+  huggingface-cache:

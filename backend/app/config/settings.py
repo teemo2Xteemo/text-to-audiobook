@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     translation_provider: str = Field(default="fake")
     tts_provider: str = Field(default="fake")
     worker_concurrency: int = Field(default=1, ge=1)
+    nllb_model_id: str = Field(default="facebook/nllb-200-distilled-600M", min_length=1)
+    language_detect_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 @lru_cache

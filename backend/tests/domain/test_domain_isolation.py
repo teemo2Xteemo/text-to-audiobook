@@ -12,6 +12,8 @@ FORBIDDEN_IMPORT_ROOTS = frozenset(
         "redis",
         "rq",
         "transformers",
+        "torch",
+        "langdetect",
         "uvicorn",
     }
 )

@@ -13,6 +13,8 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TRANSLATION_PROVIDER", raising=False)
     monkeypatch.delenv("TTS_PROVIDER", raising=False)
     monkeypatch.delenv("WORKER_CONCURRENCY", raising=False)
+    monkeypatch.delenv("NLLB_MODEL_ID", raising=False)
+    monkeypatch.delenv("LANGUAGE_DETECT_MIN_CONFIDENCE", raising=False)
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://localhost:6379/0"
     assert settings.storage_path == Path("storage")
@@ -21,6 +23,8 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.translation_provider == "fake"
     assert settings.tts_provider == "fake"
     assert settings.worker_concurrency == 1
+    assert settings.nllb_model_id == "facebook/nllb-200-distilled-600M"
+    assert settings.language_detect_min_confidence == 0.5
 
 
 def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -31,6 +35,8 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.setenv("TRANSLATION_PROVIDER", "fake")
     monkeypatch.setenv("TTS_PROVIDER", "fake")
     monkeypatch.setenv("WORKER_CONCURRENCY", "2")
+    monkeypatch.setenv("NLLB_MODEL_ID", "facebook/nllb-200-distilled-1.3B")
+    monkeypatch.setenv("LANGUAGE_DETECT_MIN_CONFIDENCE", "0.7")
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://example:6379/1"
     assert settings.storage_path == tmp_path
@@ -39,6 +45,8 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.translation_provider == "fake"
     assert settings.tts_provider == "fake"
     assert settings.worker_concurrency == 2
+    assert settings.nllb_model_id == "facebook/nllb-200-distilled-1.3B"
+    assert settings.language_detect_min_confidence == 0.7
 
 
 def test_get_settings_returns_settings() -> None:

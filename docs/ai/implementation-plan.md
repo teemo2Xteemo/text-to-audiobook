@@ -85,7 +85,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 **Adds/changes:**
 
 - Types: BCP-47 `source_language` / `target_language` (`auto` allowed for source only), `JobStatus` StrEnum with **lowercase values** (`queued`, `parsing`, `translating`, `preparing_tts`, `generating_audio`, `merging`, `completed`, `failed`) + legal transitions (only non-terminal → `FAILED`; `COMPLETED` and `FAILED` are terminal), `error_type` codes from `.cursor/rules/02-backend.mdc`, `Chunk` (stable ids, e.g. `chunk-001`), `TTSSettings`, `Voice`, `AudioArtifact`.
-- Ports (no vendor imports): `TranslationProvider` / `TTSProvider` match `docs/ai/provider-development.md`. `NarrationProcessor` is a pipeline-stage port (ADR 0005): `process(text, language) -> str`. `LanguageDetector`: `detect(text) -> LanguageDetection(language_code, confidence)` (low-confidence threshold is M8). Reuse `backend/app/domain` — do not copy a second interface into the worker.
+- Ports (no vendor imports): `TranslationProvider` / `TTSProvider` match `docs/ai/provider-development.md`. `NarrationProcessor` is a pipeline-stage port (ADR 0005): `process(text, language) -> str`. `LanguageDetector`: `detect(text) -> LanguageDetection(language_code, confidence)` (low-confidence threshold is M8 **adapter/config**, not a domain constant — §4). Reuse `backend/app/domain` — do not copy a second interface into the worker.
 - Pure functions: unicode **character-budget chunker** (language-agnostic, default `max_chars=1200`), **cache-key** helper (operation + text + languages + provider + model + voice + settings), job transition guard.
 - Tests: transitions, illegal transitions, mixed-script chunking, cache miss when `target_language` or voice changes, detector not used when source is explicit.
 
@@ -195,7 +195,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Acceptance check:** paste text, pick languages from API, queued → completed, play audio. `tsc --noEmit` clean.
 
-**Maps to:** §17–18, AC-01/02/04/05 (UI), AC-10. Decisions: §4 UI defaults, `auto` source (M6 half), Frontend origin.
+**Maps to:** §17–18, AC-01/02/04/05 (UI), AC-10. Decisions: §4 UI defaults, `auto` source (M6 UI; M8 detector), Frontend origin.
 
 **Env:** `VITE_API_BASE_URL` empty (same-origin); `VITE_DEFAULT_SOURCE_LANGUAGE=auto`; optional `VITE_DEFAULT_TARGET_LANGUAGE` for UI preselect only if present in capabilities — never a TypeScript constant list. Requirements/ADR `DEFAULT_*` map to frontend `VITE_DEFAULT_*`. Frontend `VITE_*` are image **build args**; rebuild Compose after changing them.
 
@@ -225,24 +225,27 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 ### M8 — NLLB translation adapter
 
 **Depends on:** M2, M5  
-**Touches layers:** providers, config, devops (worker image)
+**Touches layers:** providers, config, devops (worker image)  
+**Status:** Implemented. Do not re-scaffold the NLLB adapter or `language_detection/`.
 
 **Adds/changes:**
 
-- `backend/app/providers/translation/` NLLB adapter: BCP-47 (+ `auto` via `LanguageDetector`) mapped to NLLB codes **inside the adapter**.
-- `NLLB_MODEL_ID` env (not a domain constant). Worker may install CPU torch; **API image does not**.
-- `TRANSLATION_PROVIDER=nllb` via env/profile; default Compose may stay `fake` for fast boot.
+- `backend/app/providers/translation/` NLLB adapter (`NllbTranslationProvider`): map **BCP-47 → FLORES-200** inside the adapter only. `translate()` must **reject** `source_language=auto` with `UNSUPPORTED_LANGUAGE`. The NLLB adapter **must not** import, construct, or call `LanguageDetector` — detection is not nested inside translation.
+- `source_language=auto` is resolved to BCP-47 in parse / `resolve_source_language` **before** `translate()`. Composition root (`backend/app/config/factory.py` `build_orchestrator` / `build_language_detector`) injects `CpuLanguageDetector` into the **orchestrator**. Do not pass the detector into the NLLB constructor.
+- CPU `LanguageDetector` adapter at `backend/app/providers/language_detection/` (not under `translation/` or `tts/`). Low confidence / unmapped ISO → `INVALID_INPUT` telling the user to set `source_language`; **do not** assume Chinese. Threshold is adapter/config (`LANGUAGE_DETECT_MIN_CONFIDENCE`), not a domain constant. `DetectorFactory.seed` is fixed in the adapter.
+- `NLLB_MODEL_ID` env (not a domain constant). Default: `facebook/nllb-200-distilled-600M` (§4). Worker image **installs** CPU torch + optional extra `.[nllb]` (`transformers`, `sentencepiece`); **API image does not** (`pip install .` only — no torch / transformers).
+- Token overflow: if tokenized length exceeds the model max, raise `TRANSLATION_FAILED`. Tokenizer `truncation=False`. No silent truncation; no suffix-split in M8.
+- `TRANSLATION_PROVIDER=nllb` via env/profile; default Compose stays `fake` for fast boot.
 - Unit tests mock the model wrapper; optional `@pytest.mark.integration`.
-- `UNSUPPORTED_LANGUAGE` for unsupported pairs.
-- CPU `LanguageDetector` adapter. Low confidence → clear error, **do not** assume Chinese.
+- `UNSUPPORTED_LANGUAGE` for unmapped BCP-47 / unsupported pairs.
 
 **Explicitly excludes:** LibreTranslate/OpenAI/Gemini, GPU, 3.3B as default.
 
 **Acceptance check:** mapping + unsupported-pair unit tests. Manual: `zh-CN` → `vi-VN` **and** a second pair the distilled model supports, to prove no hard-coded pair.
 
-**Maps to:** AC-02, AC-09, §7, ADR 0009.
+**Maps to:** AC-02, AC-09, §7, ADR 0009. Decisions: §4 NLLB model, `auto` source (M8).
 
-**Env:** `NLLB_MODEL_ID` — recommend `facebook/nllb-200-distilled-600M` (§4).
+**Env:** `NLLB_MODEL_ID` default `facebook/nllb-200-distilled-600M` (§4). `LANGUAGE_DETECT_MIN_CONFIDENCE` default `0.5` — not a domain constant.
 
 ---
 
@@ -396,17 +399,14 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 - **Decided (M5):** `GET /api/jobs/{job_id}/audio` serves the artifact when `COMPLETED`. Status JSON includes `audio_url`: `"/api/jobs/{job_id}/audio"` when `COMPLETED`, else `null` (relative path, not an absolute URL).
 
-### NLLB model (M8)
+### NLLB model (M8) — decided
 
-- **A:** `NLLB_MODEL_ID=facebook/nllb-200-distilled-600M`.
-- **I:** Quality vs RAM; first run downloads into a volume.
-- **Alt:** 1.3B distilled; cloud translator.
-- **R:** 600M default; never 3.3B in default Compose (ADR 0009).
+- **Decided (M8):** Default `NLLB_MODEL_ID=facebook/nllb-200-distilled-600M`. Never 3.3B in default Compose (ADR 0009). First run downloads into a worker volume (`HF_HOME`), not the API image. 1.3B / cloud translators remain later adapters, not the MVP default.
 
-### `auto` source (M6, M8)
+### `auto` source (M6, M8) — decided
 
 - **Decided (M6):** UI always offers Auto first on source and POSTs `source_language=auto`. No low-confidence dialog in the SPA. Do not assume Chinese.
-- **Open (M8):** `LanguageDetector` port; CPU adapter; BCP-47 / `auto` mapping inside the adapter; low confidence → user-facing error to set source (not frontend logic). No “assume zh”.
+- **Decided (M8):** CPU `LanguageDetector` adapter at `backend/app/providers/language_detection/` (e.g. langdetect). Composition root injects it into the orchestrator (`build_language_detector` → `build_orchestrator`). The NLLB adapter **never** calls `LanguageDetector`. Parse resolves `auto` → BCP-47 **before** `translate()`. NLLB maps BCP-47 → FLORES only; `translate(..., source_language="auto")` → `UNSUPPORTED_LANGUAGE`. Low confidence or unmapped ISO → user-facing `INVALID_INPUT` to set `source_language` (not frontend logic). No “assume zh”. Env `LANGUAGE_DETECT_MIN_CONFIDENCE` default `0.5` (adapter/config, not a domain constant). Over-token NLLB input → `TRANSLATION_FAILED`; no silent truncation.
 
 ### Job metadata (M3) — decided
 
@@ -439,6 +439,7 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 ### Images (M1, M5) — decided
 
 - **Decided (M5):** Two images as in `docs/ai/target-structure.md`: slim API `backend/Dockerfile` (no PyTorch, no FFmpeg); worker `backend/Dockerfile.worker` (FFmpeg now; torch + Edge TTS in M8/M9). Local/integration resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`.
+- **Decided (M8):** Worker image **installs** CPU torch (PyTorch CPU index, never CUDA wheels) plus `pip install ".[nllb]"`. Slim API stays `pip install .` — no torch, no transformers.
 
 ### Compose default providers (M5, M13) — decided
 

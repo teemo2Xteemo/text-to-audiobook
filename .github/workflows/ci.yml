@@ -36,6 +36,7 @@ jobs:
           ruff check .
           ruff format --check .
       - name: Pytest (unit)
+        working-directory: ${{ github.workspace }}
         run: pytest -m "not integration"
 
   frontend:
