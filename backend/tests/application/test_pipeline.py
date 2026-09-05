@@ -6,12 +6,14 @@ import json
 from pathlib import Path
 
 from app.application.pipeline.checkpoint import STAGE_TRANSLATED, CheckpointStore
+from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
 from app.domain.audio import Voice
 from app.domain.chunking import chunk_text
 from app.domain.errors import ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.domain.languages import AUTO_SOURCE_LANGUAGE
+from app.domain.ports import NarrationProcessor
 from tests.fakes import (
     FakeAudioProcessor,
     FakeLanguageDetector,
@@ -77,7 +79,7 @@ def _orchestrator(
     voices: list[Voice] | None = None,
     detector: FakeLanguageDetector | None = None,
     translation: FakeTranslationProvider | None = None,
-    narration: FakeNarrationProcessor | None = None,
+    narration: NarrationProcessor | None = None,
     tts: FakeTTSProvider | None = None,
     audio: FakeAudioProcessor | None = None,
     jobs: InMemoryJobStore | None = None,
@@ -86,7 +88,7 @@ def _orchestrator(
     PipelineOrchestrator,
     Path,
     FakeTranslationProvider,
-    FakeNarrationProcessor,
+    NarrationProcessor,
     FakeTTSProvider,
     FakeLanguageDetector,
     FakeAudioProcessor,
@@ -196,8 +198,22 @@ def test_narration_is_invoked(tmp_path: Path) -> None:
     orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(tmp_path, job=job)
     result = _run(orchestrator, job, workspace)
     assert result.status is JobStatus.COMPLETED
+    assert isinstance(narration, FakeNarrationProcessor)
     assert narration.calls
     assert all(call[1] == job.target_language for call in narration.calls)
+
+
+def test_conservative_narration_changes_structure_not_raw_translation(tmp_path: Path) -> None:
+    job = _job()
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, narration=ConservativeNarrationProcessor()
+    )
+    result = _run(orchestrator, job, workspace)
+    assert result.status is JobStatus.COMPLETED
+    translated = (workspace / "chunks" / "chunk-001.translated.txt").read_text(encoding="utf-8")
+    narrated = (workspace / "chunks" / "chunk-001.narrated.txt").read_text(encoding="utf-8")
+    assert narrated != translated
+    assert "\n\n" in narrated
 
 
 def test_multi_chunk_writes_per_chunk_audio_then_merge(tmp_path: Path) -> None:

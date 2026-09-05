@@ -45,7 +45,7 @@ Enable these when the corresponding commands exist and stay under ~30s:
 | After backend Python is scaffolded | `stop` or `afterFileEdit` | `ruff check` on changed files |
 | After `pyproject.toml` + tests | `stop` (loop_limit 1) | `pytest backend/tests -q` if the change is under `backend/` |
 | After frontend scaffold | `stop` | `npx tsc --noEmit` in `frontend/` |
-| CI (not a Cursor hook) | GitHub Actions | unit tests + secret scan |
+| CI (not a Cursor hook) | GitHub Actions (`.github/workflows/ci.yml`) | unit tests + linters + secret/policy scan |
 
 A `stop` hook that auto-`followup_message`s on test failure is useful later but can loop; cap with `loop_limit: 1`.
 

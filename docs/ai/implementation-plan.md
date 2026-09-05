@@ -204,22 +204,21 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 ### M7 — Narration processor
 
 **Depends on:** M4 (wired); M5 so Compose still runs  
-**Touches layers:** application (domain-pure helpers OK)
+**Touches layers:** application (domain-pure helpers OK), **config** (composition-root swap only)  
+**Status:** Implemented. Do not re-scaffold the processor.
 
 **Adds/changes:**
 
 - Implement the existing domain `NarrationProcessor` port (`process(text, language) -> str` in `backend/app/domain/ports.py`). Do not define a second protocol.
-- Real narration: punctuation, pauses, dialogue, numbers, abbreviations, symbols, quotes — **without changing meaning** (ADR 0005). Conservative; fixtures in multiple scripts, not zh/vi-only.
-- Replace fake narrator in DI.
-- Tests: no dropped clauses; TTS input ≠ raw translation.
+- Real narration: punctuation, pauses, dialogue, symbols, quotes — **without changing meaning** (ADR 0005). Conservative; fixtures in multiple scripts, not zh/vi-only. Transform catalog: §4 Narration transforms (M7).
+- Replace fake/passthrough narrator in DI: `backend/app/config/factory.py` must inject `ConservativeNarrationProcessor` (via `build_narration_processor()` into `build_orchestrator`). **A processor file alone is not done** while `build_orchestrator` still passes `PassthroughNarrationProcessor()`.
+- Tests: no dropped clauses; TTS input ≠ raw translation; factory/orchestrator wiring asserts the conservative class.
 
-**Explicitly excludes:** vendor SSML, emotion models, LLM rewrite.
+**Explicitly excludes:** vendor SSML, emotion models, LLM rewrite; number/abbreviation word expansion; locale branching on `language`.
 
-**Acceptance check:** pytest pairs; pipeline asserts narration changed structure (breaks/pauses), not vendor TTS quality.
+**Acceptance check:** pytest pairs; pipeline asserts narration changed structure (breaks/pauses), not vendor TTS quality. Audit **done** only if `config/factory.py` `build_narration_processor` / `build_orchestrator` returns `ConservativeNarrationProcessor` — not merely that `conservative_narration.py` exists.
 
-**Maps to:** AC-12, §8.
-
-Start with sentence boundaries, pause/ellipsis, quote cleanup; add number expansion only with tests.
+**Maps to:** AC-12, §8. Requirements §8 is a **rhythm** requirement, not a paraphrase spec; do not add story words. The Vietnamese rewrite example is illustration only.
 
 ---
 
@@ -460,6 +459,12 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 ### Bitrate / speed (M3, M9) — decided
 
 - **Decided (M3):** `speed` on `POST /api/jobs` (float, default `1.0`, range `0.5`–`2.0`); `OUTPUT_BITRATE_KBPS` env default `128`, not a request field. Do not offer 320 in MVP UI. No `CANCELLED` state in MVP. M9 must not change this public API.
+
+### Narration transforms (M7) — decided
+
+- **Decided (M7):** Conservative structure only. Punctuation, sentence/paragraph breaks (`\n\n`), ellipsis normalize (`…` / `...`), quote straighten, Unicode dash and excess-punct collapse. Quoted sentences that already end with a terminator stay their own block. Leave digits and abbreviations as-is. `language` is accepted and unused (no locale / `if language ==` branching). No `NARRATION_PROVIDER` env.
+- Requirements §8 specifies narration **rhythm**, not a golden paraphrase. Do not add connective words or LLM rewrite.
+- Number/abbreviation expansion is out of M7 (would need language tables). Composition root: `config/factory.py` wires `ConservativeNarrationProcessor`; passthrough remains test-only.
 
 ---
 

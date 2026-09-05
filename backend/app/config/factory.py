@@ -7,13 +7,11 @@ from rq import Queue
 
 from app.application.capabilities import CapabilitiesService
 from app.application.jobs import JobService
+from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
-from app.application.pipeline.passthrough import (
-    FixedLanguageDetector,
-    PassthroughNarrationProcessor,
-)
+from app.application.pipeline.passthrough import FixedLanguageDetector
 from app.config.settings import Settings
-from app.domain.ports import AudioProcessor, TranslationProvider, TTSProvider
+from app.domain.ports import AudioProcessor, NarrationProcessor, TranslationProvider, TTSProvider
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.job_store import DualWriteJobStore
@@ -50,7 +48,7 @@ def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
     return PipelineOrchestrator(
         translation=build_translation_provider(settings),
         tts=build_tts_provider(settings),
-        narration=PassthroughNarrationProcessor(),
+        narration=build_narration_processor(),
         detector=FixedLanguageDetector(),
         audio=build_audio_processor(settings),
         jobs=store,
@@ -79,6 +77,10 @@ def build_tts_provider(settings: Settings) -> TTSProvider:
     if name == "fake":
         return FakeTTSProvider(output_dir=_tts_tmp_dir(settings.storage_path))
     raise UnknownProviderError(f"unknown TTS_PROVIDER: {settings.tts_provider}")
+
+
+def build_narration_processor() -> NarrationProcessor:
+    return ConservativeNarrationProcessor()
 
 
 def build_audio_processor(settings: Settings) -> AudioProcessor:

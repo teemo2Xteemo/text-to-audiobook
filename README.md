@@ -12,7 +12,7 @@ Chinese → Vietnamese is a common example, not the only supported pair.
 - Implementation plan: [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md)
 - Architecture decisions: [`docs/adr/`](docs/adr/)
 
-**M1**–**M6** are in place (API + Redis Compose, domain contracts, job HTTP/enqueue, pipeline orchestrator with fakes, RQ worker + DI + capabilities + Compose worker, Vite job UI). Next is **M7** (narration processor). Follow [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
+**M1**–**M7** are in place (API + Redis Compose, domain contracts, job HTTP/enqueue, pipeline orchestrator with fakes, RQ worker + DI + capabilities + Compose worker, Vite job UI, conservative narration). Next is **M8** (NLLB adapter). Follow [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
 
 ## For coding agents
 
@@ -26,6 +26,8 @@ docker compose up --build
 ```
 
 API is bound to localhost: `http://127.0.0.1:8000/health` should return `{"status":"ok","service":"api"}`. The job UI is at `http://127.0.0.1:8080`. Redis is on `127.0.0.1:6379`. Compose services: **frontend + api + redis + worker**. FFmpeg: host `ffmpeg` on PATH if present, otherwise `backend/bin/ffmpeg`; the **worker** image installs the binary via apt (slim API image does not). Argv lists only; no Python ffmpeg binding. Default providers are `fake` / `fake` for offline boot.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs unit tests, linters, and a secret/policy scan on `main` and pull requests. It skips `@pytest.mark.integration` (real FFmpeg).
 
 Frontend unit tests and typecheck (Node 22):
 
@@ -50,5 +52,7 @@ Backend unit tests (Redis not required):
 cd backend
 python -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/pytest -m "not integration"
 ```
