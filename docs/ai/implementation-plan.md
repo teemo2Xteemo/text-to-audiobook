@@ -179,23 +179,25 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 ### M6 — Frontend job UI
 
 **Depends on:** M5  
-**Touches layers:** frontend, devops
+**Touches layers:** frontend, devops  
+**Status:** Implemented. Do not re-scaffold `frontend/`.
 
 **Adds/changes:**
 
 - Vite + React + TypeScript **strict**; typed client; `idle | loading | success | error`.
-- Upload or paste; source (incl. Auto); target; voice from capabilities filtered by target; speed; output format; Generate.
+- Upload or paste; source (incl. Auto); target; voice from capabilities filtered by target; speed; output format; Generate only.
 - Poll job status; stage + chunk counts; user-facing `error_type`; player on completion.
-- Frontend Dockerfile; Compose frontend; `VITE_API_BASE_URL`.
+- Frontend Dockerfile; `frontend/nginx.conf`; Compose frontend on `127.0.0.1:8080`.
+- Empty `VITE_API_BASE_URL` (relative `fetch`); Vite `server.proxy` and nginx proxy `/api` and `/health` to the API. **No FastAPI CORS** in MVP.
 - Tests with mocked `fetch` + capability fixtures — not a hard-coded language/voice table.
 
-**Explicitly excludes:** pipeline logic in the client, Next.js, auth, full job history (sessionStorage of last `job_id` is OK).
+**Explicitly excludes:** pipeline logic in the client, Next.js, auth, full job history (sessionStorage of last `job_id` is OK), Cancel control / `CANCELLED`.
 
 **Acceptance check:** paste text, pick languages from API, queued → completed, play audio. `tsc --noEmit` clean.
 
-**Maps to:** §17–18, AC-01/02/04/05 (UI), AC-10.
+**Maps to:** §17–18, AC-01/02/04/05 (UI), AC-10. Decisions: §4 UI defaults, `auto` source (M6 half), Frontend origin.
 
-**Env:** `DEFAULT_SOURCE_LANGUAGE=auto`; optional `DEFAULT_TARGET_LANGUAGE` for UI preselect only — never a TypeScript constant list.
+**Env:** `VITE_API_BASE_URL` empty (same-origin); `VITE_DEFAULT_SOURCE_LANGUAGE=auto`; optional `VITE_DEFAULT_TARGET_LANGUAGE` for UI preselect only if present in capabilities — never a TypeScript constant list. Requirements/ADR `DEFAULT_*` map to frontend `VITE_DEFAULT_*`. Frontend `VITE_*` are image **build args**; rebuild Compose after changing them.
 
 ---
 
@@ -404,10 +406,8 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 ### `auto` source (M6, M8)
 
-- **A:** `LanguageDetector` port; CPU adapter; no “assume zh”.
-- **I:** Mis-detect → bad translation.
-- **Alt:** hide Auto until detector exists.
-- **R:** Auto in UI; low confidence → user must set source.
+- **Decided (M6):** UI always offers Auto first on source and POSTs `source_language=auto`. No low-confidence dialog in the SPA. Do not assume Chinese.
+- **Open (M8):** `LanguageDetector` port; CPU adapter; BCP-47 / `auto` mapping inside the adapter; low confidence → user-facing error to set source (not frontend logic). No “assume zh”.
 
 ### Job metadata (M3) — decided
 
@@ -445,11 +445,13 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 - **Decided (M5):** Default `TRANSLATION_PROVIDER=fake`, `TTS_PROVIDER=fake` so `compose up` works offline. M8/M9 override via env/profile (`nllb` / `edge`). `.env.example` documents the override.
 
-### UI defaults (M6)
+### UI defaults (M6) — decided
 
-- **A:** No domain default voice/language.
-- **Alt:** `.env.example` sets `DEFAULT_TARGET_LANGUAGE=vi-VN` for the operator demo.
-- **R:** Env-driven preselect if set; never TS/Python literals for zh/vi.
+- **Decided (M6):** No domain default voice/language. Env-driven preselect only. `VITE_DEFAULT_SOURCE_LANGUAGE=auto`. Optional `VITE_DEFAULT_TARGET_LANGUAGE` if set **and** present in capabilities, else first capabilities language. Operator demo may comment `VITE_DEFAULT_TARGET_LANGUAGE=vi-VN` in `.env.example` — never TS/Python literals for zh/vi. Requirements/ADR `DEFAULT_SOURCE_LANGUAGE` / `DEFAULT_TARGET_LANGUAGE` are the concept; the Vite client reads `VITE_DEFAULT_*`.
+
+### Frontend origin / API base (M6) — decided
+
+- **Decided (M6):** Empty `VITE_API_BASE_URL` (relative `fetch('/api/...')`). Vite dev `server.proxy` `/api` and `/health` → `http://127.0.0.1:8000`. Compose nginx (`frontend/nginx.conf`) proxies those paths to `http://api:8000`. **No FastAPI CORS** in MVP. Do not bake `http://api:8000` into the client bundle. Frontend `VITE_*` are baked at image build; `docker compose up --build` after changing them.
 
 ### Auth (M3, M13) — decided
 

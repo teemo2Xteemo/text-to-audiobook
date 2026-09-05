@@ -65,3 +65,23 @@ services:
         "redis://redis:6379/0",
         "jobs",
       ]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_DEFAULT_SOURCE_LANGUAGE: ${VITE_DEFAULT_SOURCE_LANGUAGE:-auto}
+        VITE_DEFAULT_TARGET_LANGUAGE: ${VITE_DEFAULT_TARGET_LANGUAGE:-}
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s

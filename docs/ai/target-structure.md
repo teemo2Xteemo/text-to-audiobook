@@ -1,6 +1,6 @@
 # Target structure
 
-Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M5** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker). Fill later layers in milestone order (`implementation-plan.md`). Next is **M6**. Reuse existing ports — do not re-scaffold `domain/`.
+Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M6** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI). Fill later layers in milestone order (`implementation-plan.md`). Next is **M7**. Reuse existing ports — do not re-scaffold `domain/`.
 
 ```text
 .
@@ -22,6 +22,7 @@ Required layout. Create **missing** folders from this tree; do not invent a para
 ├── frontend/
 │   ├── src/
 │   ├── package.json
+│   ├── nginx.conf            # same-origin /api + /health → api
 │   └── Dockerfile
 ├── storage/                  # gitignored job artifacts
 ├── docker-compose.yml
