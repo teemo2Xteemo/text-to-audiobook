@@ -259,6 +259,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 - `EdgeTTSProvider`: `voices_for(language)`, `synthesize` with `TTSSettings` (speed; pitch/volume if SDK allows). Voice IDs stay in adapter/config.
 - Normalize Edge output with FFmpeg **before** merge: implement real FFmpeg normalize argv (codec/rate/channels); reuse the M4 concat helper. The M4 normalize **stage** stays; only the argv/encoder is filled in here. Composition root switches from `FakeAudioProcessor` (M5 fake TTS) to the real FFmpeg `AudioProcessor` when TTS is non-fake.
 - `TTS_PROVIDER=edge`; capabilities list real voices for `target_language`.
+- Slim API may `pip install ".[edge]"` so `GET /api/capabilities` can list voices: `edge-tts` is a lightweight network SDK (no model weights, no FFmpeg), which is not a precedent for installing compute-heavy provider SDKs (NLLB/torch, local TTS models) on the API image.
 - Unit tests with mocked Edge client; voice/language mismatch → typed error. Optional live integration marker.
 
 **Explicitly excludes:** Piper/XTTS/ElevenLabs, cloning, a global `vi-VN-*` in domain. Per-language default = first listed voice or env map.
@@ -267,7 +268,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Maps to:** AC-03, AC-04, AC-05, AC-11, §9–12, ADR 0008.
 
-**Env:** `TTS_PROVIDER`; optional `TTS_DEFAULT_VOICE_BY_LANGUAGE`. If unset, first `voices_for(target_language)`.
+**Env:** `TTS_PROVIDER`; optional `TTS_DEFAULT_VOICE_BY_LANGUAGE` (`bcp47=voiceId` comma pairs). If unset, first `voices_for(target_language)`. Normalize: 44100 Hz mono; MP3 `libmp3lame` at `OUTPUT_BITRATE_KBPS`; WAV `pcm_s16le`.
 
 ---
 
@@ -439,7 +440,8 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 ### Images (M1, M5) — decided
 
 - **Decided (M5):** Two images as in `docs/ai/target-structure.md`: slim API `backend/Dockerfile` (no PyTorch, no FFmpeg); worker `backend/Dockerfile.worker` (FFmpeg now; torch + Edge TTS in M8/M9). Local/integration resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`.
-- **Decided (M8):** Worker image **installs** CPU torch (PyTorch CPU index, never CUDA wheels) plus `pip install ".[nllb]"`. Slim API stays `pip install .` — no torch, no transformers.
+- **Decided (M8):** Worker image **installs** CPU torch (PyTorch CPU index, never CUDA wheels) plus `pip install ".[nllb]"`. Slim API stays without torch/transformers.
+- **Decided (M9):** Worker installs `".[nllb,edge]"`; API may `pip install ".[edge]"` because Edge is a lightweight network SDK for voice listing, not a compute-heavy runtime — still no FFmpeg/PyTorch on the API. Do not extend this to NLLB/transformers or other heavy provider SDKs.
 
 ### Compose default providers (M5, M13) — decided
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config.settings import Settings, get_settings
+from app.config.settings import Settings, get_settings, parse_tts_default_voice_by_language
 
 
 def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -15,6 +15,7 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WORKER_CONCURRENCY", raising=False)
     monkeypatch.delenv("NLLB_MODEL_ID", raising=False)
     monkeypatch.delenv("LANGUAGE_DETECT_MIN_CONFIDENCE", raising=False)
+    monkeypatch.delenv("TTS_DEFAULT_VOICE_BY_LANGUAGE", raising=False)
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://localhost:6379/0"
     assert settings.storage_path == Path("storage")
@@ -25,6 +26,7 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.worker_concurrency == 1
     assert settings.nllb_model_id == "facebook/nllb-200-distilled-600M"
     assert settings.language_detect_min_confidence == 0.5
+    assert settings.tts_default_voice_by_language == ""
 
 
 def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -37,6 +39,10 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.setenv("WORKER_CONCURRENCY", "2")
     monkeypatch.setenv("NLLB_MODEL_ID", "facebook/nllb-200-distilled-1.3B")
     monkeypatch.setenv("LANGUAGE_DETECT_MIN_CONFIDENCE", "0.7")
+    monkeypatch.setenv(
+        "TTS_DEFAULT_VOICE_BY_LANGUAGE",
+        "ja-JP=ja-JP-AdapterANeural,en-US=en-US-AdapterANeural",
+    )
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://example:6379/1"
     assert settings.storage_path == tmp_path
@@ -47,6 +53,22 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.worker_concurrency == 2
     assert settings.nllb_model_id == "facebook/nllb-200-distilled-1.3B"
     assert settings.language_detect_min_confidence == 0.7
+    assert settings.tts_default_voice_by_language == (
+        "ja-JP=ja-JP-AdapterANeural,en-US=en-US-AdapterANeural"
+    )
+    assert parse_tts_default_voice_by_language(settings.tts_default_voice_by_language) == {
+        "ja-JP": "ja-JP-AdapterANeural",
+        "en-US": "en-US-AdapterANeural",
+    }
+
+
+def test_parse_tts_default_voice_by_language_skips_malformed() -> None:
+    parsed = parse_tts_default_voice_by_language(
+        "ja-JP=ja-JP-AdapterANeural,not-a-pair,en-US=, =skip"
+    )
+    assert parsed == {"ja-JP": "ja-JP-AdapterANeural"}
+    assert parse_tts_default_voice_by_language("") == {}
+    assert parse_tts_default_voice_by_language(None) == {}
 
 
 def test_get_settings_returns_settings() -> None:

@@ -1,6 +1,6 @@
 # Target structure
 
-Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M8** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI, conservative narration, NLLB adapter + CPU detector). Fill later layers in milestone order (`implementation-plan.md`). Next is **M9**. Reuse existing ports — do not re-scaffold `domain/`.
+Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M9** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI, conservative narration, NLLB adapter + CPU detector, Edge TTS + FFmpeg normalize). Fill later layers in milestone order (`implementation-plan.md`). Next is **M10**. Reuse existing ports — do not re-scaffold `domain/`.
 
 ```text
 .
@@ -19,7 +19,7 @@ Required layout. Create **missing** folders from this tree; do not invent a para
 │   ├── tests/
 │   ├── pyproject.toml
 │   ├── Dockerfile            # Slim API (no PyTorch / FFmpeg)
-│   └── Dockerfile.worker     # Worker + FFmpeg + CPU torch (Edge later)
+│   └── Dockerfile.worker     # Worker + FFmpeg + CPU torch + Edge TTS
 ├── frontend/
 │   ├── src/
 │   ├── package.json

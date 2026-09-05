@@ -5,8 +5,12 @@ import shutil
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from app.domain.jobs import OutputFormat
+
 _CONCAT_LINE = "file '{path}'"
 _FFMPEG_NAMES = ("ffmpeg", "ffmpeg.exe")
+NORMALIZE_SAMPLE_RATE_HZ = 44100
+NORMALIZE_CHANNELS = 1
 
 
 def backend_root() -> Path:
@@ -49,7 +53,7 @@ def concat_argv(
     *,
     executable: str | None = None,
 ) -> list[str]:
-    """Build an argv list for the ffmpeg concat demuxer. No encode/normalize flags (M9)."""
+    """Build an argv list for the ffmpeg concat demuxer (copy; normalize encodes first)."""
     binary = executable if executable is not None else (resolve_ffmpeg_executable() or "ffmpeg")
     return [
         binary,
@@ -66,6 +70,36 @@ def concat_argv(
         "copy",
         str(destination),
     ]
+
+
+def normalize_argv(
+    source: Path,
+    destination: Path,
+    *,
+    output_format: OutputFormat,
+    bitrate_kbps: int,
+    executable: str | None = None,
+) -> list[str]:
+    """Build an argv list that encodes to a consistent codec/rate/channels."""
+    binary = executable if executable is not None else (resolve_ffmpeg_executable() or "ffmpeg")
+    argv = [
+        binary,
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(source),
+        "-ar",
+        str(NORMALIZE_SAMPLE_RATE_HZ),
+        "-ac",
+        str(NORMALIZE_CHANNELS),
+    ]
+    if output_format is OutputFormat.MP3:
+        argv.extend(["-c:a", "libmp3lame", "-b:a", str(bitrate_kbps) + "k"])
+    else:
+        argv.extend(["-c:a", "pcm_s16le"])
+    argv.append(str(destination))
+    return argv
 
 
 def write_concat_list(list_file: Path, sources: Sequence[Path]) -> None:
