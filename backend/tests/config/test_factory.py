@@ -2,9 +2,12 @@ from pathlib import Path
 
 import pytest
 
+from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.config.factory import (
     UnknownProviderError,
     build_audio_processor,
+    build_narration_processor,
+    build_orchestrator,
     build_translation_provider,
     build_tts_provider,
 )
@@ -36,3 +39,38 @@ def test_factory_rejects_unknown_tts_provider(tmp_path: Path) -> None:
     settings = Settings(_env_file=None, storage_path=tmp_path, tts_provider="edge")
     with pytest.raises(UnknownProviderError, match="TTS_PROVIDER"):
         build_tts_provider(settings)
+
+
+def test_factory_builds_conservative_narration() -> None:
+    assert isinstance(build_narration_processor(), ConservativeNarrationProcessor)
+
+
+def test_build_orchestrator_injects_conservative_narration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Capture:
+        def __init__(self, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr("app.config.factory.PipelineOrchestrator", Capture)
+    monkeypatch.setattr(
+        "app.config.factory._infrastructure",
+        lambda settings: (object(), object(), object()),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_translation_provider",
+        lambda settings: FakeTranslationProvider(),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_tts_provider",
+        lambda settings: FakeTTSProvider(output_dir=tmp_path),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_audio_processor",
+        lambda settings: FakeAudioProcessor(),
+    )
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    build_orchestrator(settings)
+    assert isinstance(seen["narration"], ConservativeNarrationProcessor)

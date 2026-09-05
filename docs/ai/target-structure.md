@@ -1,6 +1,6 @@
 # Target structure
 
-Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M6** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI). Fill later layers in milestone order (`implementation-plan.md`). Next is **M7**. Reuse existing ports — do not re-scaffold `domain/`.
+Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M7** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI, conservative narration). Fill later layers in milestone order (`implementation-plan.md`). Next is **M8**. Reuse existing ports — do not re-scaffold `domain/`.
 
 ```text
 .

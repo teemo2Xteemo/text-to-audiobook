@@ -67,7 +67,7 @@ Use the plan as the full spec. This is the audit shortcut:
 - **M4:** stage modules parse → chunk → translate → narrate → TTS → normalize → merge; fakes; FFmpeg argv + fake `AudioProcessor`; checkpoints; fake translator includes `target_language`. No RQ process, no real NLLB/Edge.
 - **M5:** RQ worker, DI fakes default, `GET /api/capabilities` from ports, Compose worker, download on `COMPLETED`. No Edge IDs in api/application. `WORKER_CONCURRENCY` default 1.
 - **M6:** Vite React TS strict, typed client, poll stages/chunks, capabilities-driven voices, Compose frontend, `tsc --noEmit`. No pipeline in the client, no Next.js.
-- **M7:** real conservative narration; TTS input ≠ raw translation; multi-script fixtures.
+- **M7:** real conservative narration; TTS input ≠ raw translation; multi-script fixtures. **Done requires `config/factory.py` injecting `ConservativeNarrationProcessor`** (`build_narration_processor` / `build_orchestrator`); the processor file existing while DI still uses `PassthroughNarrationProcessor` is **not done**.
 - **M8:** NLLB adapter + env `NLLB_MODEL_ID`; mapping + `UNSUPPORTED_LANGUAGE`; detector does not assume Chinese; torch in **worker** image only.
 - **M9:** `EdgeTTSProvider`; normalize before merge; mock unit tests; domain/application do not import `edge_tts`.
 - **M10:** per-chunk retry; fail-chunk-3 test; neighbors not re-synthesized.
