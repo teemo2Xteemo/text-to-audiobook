@@ -35,6 +35,8 @@ Resume is two steps, not one: (1) worker **boot** re-enqueues **non-terminal** j
 
 Safe to retry. Cache keys must include operation + text + `source_language` + `target_language` + provider + model + voice + relevant settings — **not text alone**.
 
+Translation/TTS cache is **cross-job** filesystem content-addressed blobs (`storage/cache/{operation}/{sha256}`). Checkpoint skip is **same-job** (`checkpoint.json`). Orchestrator order: checkpoint complete → skip cache and provider; else cache lookup; else provider then checkpoint then cache put. On hit, **`shutil.copyfile`** into the job tree — no hardlink. `CACHE_OPERATIONS = {translation, tts}` only. Narration, normalize, and merge are not cache operations. Redis is not used for MP3/text blobs.
+
 ## Workers
 
 Queue (Redis) + worker process. Bounded, **configurable** concurrency. Respect provider rate limits. Do not maximize parallelism by default.

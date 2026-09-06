@@ -22,7 +22,8 @@ Do not sleep on real network in unit tests.
 
 - Job enum: legal transitions succeed; illegal transitions raise; `FAILED → QUEUED` is legal **only** as the retry hop (not skip/reverse)
 - Chunker: long input yields multiple stable IDs; not language-specific
-- Cache key: same text + different `target_language` or voice → miss
+- Cache key: `CACHE_OPERATIONS = {translation, tts}`; same text + different `target_language` or voice → miss; identical inputs → hit (second job does not recall translation/TTS fakes)
+- Cache vs checkpoint: valid same-job `translated`/`tts` checkpoint → no cache get and no provider call; a new job_id with identical inputs uses cache, not the first job’s checkpoint
 - Retry: failed chunk retried; successful neighbors left untouched
 - Resume: checkpoint at N; restart of a **non-terminal** job continues at N. `FAILED` does **not** resume on worker restart
 - Translation: `auto` vs explicit source; unsupported language

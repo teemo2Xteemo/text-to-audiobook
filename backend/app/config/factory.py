@@ -7,6 +7,7 @@ from rq import Queue
 
 from app.application.capabilities import CapabilitiesService
 from app.application.jobs import JobService
+from app.application.pipeline.artifact_cache import CacheIdentity, PipelineArtifactCache
 from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
 from app.config.settings import Settings, parse_tts_default_voice_by_language
@@ -18,6 +19,7 @@ from app.domain.ports import (
     TTSProvider,
 )
 from app.domain.retry import RetryPolicy
+from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
@@ -59,6 +61,7 @@ def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
         detector=build_language_detector(settings),
         audio=build_audio_processor(settings),
         jobs=store,
+        artifact_cache=build_artifact_cache(settings),
         retry_policy=RetryPolicy(
             max_attempts=settings.retry_max_attempts,
             backoff_seconds=settings.retry_backoff_seconds,
@@ -118,6 +121,25 @@ def build_audio_processor(settings: Settings) -> AudioProcessor:
     if settings.tts_provider.strip().lower() == "fake":
         return FakeAudioProcessor()
     return FFmpegAudioProcessor()
+
+
+def build_artifact_cache(settings: Settings) -> PipelineArtifactCache:
+    return PipelineArtifactCache(
+        FilesystemArtifactCache(settings.storage_path / "cache"),
+        cache_identity_from_settings(settings),
+    )
+
+
+def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
+    translation = settings.translation_provider.strip().lower()
+    tts = settings.tts_provider.strip().lower()
+    translation_model = settings.nllb_model_id if translation == "nllb" else "fake"
+    return CacheIdentity(
+        translation_provider=translation,
+        translation_model=translation_model,
+        tts_provider=tts,
+        tts_model=tts,
+    )
 
 
 def _infrastructure(

@@ -86,7 +86,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 - Types: BCP-47 `source_language` / `target_language` (`auto` allowed for source only), `JobStatus` StrEnum with **lowercase values** (`queued`, `parsing`, `translating`, `preparing_tts`, `generating_audio`, `merging`, `completed`, `failed`) + legal transitions (one-step **forward** along that pipeline; any **non-terminal** → `FAILED`; `COMPLETED` has **no** outbound hops). `FAILED` is terminal for the **natural pipeline** (worker-boot recover and `process_job` must not run or requeue it). M11 adds **exactly one** gated hop `FAILED → QUEUED`, and **only** via `POST /api/jobs/{job_id}/retry` — not skip/reverse along the pipeline (see M11 / §4 Resume). `error_type` codes from `.cursor/rules/02-backend.mdc`, `Chunk` (stable ids, e.g. `chunk-001`), `TTSSettings`, `Voice`, `AudioArtifact`.
 - Ports (no vendor imports): `TranslationProvider` / `TTSProvider` match `docs/ai/provider-development.md`. `NarrationProcessor` is a pipeline-stage port (ADR 0005): `process(text, language) -> str`. `LanguageDetector`: `detect(text) -> LanguageDetection(language_code, confidence)` (low-confidence threshold is M8 **adapter/config**, not a domain constant — §4). Reuse `backend/app/domain` — do not copy a second interface into the worker.
-- Pure functions: unicode **character-budget chunker** (language-agnostic, default `max_chars=1200`), **cache-key** helper (operation + text + languages + provider + model + voice + settings), job transition guard.
+- Pure functions: unicode **character-budget chunker** (language-agnostic, default `max_chars=1200`), **cache-key** helper (`CACHE_OPERATIONS = {translation, tts}`; operation + text + languages + provider + model + voice + settings — any other operation is a domain error, not a new cache stage), job transition guard.
 - Tests: transitions, illegal transitions, mixed-script chunking, cache miss when `target_language` or voice changes, detector not used when source is explicit.
 
 **Explicitly excludes:** FastAPI, Redis, FFmpeg, `edge_tts`, `transformers`, HTTP schemas.
@@ -300,7 +300,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Depends on:** M10  
 **Touches layers:** api, application, domain, workers, infrastructure  
-**Status:** Implemented. Do not re-scaffold resume, HTTP retry, or worker-boot recover.
+**Status:** Implemented. Do not re-scaffold resume, HTTP retry, or worker-boot recover. Deferred (does not block M12): `JobService` still constructs `FilesystemJobStorage` for recover/retry instead of a disk-authoritative port method.
 
 **Adds/changes:**
 
@@ -335,22 +335,30 @@ Checkpoint FS I/O (`checkpoint.json` read/write, path confinement, atomic replac
 
 ### M12 — Translation and TTS cache
 
-**Depends on:** M2 cache-key helper; **prefer after M9** so keys include real provider/model/voice  
-**Touches layers:** application, infrastructure
+**Depends on:** M2 `build_cache_key` / `CACHE_OPERATIONS`; **M11** checkpoint skip (same job). Prefer after M9 so keys include real provider/model/voice. Unit tests against fakes may exist after M4; do **not** ship cache without the orchestrator order checkpoint → cache → provider.  
+**Touches layers:** application, infrastructure  
+**Status:** Implemented. Do not re-scaffold the artifact cache or a second key helper. Reuse `build_cache_key` and `CACHE_OPERATIONS = {translation, tts}`. Details locked in §4 Cache.
 
 **Adds/changes:**
 
-- Filesystem content-addressed cache (gitignored); separate translation vs TTS keys; full material per ADR 0006.
-- Copy or hardlink into `storage/jobs/{id}/`.
-- Tests: different `target_language` → miss; identical inputs → hit; speed change → TTS miss.
+Two **separate** mechanisms. Do not collapse them into “cache is resume” or “checkpoint is the content-addressed store.”
 
-**Explicitly excludes:** Redis for MP3 blobs; multi-user cache ACL (single-user UUID jobs).
+1. **Same-job skip — `checkpoint.json` (M4/M11).** Unchanged. If the matching record exists **and** the artifact is non-empty, skip **cache lookup and** the provider for that chunk-stage.
+2. **Cross-job reuse — filesystem content-addressed blobs.** Canonical files live under gitignored `storage/cache/{operation}/{sha256}` (`operation` ∈ `CACHE_OPERATIONS`). Redis DualWrite stays the job-status GET cache (M3); **do not** store translation text or TTS bytes in Redis.
 
-**Acceptance check:** pytest hit/miss; second identical job does not recall fakes/providers.
+- Reuse M2 `build_cache_key` (full ADR 0006 material). `CACHE_OPERATIONS = {translation, tts}` — adding `narration` (or normalize/merge) is out of scope, not an extension of the helper.
+- On cache **hit:** `shutil.copyfile` the blob into `storage/jobs/{id}/` (the job’s own `chunks/` or `audio/` path), then `checkpoints.record` as if the stage just completed. **No hardlink** (`os.link` / `os.symlink`): the job copy must stay independent of the cache blob.
+- On cache **miss:** call the provider (with M10 retry for translation/TTS), write the workspace artifact, record the checkpoint, **then** `copyfile` into `storage/cache/`.
+- Policy (lookup/put, key material, hit vs miss) lives in `application/`. Path confinement and atomic replace live in `infrastructure/` (same split as checkpoint FS I/O). Routes, `app.workers`, and `providers/` do not own cache I/O.
+- Tests: different `target_language` → miss; identical inputs → hit (second **job_id** does not recall translation/TTS fakes); speed change → TTS miss (translation may still hit); valid same-job checkpoint for `translated`/`tts` → **no** cache get and **no** provider call.
 
-**Maps to:** §22, ADR 0006.
+**Explicitly excludes:** Redis for MP3/text blobs; multi-user cache ACL; hardlink/symlink into the job tree; caching narration, normalize, or merge; merging checkpoint into cache (or the reverse); a second cache-key helper; `CACHE_PATH` env (root is `{STORAGE_PATH}/cache`).
 
-May be implemented against fakes after M4, but shipping it after M9 is the useful default.
+**Acceptance check:** pytest hit/miss; second identical job does not recall fakes/providers; checkpoint-complete chunk-stages do not cache-get or call the provider.
+
+**Maps to:** §22, ADR 0006, §4 Cache.
+
+May be implemented against fakes after M4, but shipping it after M9 is the useful default — and only with M11 skip order.
 
 ---
 
@@ -457,6 +465,14 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 - **Decided (M11) — HTTP retry shipped:** `POST /api/jobs/{job_id}/retry` for **`FAILED` only**; same id; reuse `source.txt` + checkpoints + chunk artifacts; clear `error_type` / `message`; 202 `{ job_id, status: queued }`; 404 unknown; 409 if status is not `FAILED`. No SPA Retry (or Cancel) control in M11.
 - **Decided (M11) — FSM:** `FAILED` remains terminal for the natural pipeline and for boot recover. The **only** outbound hop is `FAILED → QUEUED`, and **only** through that retry endpoint / `JobService.retry`. The orchestrator never issues that hop. Skip/reverse along the forward pipeline stay illegal. `_advance(target)` is a no-op when status is already at or past `target`; that is not a reverse edge. Do not add `RESUMING`.
 - **Decided (M11) — layers:** Checkpoint JSON I/O in `infrastructure/checkpoint_fs.py`; skip policy in `application/pipeline/checkpoint.py`. `JobStore.list_ids()` is the domain port for recover listing (FS implementation).
+
+### Cache (M12) — decided
+
+- **Decided (M12) — two mechanisms, do not merge:** (1) **Checkpoint** = skip **inside the same** `job_id` via `storage/jobs/{id}/checkpoint.json` (M4/M11). (2) **Cache** = **cross-job** content-addressed blobs under gitignored **`storage/cache/`**. A cache hit is not a substitute for `checkpoint.json`; a checkpoint hit is not a cache lookup.
+- **Decided (M12) — filesystem only, copyfile only:** Canonical blobs are `{STORAGE_PATH}/cache/{operation}/{sha256}` with `operation` ∈ `CACHE_OPERATIONS`. On hit, copy into `storage/jobs/{id}/` with **`shutil.copyfile`**. Do **not** `os.link` / hardlink / symlink. Redis remains queue + DualWrite GET `status.json` (M3); **never** a translation/TTS artifact store.
+- **Decided (M12) — translation and TTS only:** Reuse M2 `build_cache_key` and **`CACHE_OPERATIONS = {translation, tts}`**. Any other operation is a domain error, not a new cache stage. Do **not** cache narration, normalize, or merge (merge is also not a checkpoint stage).
+- **Decided (M12) — orchestrator order:** For each translation or TTS chunk-stage: if checkpoint is complete (record **and** nonempty artifact) → skip cache get **and** skip provider. Else cache lookup; hit → `copyfile` into the job path → `checkpoints.record`. Miss → provider (M10 retry on those stages) → write workspace artifact → checkpoint → cache put (`copyfile` into `storage/cache/`). Cache put failure after a successful workspace+checkpoint write is logged, not a job failure.
+- **Decided (M12) — layers:** Lookup/put policy and key material in `application/` (e.g. `application/pipeline/artifact_cache.py`). FS I/O (hex key confine, atomic replace) in `infrastructure/` (e.g. `artifact_cache_fs.py`). Domain keeps the key helper only. Workers/routes/providers do not own cache.
 
 ### Retry (M10) — decided
 

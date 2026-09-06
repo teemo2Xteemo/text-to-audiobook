@@ -7,7 +7,7 @@ from app.domain.audio import (
     Voice,
     ensure_valid_speed,
 )
-from app.domain.cache import build_cache_key
+from app.domain.cache import CACHE_OPERATIONS, build_cache_key
 from app.domain.chunking import CHUNK_MAX_CHARS, Chunk, chunk_text
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import (
@@ -27,6 +27,7 @@ from app.domain.languages import (
     resolve_source_language,
 )
 from app.domain.ports import (
+    ArtifactCache,
     AudioProcessor,
     JobQueue,
     JobStore,
@@ -40,10 +41,12 @@ from app.domain.retry import RetryPolicy, delay_for, is_retryable
 
 __all__ = [
     "AUTO_SOURCE_LANGUAGE",
+    "CACHE_OPERATIONS",
     "CHUNK_MAX_CHARS",
     "SPEED_DEFAULT",
     "SPEED_MAX",
     "SPEED_MIN",
+    "ArtifactCache",
     "AudioArtifact",
     "AudioProcessor",
     "Chunk",

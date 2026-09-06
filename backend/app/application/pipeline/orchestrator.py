@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 
+from app.application.pipeline.artifact_cache import PipelineArtifactCache
 from app.application.pipeline.checkpoint import (
     STAGE_NARRATED,
     STAGE_NORMALIZED,
@@ -21,7 +22,7 @@ from app.application.pipeline.normalize import normalize_chunk
 from app.application.pipeline.parse import parse_source
 from app.application.pipeline.retry import with_chunk_retry
 from app.application.pipeline.translate import translate_chunk
-from app.application.pipeline.tts import synthesize_chunk
+from app.application.pipeline.tts import select_voice, synthesize_chunk
 from app.domain.audio import TTSSettings
 from app.domain.chunking import CHUNK_MAX_CHARS, Chunk
 from app.domain.errors import DomainError, ErrorType
@@ -49,6 +50,7 @@ class PipelineOrchestrator:
         detector: LanguageDetector,
         audio: AudioProcessor,
         jobs: JobStore,
+        artifact_cache: PipelineArtifactCache | None = None,
         max_chars: int = CHUNK_MAX_CHARS,
         retry_policy: RetryPolicy | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
@@ -59,6 +61,7 @@ class PipelineOrchestrator:
         self._detector = detector
         self._audio = audio
         self._jobs = jobs
+        self._artifact_cache = artifact_cache
         self._max_chars = max_chars
         # TODO: require retry_policy (no constructor fallback). These literals
         # duplicate Settings / factory defaults; Settings should be the only source.
@@ -118,26 +121,49 @@ class PipelineOrchestrator:
             self._active_chunk_id = chunk.id
             path = workspace / "chunks" / f"{chunk.id}.translated.txt"
             if not checkpoints.is_complete(chunk.id, STAGE_TRANSLATED):
-
-                async def _translate(text: str = chunk.text) -> str:
-                    return await translate_chunk(
-                        text,
+                filled = False
+                if self._artifact_cache is not None:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    filled = self._artifact_cache.fill_translation(
+                        text=chunk.text,
                         source_language=job.source_language,
                         target_language=job.target_language,
-                        provider=self._translation,
+                        destination=path,
+                        job_id=job.id,
+                        chunk_id=chunk.id,
                     )
+                if filled:
+                    checkpoints.record(chunk.id, STAGE_TRANSLATED, path)
+                else:
 
-                translated = await with_chunk_retry(
-                    _translate,
-                    policy=self._retry_policy,
-                    sleep=self._sleep,
-                    job_id=job.id,
-                    chunk_id=chunk.id,
-                    stage=STAGE_TRANSLATED,
-                )
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(translated, encoding="utf-8")
-                checkpoints.record(chunk.id, STAGE_TRANSLATED, path)
+                    async def _translate(text: str = chunk.text) -> str:
+                        return await translate_chunk(
+                            text,
+                            source_language=job.source_language,
+                            target_language=job.target_language,
+                            provider=self._translation,
+                        )
+
+                    translated = await with_chunk_retry(
+                        _translate,
+                        policy=self._retry_policy,
+                        sleep=self._sleep,
+                        job_id=job.id,
+                        chunk_id=chunk.id,
+                        stage=STAGE_TRANSLATED,
+                    )
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(translated, encoding="utf-8")
+                    checkpoints.record(chunk.id, STAGE_TRANSLATED, path)
+                    if self._artifact_cache is not None:
+                        self._artifact_cache.store_translation(
+                            text=chunk.text,
+                            source_language=job.source_language,
+                            target_language=job.target_language,
+                            source=path,
+                            job_id=job.id,
+                            chunk_id=chunk.id,
+                        )
             job = await self._touch_chunk(job, chunk, STAGE_TRANSLATED)
         return job
 
@@ -181,31 +207,59 @@ class PipelineOrchestrator:
             narrated = narrated_path.read_text(encoding="utf-8")
             raw_path = workspace / "audio" / f"{chunk.id}.{ext}"
             if not checkpoints.is_complete(chunk.id, STAGE_TTS):
-
-                async def _synthesize(
-                    narrated_text: str = narrated,
-                    destination: Path = raw_path,
-                ) -> None:
-                    artifact = await synthesize_chunk(
-                        narrated_text,
-                        language=job.target_language,
-                        voice=job.voice,
+                selected_voice = select_voice(self._tts, job.target_language, job.voice)
+                filled = False
+                if self._artifact_cache is not None:
+                    filled = self._artifact_cache.fill_tts(
+                        text=narrated,
+                        source_language=job.source_language,
+                        target_language=job.target_language,
+                        voice=selected_voice,
                         settings=settings,
-                        provider=self._tts,
+                        destination=raw_path,
+                        job_id=job.id,
+                        chunk_id=chunk.id,
                     )
-                    _place_artifact(artifact.path, destination)
-                    if not _nonempty(destination):
-                        raise DomainError(ErrorType.TTS_FAILED, "tts failed")
+                if filled:
+                    checkpoints.record(chunk.id, STAGE_TTS, raw_path)
+                else:
 
-                await with_chunk_retry(
-                    _synthesize,
-                    policy=self._retry_policy,
-                    sleep=self._sleep,
-                    job_id=job.id,
-                    chunk_id=chunk.id,
-                    stage=STAGE_TTS,
-                )
-                checkpoints.record(chunk.id, STAGE_TTS, raw_path)
+                    async def _synthesize(
+                        narrated_text: str = narrated,
+                        destination: Path = raw_path,
+                        voice: str = selected_voice,
+                    ) -> None:
+                        artifact = await synthesize_chunk(
+                            narrated_text,
+                            language=job.target_language,
+                            voice=voice,
+                            settings=settings,
+                            provider=self._tts,
+                        )
+                        _place_artifact(artifact.path, destination)
+                        if not _nonempty(destination):
+                            raise DomainError(ErrorType.TTS_FAILED, "tts failed")
+
+                    await with_chunk_retry(
+                        _synthesize,
+                        policy=self._retry_policy,
+                        sleep=self._sleep,
+                        job_id=job.id,
+                        chunk_id=chunk.id,
+                        stage=STAGE_TTS,
+                    )
+                    checkpoints.record(chunk.id, STAGE_TTS, raw_path)
+                    if self._artifact_cache is not None:
+                        self._artifact_cache.store_tts(
+                            text=narrated,
+                            source_language=job.source_language,
+                            target_language=job.target_language,
+                            voice=selected_voice,
+                            settings=settings,
+                            source=raw_path,
+                            job_id=job.id,
+                            chunk_id=chunk.id,
+                        )
 
             normalized_path = workspace / "audio" / f"{chunk.id}.normalized.{ext}"
             if not checkpoints.is_complete(chunk.id, STAGE_NORMALIZED):

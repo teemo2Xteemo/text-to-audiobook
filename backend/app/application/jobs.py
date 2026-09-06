@@ -161,6 +161,10 @@ class JobService:
         return directory / f"output.{job.output_format.value}"
 
     def _filesystem(self) -> FilesystemJobStorage:
+        # TODO(defer, not M12): inject a disk-authoritative reader from the
+        # composition root (or JobStore.get_from_disk). DualWrite.get is Redis-first
+        # so recover/retry must not use it; constructing FilesystemJobStorage here
+        # is a layering smell, not a behavior bug.
         return FilesystemJobStorage(self._storage_path)
 
     async def _cleanup(self, job_id: str) -> None:

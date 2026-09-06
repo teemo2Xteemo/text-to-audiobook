@@ -69,3 +69,11 @@ class AudioProcessor(Protocol):
         output_format: OutputFormat,
         bitrate_kbps: int,
     ) -> AudioArtifact: ...
+
+
+class ArtifactCache(Protocol):
+    """Content-addressed translation/TTS blobs. Not a job-status GET cache."""
+
+    def get(self, operation: str, key: str, destination: Path) -> bool: ...
+
+    def put(self, operation: str, key: str, source: Path) -> None: ...
