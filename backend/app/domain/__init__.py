@@ -17,6 +17,8 @@ from app.domain.jobs import (
     OutputFormat,
     assert_legal_transition,
     can_transition,
+    is_at_or_past,
+    is_terminal,
 )
 from app.domain.languages import (
     AUTO_SOURCE_LANGUAGE,
@@ -69,6 +71,8 @@ __all__ = [
     "delay_for",
     "ensure_valid_languages",
     "ensure_valid_speed",
+    "is_at_or_past",
     "is_retryable",
+    "is_terminal",
     "resolve_source_language",
 ]

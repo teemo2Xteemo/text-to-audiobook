@@ -3,14 +3,15 @@ from __future__ import annotations
 import logging
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobStatus, OutputFormat, assert_legal_transition, is_terminal
 from app.domain.languages import ensure_valid_languages
 from app.domain.ports import JobQueue, JobStore, SourceTextStorage
+from app.infrastructure.fs_storage import FilesystemJobStorage
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +89,79 @@ class JobService:
     async def get(self, job_id: str) -> Job | None:
         return await self._jobs.get(job_id)
 
+    async def retry(self, job_id: str) -> Job:
+        """Re-queue a FAILED job from filesystem ``status.json`` only.
+
+        Do not use ``JobStore.get`` (Redis GET cache). HTTP 202/409 must follow
+        the on-disk FSM even when the cache is stale or empty.
+        """
+        job = await self._filesystem().get_job(job_id)
+        if job is None:
+            raise DomainError(ErrorType.INVALID_INPUT, "job not found")
+        if job.status is not JobStatus.FAILED:
+            raise DomainError(ErrorType.INVALID_INPUT, "job cannot be retried")
+        assert_legal_transition(job.status, JobStatus.QUEUED)
+        job = replace(
+            job,
+            status=JobStatus.QUEUED,
+            error_type=None,
+            message=None,
+            chunk_current=0,
+            chunk_total=0,
+        )
+        await self._jobs.save(job)
+        await self._queue.enqueue(job.id)
+        logger.info(
+            "job_retried",
+            extra={
+                "job_id": job.id,
+                "source_language": job.source_language,
+                "status": job.status.value,
+                "target_language": job.target_language,
+            },
+        )
+        return job
+
+    async def recover_in_progress(self) -> list[str]:
+        """Re-enqueue non-terminal jobs from filesystem ``status.json`` only.
+
+        Do not use ``JobStore.get`` (Redis GET cache). Crash recovery must follow
+        the on-disk FSM even when the cache is stale or empty.
+        """
+        filesystem = self._filesystem()
+        recovered: list[str] = []
+        for job_id in await filesystem.list_job_ids():
+            try:
+                job = await filesystem.get_job(job_id)
+            except DomainError:
+                logger.warning(
+                    "job_recover_skipped",
+                    extra={"job_id": job_id, "chunk_id": None},
+                )
+                continue
+            if job is None or is_terminal(job.status):
+                continue
+            await self._queue.enqueue(job.id)
+            recovered.append(job.id)
+            logger.info(
+                "job_recovered",
+                extra={
+                    "job_id": job.id,
+                    "chunk_id": None,
+                    "status": job.status.value,
+                },
+            )
+        return recovered
+
     def output_audio_path(self, job: Job) -> Path:
         jobs_root = (self._storage_path / "jobs").resolve()
         directory = (jobs_root / job.id).resolve()
         if not directory.is_relative_to(jobs_root):
             raise DomainError(ErrorType.INVALID_INPUT, "invalid job_id")
         return directory / f"output.{job.output_format.value}"
+
+    def _filesystem(self) -> FilesystemJobStorage:
+        return FilesystemJobStorage(self._storage_path)
 
     async def _cleanup(self, job_id: str) -> None:
         with suppress(Exception):

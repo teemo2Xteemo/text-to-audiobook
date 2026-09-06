@@ -68,15 +68,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    # Single RQ process (one job at a time). Scale with replicas later.
-    command:
-      [
-        "rq",
-        "worker",
-        "--url",
-        "redis://redis:6379/0",
-        "jobs",
-      ]
+    # Recover non-terminal jobs from status.json, then consume the RQ queue.
+    command: ["python", "-m", "app.workers"]
 
   frontend:
     build:

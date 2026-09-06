@@ -84,7 +84,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Adds/changes:**
 
-- Types: BCP-47 `source_language` / `target_language` (`auto` allowed for source only), `JobStatus` StrEnum with **lowercase values** (`queued`, `parsing`, `translating`, `preparing_tts`, `generating_audio`, `merging`, `completed`, `failed`) + legal transitions (only non-terminal → `FAILED`; `COMPLETED` and `FAILED` are terminal), `error_type` codes from `.cursor/rules/02-backend.mdc`, `Chunk` (stable ids, e.g. `chunk-001`), `TTSSettings`, `Voice`, `AudioArtifact`.
+- Types: BCP-47 `source_language` / `target_language` (`auto` allowed for source only), `JobStatus` StrEnum with **lowercase values** (`queued`, `parsing`, `translating`, `preparing_tts`, `generating_audio`, `merging`, `completed`, `failed`) + legal transitions (one-step **forward** along that pipeline; any **non-terminal** → `FAILED`; `COMPLETED` has **no** outbound hops). `FAILED` is terminal for the **natural pipeline** (worker-boot recover and `process_job` must not run or requeue it). M11 adds **exactly one** gated hop `FAILED → QUEUED`, and **only** via `POST /api/jobs/{job_id}/retry` — not skip/reverse along the pipeline (see M11 / §4 Resume). `error_type` codes from `.cursor/rules/02-backend.mdc`, `Chunk` (stable ids, e.g. `chunk-001`), `TTSSettings`, `Voice`, `AudioArtifact`.
 - Ports (no vendor imports): `TranslationProvider` / `TTSProvider` match `docs/ai/provider-development.md`. `NarrationProcessor` is a pipeline-stage port (ADR 0005): `process(text, language) -> str`. `LanguageDetector`: `detect(text) -> LanguageDetection(language_code, confidence)` (low-confidence threshold is M8 **adapter/config**, not a domain constant — §4). Reuse `backend/app/domain` — do not copy a second interface into the worker.
 - Pure functions: unicode **character-budget chunker** (language-agnostic, default `max_chars=1200`), **cache-key** helper (operation + text + languages + provider + model + voice + settings), job transition guard.
 - Tests: transitions, illegal transitions, mixed-script chunking, cache miss when `target_language` or voice changes, detector not used when source is explicit.
@@ -191,7 +191,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 - Empty `VITE_API_BASE_URL` (relative `fetch`); Vite `server.proxy` and nginx proxy `/api` and `/health` to the API. **No FastAPI CORS** in MVP.
 - Tests with mocked `fetch` + capability fixtures — not a hard-coded language/voice table.
 
-**Explicitly excludes:** pipeline logic in the client, Next.js, auth, full job history (sessionStorage of last `job_id` is OK), Cancel control / `CANCELLED`.
+**Explicitly excludes:** pipeline logic in the client, Next.js, auth, full job history (sessionStorage of last `job_id` is OK), Cancel control / `CANCELLED`. Retry is M11 **HTTP-only** (`POST /api/jobs/{id}/retry`); this SPA has no Retry button.
 
 **Acceptance check:** paste text, pick languages from API, queued → completed, play audio. `tsc --noEmit` clean.
 
@@ -299,18 +299,35 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 ### M11 — Checkpoint resume
 
 **Depends on:** M10  
-**Touches layers:** application, workers, infrastructure
+**Touches layers:** api, application, domain, workers, infrastructure  
+**Status:** Implemented. Do not re-scaffold resume, HTTP retry, or worker-boot recover.
 
 **Adds/changes:**
 
-- On worker start: load `storage/jobs/{id}/checkpoint.json` (M4 contract, §4), skip valid artifacts, continue at first incomplete/failed chunk. Do not invent a second checkpoint layout or reuse `JobStatus` as per-chunk `stage`.
-- TODO: move checkpoint FS I/O (`checkpoint.json` read/write) from `application/pipeline/checkpoint.py` into `infrastructure/` when opening resume orchestration. Keep the skip rule (matching record **and** non-empty artifact) in application.
-- Test: stop after chunk 2 of 5; re-invoke; fakes show 1–2 not regenerated.
-- Optional `POST /api/jobs/{id}/retry` for `FAILED` jobs (same id, reuse checkpoints).
+Two **separate** mechanisms. Do not collapse them into “worker loads checkpoint.json”, and do not invent reverse FSM edges.
 
-**Explicitly excludes:** distributed locks beyond one worker per job; `CANCELLED`.
+1. **Worker process boot — queue recover from `status.json`.** Entry: `python -m app.workers` (Compose worker `command` and `Dockerfile.worker` `CMD`; not raw `rq worker`). On process start, an **application** use-case (`JobService.recover_in_progress`) lists job ids via `JobStore.list_ids()`: UUID-only directories under `storage/jobs/` that contain `status.json`. Filesystem is the recover source of truth; Redis is the GET cache (M3 dual-write) — do not recover by listing Redis keys. For each job whose status is **non-terminal** (`queued` … `merging`), enqueue that **same** `job_id`. Then start RQ. Do **not** auto-enqueue `completed` or `failed`. `app.workers` does **not** read `checkpoint.json` and does **not** loop pipeline stages.
 
-**Acceptance check:** pytest resume; manual: stop Compose worker mid-job, start again, job finishes without redoing early chunks.
+2. **Orchestrator resume — skip artifacts via `checkpoint.json`.** When `process_job` runs a **non-terminal** job, `PipelineOrchestrator.run` loads `storage/jobs/{id}/checkpoint.json` (M4 contract, §4). Skip a chunk-stage iff the matching record exists **and** the artifact file is non-empty. Continue at the first incomplete/failed chunk-stage. Re-parse/re-chunk from stored `source.txt` (stable `chunk-00N` ids). Merge is **not** a checkpoint stage — always re-merge. Do not invent a second checkpoint layout or reuse `JobStatus` as per-chunk `stage`. `process_job` **no-ops** `COMPLETED` and `FAILED` (it does not call into resume skip for those).
+
+Checkpoint FS I/O (`checkpoint.json` read/write, path confinement, atomic replace) lives in `infrastructure/checkpoint_fs.py`. The skip rule stays in `application/pipeline/checkpoint.py`.
+
+**FSM — `FAILED` is still terminal except one gated hop:**
+
+- Forward pipeline unchanged. Any non-terminal → `FAILED`. Skip and reverse along the pipeline stay **illegal** (`GENERATING_AUDIO → PARSING` is never a transition).
+- `COMPLETED`: no outbound hops. Worker boot and `process_job` skip it.
+- `FAILED`: terminal for the **natural pipeline** and for **boot recover** (a crashed-to-`FAILED` job must **not** start again just because the worker process restarted). The **only** legal hop out of `FAILED` is `FAILED → QUEUED`, and **only** when `JobService.retry` handles `POST /api/jobs/{job_id}/retry`. The orchestrator **never** performs `FAILED → QUEUED`. `FAILED → PARSING`, `FAILED → FAILED`, and any other outbound hop stay illegal.
+- Orchestrator `_advance(target)` is a **no-op** if `job.status` is already **at or past** `target` on the forward pipeline. That preserves status (e.g. stay `generating_audio`) so checkpoint skip can run; it is **not** a reverse transition and must not bypass `assert_legal_transition` for hops that are not at-or-past.
+
+**HTTP retry (shipped, not optional):** `POST /api/jobs/{job_id}/retry` — `FAILED` only; same `job_id`; keep `source.txt` + `checkpoint.json` + chunk artifacts; clear `error_type` / `message`; languages/voice/speed unchanged. Success: **202** `{ job_id, status: queued }`. Missing: **404** `INVALID_INPUT` `"job not found"`. `COMPLETED` or in-progress: **409** `INVALID_INPUT` `"job cannot be retried"`.
+
+**SPA:** M11 does **not** add a Retry (or Cancel) control. Retry is API-only (`curl` / operator). A UI Retry button, if ever, is M13/Phase 2 — it is **not** Cancel and must not invent `CANCELLED`.
+
+**Tests:** stop after chunk 2 of 5; re-invoke; fakes show 1–2 not regenerated. `process_job` no-op on `COMPLETED`/`FAILED`. Recover enqueues non-terminal ids only.
+
+**Explicitly excludes:** distributed locks beyond one worker per job; `CANCELLED`; auto-requeue of `FAILED` on boot; frontend Retry button; M12 cache.
+
+**Acceptance check:** pytest resume (chunk 2 of 5). Manual: stop Compose worker **mid-job** (application status still non-terminal), start again, job finishes without redoing early chunks. A job already `FAILED` does **not** finish on worker restart; it requires `POST /api/jobs/{id}/retry` (same id), after which the orchestrator skips valid checkpoints.
 
 **Maps to:** AC-08, §31, ADR 0007.
 
@@ -392,7 +409,7 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 ### API URL version (M1, M3) — decided
 
-- **Decided:** Unversioned paths as already specified: `GET /health`, `POST /api/jobs`, `GET /api/jobs/{job_id}`, `GET /api/jobs/{job_id}/audio`, `GET /api/capabilities`. No `/api/v1` (or other version segment). FastAPI app `version` (e.g. `0.1.0`) is OpenAPI metadata only, not a URL prefix.
+- **Decided:** Unversioned paths as already specified: `GET /health`, `POST /api/jobs`, `GET /api/jobs/{job_id}`, `GET /api/jobs/{job_id}/audio`, `POST /api/jobs/{job_id}/retry`, `GET /api/capabilities`. No `/api/v1` (or other version segment). FastAPI app `version` (e.g. `0.1.0`) is OpenAPI metadata only, not a URL prefix.
 - Revisit when there is a second public consumer or a breaking API; do not add `/v1` in MVP.
 
 ### Capabilities (M5) — decided
@@ -432,7 +449,14 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 ### Pipeline FSM owner (M4, M5) — decided
 
-- **Decided (M4/M5):** The M4 orchestrator advances `JobStatus` / `chunk_current` / `chunk_total` via injected ports. M5 worker loads the job, calls the orchestrator, and persists Redis/FS. No pipeline loops in `app.workers`.
+- **Decided (M4/M5):** The M4 orchestrator advances `JobStatus` / `chunk_current` / `chunk_total` via injected ports. M5 worker loads the job, calls the orchestrator, and persists Redis/FS. No pipeline loops in `app.workers`. M11 boot recover (`JobStore.list_ids` + enqueue non-terminal) is an application use-case invoked from worker `__main__` **before** RQ listen — still not a pipeline loop, and still not checkpoint I/O, in `app.workers`.
+
+### Resume (M11) — decided
+
+- **Decided (M11) — two mechanisms, do not merge:** (1) **Boot / queue recover** reads filesystem `status.json` via `JobStore.list_ids()` (UUID directories that contain `status.json`; Redis is not the recover source) and enqueues **non-terminal** jobs (`queued` … `merging`), then starts RQ. Command: `python -m app.workers`. Do **not** enqueue `failed` or `completed` on boot. Workers do **not** parse `checkpoint.json`. (2) **Orchestrator / artifact skip** loads `checkpoint.json` (M4) when running a non-terminal job and skips a chunk-stage iff the matching record exists **and** the artifact is non-empty. Merge always re-runs. `process_job` no-ops `COMPLETED` and `FAILED`.
+- **Decided (M11) — HTTP retry shipped:** `POST /api/jobs/{job_id}/retry` for **`FAILED` only**; same id; reuse `source.txt` + checkpoints + chunk artifacts; clear `error_type` / `message`; 202 `{ job_id, status: queued }`; 404 unknown; 409 if status is not `FAILED`. No SPA Retry (or Cancel) control in M11.
+- **Decided (M11) — FSM:** `FAILED` remains terminal for the natural pipeline and for boot recover. The **only** outbound hop is `FAILED → QUEUED`, and **only** through that retry endpoint / `JobService.retry`. The orchestrator never issues that hop. Skip/reverse along the forward pipeline stay illegal. `_advance(target)` is a no-op when status is already at or past `target`; that is not a reverse edge. Do not add `RESUMING`.
+- **Decided (M11) — layers:** Checkpoint JSON I/O in `infrastructure/checkpoint_fs.py`; skip policy in `application/pipeline/checkpoint.py`. `JobStore.list_ids()` is the domain port for recover listing (FS implementation).
 
 ### Retry (M10) — decided
 

@@ -31,6 +31,9 @@ class InMemoryJobStore:
     async def delete(self, job_id: str) -> None:
         self.jobs.pop(job_id, None)
 
+    async def list_ids(self) -> list[str]:
+        return sorted(self.jobs.keys())
+
 
 class InMemorySourceStorage:
     def __init__(self) -> None:

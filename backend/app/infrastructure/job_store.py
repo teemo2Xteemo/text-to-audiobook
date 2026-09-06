@@ -45,3 +45,6 @@ class DualWriteJobStore:
         with suppress(Exception):
             await self._cache.delete(job_id)
         await self._filesystem.delete_job(job_id)
+
+    async def list_ids(self) -> list[str]:
+        return await self._filesystem.list_job_ids()

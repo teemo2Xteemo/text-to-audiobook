@@ -25,7 +25,7 @@ from app.application.pipeline.tts import synthesize_chunk
 from app.domain.audio import TTSSettings
 from app.domain.chunking import CHUNK_MAX_CHARS, Chunk
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import Job, JobStatus, assert_legal_transition
+from app.domain.jobs import Job, JobStatus, assert_legal_transition, is_at_or_past, is_terminal
 from app.domain.ports import (
     AudioProcessor,
     JobStore,
@@ -67,8 +67,15 @@ class PipelineOrchestrator:
         self._active_chunk_id: str | None = None
 
     async def run(self, job: Job, text: str, *, workspace: Path) -> Job:
+        if is_terminal(job.status):
+            return job
         workspace.mkdir(parents=True, exist_ok=True)
         checkpoints = CheckpointStore(workspace)
+        if job.status is not JobStatus.QUEUED:
+            logger.info(
+                "pipeline_resumed",
+                extra={"job_id": job.id, "chunk_id": None, "stage": job.status.value},
+            )
         try:
             job = await self._advance(job, JobStatus.PARSING)
             normalized, resolved = await parse_source(text, job.source_language, self._detector)
@@ -235,6 +242,8 @@ class PipelineOrchestrator:
         return job
 
     async def _advance(self, job: Job, status: JobStatus) -> Job:
+        if is_at_or_past(job.status, status):
+            return job
         assert_legal_transition(job.status, status)
         job = replace(job, status=status)
         await self._jobs.save(job)

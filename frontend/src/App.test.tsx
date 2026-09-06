@@ -63,6 +63,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByLabelText("Paste story");
     expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
     await user.type(screen.getByLabelText("Paste story"), "Once upon a time");
     await user.click(screen.getByRole("button", { name: "Generate" }));
     expect(await screen.findByText("Waiting in queue")).toBeInTheDocument();

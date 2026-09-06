@@ -12,7 +12,11 @@ Use one enum. Invalid transitions must fail.
 
 `QUEUED → PARSING → TRANSLATING → PREPARING_TTS → GENERATING_AUDIO → MERGING → COMPLETED`
 
-Any **non-terminal** state → `FAILED`. `COMPLETED` and `FAILED` are terminal. Optional later: `CANCELLED`. Serialize as lowercase enum values (`queued`, `failed`, …). Do not scatter raw strings.
+Any **non-terminal** state → `FAILED`. `COMPLETED` has **no** outbound transitions.
+
+`FAILED` is terminal for the **natural pipeline**: worker-boot recover and `process_job` must **not** run or requeue a `failed` job. The **only** legal hop from `FAILED` is `FAILED → QUEUED`, and **only** via `POST /api/jobs/{job_id}/retry` (`JobService.retry`). The orchestrator must **not** perform that hop. Skip and reverse along the pipeline stay illegal (never `GENERATING_AUDIO → PARSING`, never `FAILED → PARSING`). `_advance(target)` is a no-op if status is already at or past `target` on the forward pipeline — that preserves status for checkpoint skip; it is **not** a reverse transition.
+
+Optional later: `CANCELLED`. Serialize as lowercase enum values (`queued`, `failed`, …). Do not scatter raw strings.
 
 ## Chunks
 
@@ -25,6 +29,8 @@ chunk-001 ✓  chunk-002 ✓  chunk-003 ✗  chunk-004 ✓
 
 If work stops at chunk 37/100, resume from the last valid checkpoint. Do not recompute completed chunks.
 
+Resume is two steps, not one: (1) worker **boot** re-enqueues **non-terminal** jobs from filesystem `status.json` (`JobStore.list_ids`); it does **not** read `checkpoint.json` and does **not** auto-enqueue `FAILED`. (2) the **orchestrator** loads `checkpoint.json` and skips complete chunk-stages. A `FAILED` job resumes only after `POST /api/jobs/{id}/retry` (same id).
+
 ## Idempotency and cache
 
 Safe to retry. Cache keys must include operation + text + `source_language` + `target_language` + provider + model + voice + relevant settings — **not text alone**.
@@ -32,5 +38,7 @@ Safe to retry. Cache keys must include operation + text + `source_language` + `t
 ## Workers
 
 Queue (Redis) + worker process. Bounded, **configurable** concurrency. Respect provider rate limits. Do not maximize parallelism by default.
+
+Process entry is `python -m app.workers`: application recovers non-terminal jobs from `status.json`, then RQ listens. No pipeline stage loops and no `checkpoint.json` I/O in `app.workers`. `process_job` no-ops `COMPLETED` and `FAILED`.
 
 Job progress (`stage`, `chunk_current`, `chunk_total`) is persisted so `GET /api/jobs/{id}` can render the UI.

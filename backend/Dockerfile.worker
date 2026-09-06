@@ -36,4 +36,4 @@ COPY --from=builder /opt/venv /opt/venv
 
 USER app
 
-CMD ["rq", "worker", "--url", "redis://redis:6379/0", "jobs"]
+CMD ["python", "-m", "app.workers"]

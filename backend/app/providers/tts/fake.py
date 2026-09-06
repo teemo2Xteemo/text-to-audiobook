@@ -1,4 +1,6 @@
+import asyncio
 from collections.abc import Sequence
+from os import getenv
 from pathlib import Path
 
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
@@ -34,9 +36,20 @@ class FakeTTSProvider:
     async def synthesize(
         self, text: str, language: str, voice: str, settings: TTSSettings
     ) -> AudioArtifact:
+        delay = _fake_stage_delay_seconds()
+        if delay > 0:
+            await asyncio.sleep(delay)
         self.calls.append((text, language, voice, settings))
         self._count += 1
         self._output_dir.mkdir(parents=True, exist_ok=True)
         path = self._output_dir / f"synth-{self._count:03d}.bin"
         path.write_bytes(b"FAKEAUDIO")
         return AudioArtifact(path=path)
+
+
+def _fake_stage_delay_seconds() -> float:
+    raw = getenv("FAKE_TTS_DELAY_SECONDS", "0")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0

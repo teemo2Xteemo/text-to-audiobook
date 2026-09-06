@@ -1,6 +1,6 @@
 # Target structure
 
-Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M10** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI, conservative narration, NLLB adapter + CPU detector, Edge TTS + FFmpeg normalize, chunk retry). Fill later layers in milestone order (`implementation-plan.md`). Next is **M11**. Reuse existing ports — do not re-scaffold `domain/`.
+Required layout. Create **missing** folders from this tree; do not invent a parallel one. **M1**–**M11** already exist (`domain`, job HTTP, pipeline orchestrator, RQ worker, capabilities, Compose worker, Vite job UI, conservative narration, NLLB adapter + CPU detector, Edge TTS + FFmpeg normalize, chunk retry, checkpoint resume). Fill later layers in milestone order (`implementation-plan.md`). Next is **M12**. Reuse existing ports — do not re-scaffold `domain/`.
 
 ```text
 .
