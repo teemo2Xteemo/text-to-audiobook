@@ -33,6 +33,11 @@ def test_rq_process_job_path_resolves() -> None:
     assert callable(getattr(import_module(module_path), name))
 
 
+def test_workers_package_exposes_main_entry() -> None:
+    main = import_module("app.workers.__main__")
+    assert callable(getattr(main, "boot"))
+
+
 def test_process_job_completes_with_fakes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = InMemoryJobStore()
     job = Job(

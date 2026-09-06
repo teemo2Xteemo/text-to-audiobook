@@ -193,6 +193,7 @@ def test_download_completed_returns_bytes(
     assert response.status_code == 200
     assert response.content == b"FAKEAUDIO"
     assert response.headers["content-type"].startswith("audio/mpeg")
+    assert response.headers["content-disposition"].startswith("inline")
 
 
 def test_download_queued_is_409(jobs_client: TestClient) -> None:
