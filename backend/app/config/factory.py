@@ -17,6 +17,7 @@ from app.domain.ports import (
     TranslationProvider,
     TTSProvider,
 )
+from app.domain.retry import RetryPolicy
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
@@ -58,6 +59,10 @@ def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
         detector=build_language_detector(settings),
         audio=build_audio_processor(settings),
         jobs=store,
+        retry_policy=RetryPolicy(
+            max_attempts=settings.retry_max_attempts,
+            backoff_seconds=settings.retry_backoff_seconds,
+        ),
     )
 
 

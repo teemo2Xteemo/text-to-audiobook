@@ -252,7 +252,8 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 ### M9 — Edge TTS adapter + FFmpeg normalize
 
 **Depends on:** M4 FFmpeg helper, M5 DI, M7  
-**Touches layers:** providers, infrastructure, config
+**Touches layers:** providers, infrastructure, config  
+**Status:** Implemented. Do not re-scaffold the Edge TTS adapter or FFmpeg normalize argv.
 
 **Adds/changes:**
 
@@ -275,11 +276,13 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 ### M10 — Chunk retry
 
 **Depends on:** M4/M5  
-**Touches layers:** application, domain, workers
+**Touches layers:** application, domain, config  
+**Status:** Implemented. Do not re-scaffold retry policy or `with_chunk_retry`.
 
 **Adds/changes:**
 
 - Bounded per-chunk retry (count + backoff from config). Retry only failures.
+- Locked policy (§4): `RETRY_MAX_ATTEMPTS=3` is 3 **total** attempts; `RETRY_BACKOFF_SECONDS=1` exponential 1s then 2s; translation and TTS only; no `tenacity`; no new HTTP. Compose wires `RETRY_*` on the worker (and API) **service** — not a retry loop in `app.workers`.
 - Fake that fails `chunk-003` then succeeds; assert 001/002/004 not re-synthesized.
 - Exhaust → job `FAILED`; completed artifacts kept. Map flakes to `TRANSLATION_FAILED` / `TTS_FAILED` / `PROVIDER_RATE_LIMIT` / `TIMEOUT`.
 
@@ -431,11 +434,10 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 - **Decided (M4/M5):** The M4 orchestrator advances `JobStatus` / `chunk_current` / `chunk_total` via injected ports. M5 worker loads the job, calls the orchestrator, and persists Redis/FS. No pipeline loops in `app.workers`.
 
-### Retry (M10)
+### Retry (M10) — decided
 
-- **A:** `RETRY_MAX_ATTEMPTS=3`, backoff 1s / 2s / 4s.
-- **I:** Latency vs Edge rate limits.
-- **R:** Configurable via env.
+- **Decided (M10):** `RETRY_MAX_ATTEMPTS=3` is **3 total attempts** (1 try + 2 retries). `RETRY_BACKOFF_SECONDS=1` is a float base. Exponential wait `base * 2^i` after failed attempt `i` = 0, 1 → **1s then 2s**. The “4s” is the next term if attempts are raised. Env stays two scalars. Retry translation and TTS stage calls only; narrate/normalize/merge are not retried.
+- **Follow-up (not M10):** `PipelineOrchestrator` still falls back to `RetryPolicy(max_attempts=3, backoff_seconds=1.0)` when omitted; `build_orchestrator` injects the same numbers from Settings. On a later cleanup, require `retry_policy` (no application literals) so Settings is the only default source. Tests that construct the orchestrator directly must then pass a policy.
 
 ### Images (M1, M5) — decided
 

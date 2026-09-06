@@ -3,17 +3,21 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import logging
 from pathlib import Path
+
+import pytest
 
 from app.application.pipeline.checkpoint import STAGE_TRANSLATED, CheckpointStore
 from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
-from app.domain.audio import Voice
+from app.domain.audio import AudioArtifact, TTSSettings, Voice
 from app.domain.chunking import chunk_text
-from app.domain.errors import ErrorType
+from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.domain.languages import AUTO_SOURCE_LANGUAGE
 from app.domain.ports import NarrationProcessor
+from app.domain.retry import RetryPolicy
 from tests.fakes import (
     FakeAudioProcessor,
     FakeLanguageDetector,
@@ -24,6 +28,7 @@ from tests.fakes import (
 )
 
 THREE_SENTENCES = "Alpha is first. Bravo is second. Charlie is third."
+FOUR_SENTENCES = "Alpha is first. Bravo is second. Charlie is third. Delta is fourth."
 PIPELINE_DIR = Path(__file__).resolve().parents[2] / "app" / "application" / "pipeline"
 FORBIDDEN_IMPORT_ROOTS = frozenset(
     {
@@ -50,6 +55,40 @@ class RecordingJobStore(InMemoryJobStore):
     async def save(self, job: Job) -> None:
         self.statuses.append(job.status)
         await super().save(job)
+
+
+class _RecordingSleep:
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.delays.append(seconds)
+
+
+class _FlakyByTextTTS(FakeTTSProvider):
+    def __init__(
+        self,
+        voices: list[Voice],
+        output_dir: Path,
+        *,
+        fail_on_text: str,
+        fail_times: int = 1,
+        error: Exception | None = None,
+    ) -> None:
+        super().__init__(voices, output_dir)
+        self.fail_on_text = fail_on_text
+        self.fail_times = fail_times
+        self._failures = 0
+        self.error = error or DomainError(ErrorType.TTS_FAILED, "tts failed")
+
+    async def synthesize(
+        self, text: str, language: str, voice: str, settings: TTSSettings
+    ) -> AudioArtifact:
+        if self.fail_on_text in text and self._failures < self.fail_times:
+            self.calls.append((text, language, voice, settings))
+            self._failures += 1
+            raise self.error
+        return await super().synthesize(text, language, voice, settings)
 
 
 def _job(**overrides: object) -> Job:
@@ -86,6 +125,8 @@ def _orchestrator(
     audio: FakeAudioProcessor | None = None,
     jobs: InMemoryJobStore | None = None,
     max_chars: int | None = None,
+    retry_policy: RetryPolicy | None = None,
+    sleep: _RecordingSleep | None = None,
 ) -> tuple[
     PipelineOrchestrator,
     Path,
@@ -112,6 +153,8 @@ def _orchestrator(
         "detector": detector,
         "audio": audio,
         "jobs": jobs,
+        "retry_policy": retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0),
+        "sleep": sleep if sleep is not None else _RecordingSleep(),
     }
     if max_chars is not None:
         kwargs["max_chars"] = max_chars
@@ -298,30 +341,164 @@ def test_legal_status_walk_on_success(tmp_path: Path) -> None:
     ]
 
 
-def test_translator_failure_fails_job_without_retry(tmp_path: Path) -> None:
+def test_translator_failure_exhausts_retries(tmp_path: Path) -> None:
     job = _job()
+    sleep = _RecordingSleep()
     translation = FakeTranslationProvider(["en-US", "ko-KR"], error=RuntimeError("boom"))
     orchestrator, workspace, translation, _, tts, _, _, jobs = _orchestrator(
-        tmp_path, job=job, translation=translation
+        tmp_path, job=job, translation=translation, sleep=sleep
     )
     result = _run(orchestrator, job, workspace)
     assert result.status is JobStatus.FAILED
     assert result.error_type is ErrorType.TRANSLATION_FAILED
-    assert len(translation.calls) == 1
+    assert len(translation.calls) == 3
+    assert sleep.delays == [1.0, 2.0]
     assert tts.calls == []
     assert jobs.jobs[job.id].status is JobStatus.FAILED
     assert not (workspace / "output.mp3").exists()
 
 
-def test_unsupported_language_fails_job(tmp_path: Path) -> None:
+def test_tts_retries_chunk_003_without_resynthesizing_neighbors(tmp_path: Path) -> None:
+    job = _job()
+    chunks = chunk_text(FOUR_SENTENCES, max_chars=20)
+    assert [chunk.id for chunk in chunks[:4]] == [
+        "chunk-001",
+        "chunk-002",
+        "chunk-003",
+        "chunk-004",
+    ]
+    sleep = _RecordingSleep()
+    tts = _FlakyByTextTTS(
+        _voices_for(job.target_language),
+        tmp_path / "tts-scratch",
+        fail_on_text=chunks[2].text,
+        fail_times=1,
+    )
+    orchestrator, workspace, _, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=job, tts=tts, max_chars=20, sleep=sleep
+    )
+    result = _run(orchestrator, job, workspace, text=FOUR_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+    assert sleep.delays == [1.0]
+    assert (workspace / "output.mp3").is_file()
+
+    def _calls_for(chunk_text_value: str) -> int:
+        return sum(1 for call in tts.calls if chunk_text_value in call[0])
+
+    assert _calls_for(chunks[0].text) == 1
+    assert _calls_for(chunks[1].text) == 1
+    assert _calls_for(chunks[2].text) == 2
+    assert _calls_for(chunks[3].text) == 1
+
+
+def test_tts_exhaust_on_chunk_003_keeps_neighbor_artifacts(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    job = _job()
+    chunks = chunk_text(FOUR_SENTENCES, max_chars=20)
+    assert len(chunks) >= 4
+    sleep = _RecordingSleep()
+    tts = _FlakyByTextTTS(
+        _voices_for(job.target_language),
+        tmp_path / "tts-scratch",
+        fail_on_text=chunks[2].text,
+        fail_times=3,
+    )
+    orchestrator, workspace, _, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=job, tts=tts, max_chars=20, sleep=sleep
+    )
+    with caplog.at_level(logging.INFO, logger="app.application.pipeline.orchestrator"):
+        result = _run(orchestrator, job, workspace, text=FOUR_SENTENCES)
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.TTS_FAILED
+    assert sleep.delays == [1.0, 2.0]
+    assert sum(1 for call in tts.calls if chunks[2].text in call[0]) == 3
+    assert sum(1 for call in tts.calls if chunks[0].text in call[0]) == 1
+    assert sum(1 for call in tts.calls if chunks[1].text in call[0]) == 1
+    assert sum(1 for call in tts.calls if chunks[3].text in call[0]) == 0
+    assert (workspace / "audio" / "chunk-001.mp3").is_file()
+    assert (workspace / "audio" / "chunk-002.mp3").is_file()
+    assert not (workspace / "output.mp3").exists()
+    failed = [record for record in caplog.records if record.getMessage() == "pipeline_failed"]
+    assert failed
+    assert failed[0].job_id == job.id
+    assert failed[0].chunk_id == "chunk-003"
+
+
+def test_provider_rate_limit_is_retried(tmp_path: Path) -> None:
+    job = _job()
+    chunks = chunk_text(FOUR_SENTENCES, max_chars=20)
+    tts = _FlakyByTextTTS(
+        _voices_for(job.target_language),
+        tmp_path / "tts-scratch",
+        fail_on_text=chunks[2].text,
+        fail_times=1,
+        error=DomainError(ErrorType.PROVIDER_RATE_LIMIT, "tts rate limited"),
+    )
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, tts=tts, max_chars=20
+    )
+    result = _run(orchestrator, job, workspace, text=FOUR_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+    assert (workspace / "output.mp3").is_file()
+
+
+def test_timeout_is_retried(tmp_path: Path) -> None:
+    job = _job()
+    chunks = chunk_text(FOUR_SENTENCES, max_chars=20)
+    tts = _FlakyByTextTTS(
+        _voices_for(job.target_language),
+        tmp_path / "tts-scratch",
+        fail_on_text=chunks[2].text,
+        fail_times=1,
+        error=DomainError(ErrorType.TIMEOUT, "tts timed out"),
+    )
+    orchestrator, workspace, _, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=job, tts=tts, max_chars=20
+    )
+    result = _run(orchestrator, job, workspace, text=FOUR_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+    assert (workspace / "output.mp3").is_file()
+    assert sum(1 for call in tts.calls if chunks[2].text in call[0]) == 2
+
+
+def test_unsupported_language_is_not_retried(tmp_path: Path) -> None:
     job = _job(target_language="ko-KR")
     translation = FakeTranslationProvider(["en-US"])
-    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+    orchestrator, workspace, translation, _, _, _, _, _ = _orchestrator(
         tmp_path, job=job, translation=translation, voices=_voices_for("ko-KR")
     )
     result = _run(orchestrator, job, workspace)
     assert result.status is JobStatus.FAILED
     assert result.error_type is ErrorType.UNSUPPORTED_LANGUAGE
+    assert translation.calls == []
+
+
+def test_retry_logs_job_chunk_and_retry_count(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    job = _job()
+    chunks = chunk_text(FOUR_SENTENCES, max_chars=20)
+    tts = _FlakyByTextTTS(
+        _voices_for(job.target_language),
+        tmp_path / "tts-scratch",
+        fail_on_text=chunks[2].text,
+        fail_times=1,
+    )
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, tts=tts, max_chars=20
+    )
+    with caplog.at_level(logging.INFO, logger="app.application.pipeline.retry"):
+        result = _run(orchestrator, job, workspace, text=FOUR_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+    records = [record for record in caplog.records if record.getMessage() == "pipeline_chunk_retry"]
+    assert records
+    record = records[0]
+    assert record.job_id == job.id
+    assert record.chunk_id == "chunk-003"
+    assert record.retry_count == 1
+    assert FOUR_SENTENCES not in record.getMessage()
+    assert chunks[2].text not in record.getMessage()
 
 
 def test_unsupported_voice_fails_job(tmp_path: Path) -> None:

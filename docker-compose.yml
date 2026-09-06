@@ -25,6 +25,8 @@ services:
       TTS_DEFAULT_VOICE_BY_LANGUAGE: ${TTS_DEFAULT_VOICE_BY_LANGUAGE:-}
       NLLB_MODEL_ID: ${NLLB_MODEL_ID:-facebook/nllb-200-distilled-600M}
       LANGUAGE_DETECT_MIN_CONFIDENCE: ${LANGUAGE_DETECT_MIN_CONFIDENCE:-0.5}
+      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
+      RETRY_BACKOFF_SECONDS: ${RETRY_BACKOFF_SECONDS:-1}
     volumes:
       - ./storage:/data/storage
     depends_on:
@@ -57,6 +59,8 @@ services:
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       NLLB_MODEL_ID: ${NLLB_MODEL_ID:-facebook/nllb-200-distilled-600M}
       LANGUAGE_DETECT_MIN_CONFIDENCE: ${LANGUAGE_DETECT_MIN_CONFIDENCE:-0.5}
+      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
+      RETRY_BACKOFF_SECONDS: ${RETRY_BACKOFF_SECONDS:-1}
       HF_HOME: /data/huggingface
     volumes:
       - ./storage:/data/storage

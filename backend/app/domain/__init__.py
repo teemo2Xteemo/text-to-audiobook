@@ -34,6 +34,7 @@ from app.domain.ports import (
     TranslationProvider,
     TTSProvider,
 )
+from app.domain.retry import RetryPolicy, delay_for, is_retryable
 
 __all__ = [
     "AUTO_SOURCE_LANGUAGE",
@@ -55,6 +56,7 @@ __all__ = [
     "LanguageDetector",
     "NarrationProcessor",
     "OutputFormat",
+    "RetryPolicy",
     "SourceTextStorage",
     "TTSProvider",
     "TTSSettings",
@@ -64,7 +66,9 @@ __all__ = [
     "build_cache_key",
     "can_transition",
     "chunk_text",
+    "delay_for",
     "ensure_valid_languages",
     "ensure_valid_speed",
+    "is_retryable",
     "resolve_source_language",
 ]
