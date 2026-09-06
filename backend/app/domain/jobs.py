@@ -36,12 +36,38 @@ _FORWARD: dict[JobStatus, JobStatus] = {
     JobStatus.MERGING: JobStatus.COMPLETED,
 }
 
+_PIPELINE: tuple[JobStatus, ...] = (
+    JobStatus.QUEUED,
+    JobStatus.PARSING,
+    JobStatus.TRANSLATING,
+    JobStatus.PREPARING_TTS,
+    JobStatus.GENERATING_AUDIO,
+    JobStatus.MERGING,
+    JobStatus.COMPLETED,
+)
+_PIPELINE_INDEX = {status: index for index, status in enumerate(_PIPELINE)}
 _TERMINAL = frozenset({JobStatus.COMPLETED, JobStatus.FAILED})
 
 
-def can_transition(current: JobStatus, target: JobStatus) -> bool:
-    if current in _TERMINAL:
+def is_terminal(status: JobStatus) -> bool:
+    return status in _TERMINAL
+
+
+def is_at_or_past(current: JobStatus, target: JobStatus) -> bool:
+    if current is JobStatus.FAILED or target is JobStatus.FAILED:
         return False
+    current_index = _PIPELINE_INDEX.get(current)
+    target_index = _PIPELINE_INDEX.get(target)
+    if current_index is None or target_index is None:
+        return False
+    return current_index >= target_index
+
+
+def can_transition(current: JobStatus, target: JobStatus) -> bool:
+    if current is JobStatus.COMPLETED:
+        return False
+    if current is JobStatus.FAILED:
+        return target is JobStatus.QUEUED
     if target is JobStatus.FAILED:
         return True
     return _FORWARD.get(current) is target

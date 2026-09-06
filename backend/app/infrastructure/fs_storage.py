@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import uuid
 from pathlib import Path
 
 from app.domain.errors import DomainError, ErrorType
@@ -53,6 +54,27 @@ class FilesystemJobStorage:
 
     async def delete_job(self, job_id: str) -> None:
         shutil.rmtree(self._job_dir(job_id), ignore_errors=True)
+
+    async def list_job_ids(self) -> list[str]:
+        jobs_root = self._root / "jobs"
+        if not jobs_root.is_dir():
+            return []
+        jobs_root = jobs_root.resolve()
+        ids: list[str] = []
+        for entry in jobs_root.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                uuid.UUID(entry.name)
+            except ValueError:
+                continue
+            directory = entry.resolve()
+            if not directory.is_relative_to(jobs_root):
+                continue
+            if not (directory / _STATUS_FILENAME).is_file():
+                continue
+            ids.append(entry.name)
+        return sorted(ids)
 
     def _job_dir(self, job_id: str) -> Path:
         jobs_root = (self._root / "jobs").resolve()

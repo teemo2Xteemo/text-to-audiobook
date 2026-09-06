@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from collections.abc import Generator
 from dataclasses import replace
@@ -9,7 +10,8 @@ from fastapi.testclient import TestClient
 from app.application.jobs import JobService
 from app.config.settings import Settings
 from app.domain.errors import ErrorType
-from app.domain.jobs import JobStatus
+from app.domain.jobs import Job, JobStatus
+from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.main import create_app
 from tests.fakes import InMemoryJobStore, InMemoryQueue, InMemorySourceStorage
 
@@ -204,4 +206,125 @@ def test_download_unknown_job_is_404(jobs_client: TestClient) -> None:
     job_id = str(uuid.uuid4())
     response = jobs_client.get(f"/api/jobs/{job_id}/audio")
     assert response.status_code == 404
+    assert response.json()["error_type"] == ErrorType.INVALID_INPUT
+
+
+def _persist_status(tmp_path: Path, job: Job) -> None:
+    asyncio.run(FilesystemJobStorage(tmp_path).save_job(job))
+
+
+def test_retry_failed_returns_202_same_id(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    created = jobs_client.post("/api/jobs", json=VALID_BODY).json()
+    job_id = created["job_id"]
+    _, store, _, queue = memory
+    job = store.jobs[job_id]
+    failed = replace(
+        job,
+        status=JobStatus.FAILED,
+        error_type=ErrorType.TTS_FAILED,
+        message="tts failed",
+    )
+    store.jobs[job_id] = failed
+    _persist_status(tmp_path, failed)
+    queue.job_ids.clear()
+    checkpoint = tmp_path / "jobs" / job_id / "checkpoint.json"
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    seed = (
+        '[{"artifact_path":"chunks/chunk-001.translated.txt",'
+        '"chunk_id":"chunk-001","stage":"translated"}]'
+    )
+    checkpoint.write_text(seed, encoding="utf-8")
+
+    response = jobs_client.post(f"/api/jobs/{job_id}/retry")
+    assert response.status_code == 202
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["status"] == "queued"
+    retried = store.jobs[job_id]
+    assert retried.status is JobStatus.QUEUED
+    assert retried.error_type is None
+    assert retried.message is None
+    assert queue.job_ids == [job_id]
+    assert checkpoint.read_text(encoding="utf-8") == seed
+
+
+def test_retry_completed_is_409(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    created = jobs_client.post("/api/jobs", json=VALID_BODY).json()
+    job_id = created["job_id"]
+    _, store, _, queue = memory
+    completed = replace(store.jobs[job_id], status=JobStatus.COMPLETED)
+    store.jobs[job_id] = completed
+    _persist_status(tmp_path, completed)
+    queue.job_ids.clear()
+    response = jobs_client.post(f"/api/jobs/{job_id}/retry")
+    assert response.status_code == 409
+    assert response.json() == {
+        "error_type": ErrorType.INVALID_INPUT,
+        "message": "job cannot be retried",
+    }
+    assert queue.job_ids == []
+
+
+def test_retry_queued_is_409(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    created = jobs_client.post("/api/jobs", json=VALID_BODY).json()
+    _, store, _, _ = memory
+    _persist_status(tmp_path, store.jobs[created["job_id"]])
+    response = jobs_client.post(f"/api/jobs/{created['job_id']}/retry")
+    assert response.status_code == 409
+    assert response.json()["error_type"] == ErrorType.INVALID_INPUT
+
+
+def test_retry_uses_filesystem_status_not_store_cache(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    created = jobs_client.post("/api/jobs", json=VALID_BODY).json()
+    job_id = created["job_id"]
+    _, store, _, queue = memory
+    job = store.jobs[job_id]
+    store.jobs[job_id] = replace(job, status=JobStatus.COMPLETED)
+    _persist_status(
+        tmp_path,
+        replace(
+            job,
+            status=JobStatus.FAILED,
+            error_type=ErrorType.TTS_FAILED,
+            message="tts failed",
+        ),
+    )
+    queue.job_ids.clear()
+
+    response = jobs_client.post(f"/api/jobs/{job_id}/retry")
+    assert response.status_code == 202
+    assert response.json() == {"job_id": job_id, "status": "queued"}
+    assert store.jobs[job_id].status is JobStatus.QUEUED
+    assert queue.job_ids == [job_id]
+
+
+def test_retry_unknown_is_404(jobs_client: TestClient) -> None:
+    job_id = str(uuid.uuid4())
+    response = jobs_client.post(f"/api/jobs/{job_id}/retry")
+    assert response.status_code == 404
+    assert response.json() == {
+        "error_type": ErrorType.INVALID_INPUT,
+        "message": "job not found",
+    }
+
+
+def test_retry_rejects_non_uuid(jobs_client: TestClient) -> None:
+    response = jobs_client.post("/api/jobs/not-a-uuid/retry")
+    assert response.status_code == 400
     assert response.json()["error_type"] == ErrorType.INVALID_INPUT

@@ -8,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from app.application.pipeline.checkpoint import STAGE_TRANSLATED, CheckpointStore
+from app.application.pipeline.artifact_cache import CacheIdentity, PipelineArtifactCache
+from app.application.pipeline.checkpoint import (
+    STAGE_NARRATED,
+    STAGE_NORMALIZED,
+    STAGE_TRANSLATED,
+    STAGE_TTS,
+    CheckpointStore,
+)
 from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
@@ -18,6 +25,7 @@ from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.domain.languages import AUTO_SOURCE_LANGUAGE
 from app.domain.ports import NarrationProcessor
 from app.domain.retry import RetryPolicy
+from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
 from tests.fakes import (
     FakeAudioProcessor,
     FakeLanguageDetector,
@@ -29,6 +37,9 @@ from tests.fakes import (
 
 THREE_SENTENCES = "Alpha is first. Bravo is second. Charlie is third."
 FOUR_SENTENCES = "Alpha is first. Bravo is second. Charlie is third. Delta is fourth."
+FIVE_SENTENCES = (
+    "Alpha is first. Bravo is second. Charlie is third. Delta is fourth. Echo is fifth."
+)
 PIPELINE_DIR = Path(__file__).resolve().parents[2] / "app" / "application" / "pipeline"
 FORBIDDEN_IMPORT_ROOTS = frozenset(
     {
@@ -127,6 +138,7 @@ def _orchestrator(
     max_chars: int | None = None,
     retry_policy: RetryPolicy | None = None,
     sleep: _RecordingSleep | None = None,
+    artifact_cache: PipelineArtifactCache | None = None,
 ) -> tuple[
     PipelineOrchestrator,
     Path,
@@ -156,6 +168,8 @@ def _orchestrator(
         "retry_policy": retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0),
         "sleep": sleep if sleep is not None else _RecordingSleep(),
     }
+    if artifact_cache is not None:
+        kwargs["artifact_cache"] = artifact_cache
     if max_chars is not None:
         kwargs["max_chars"] = max_chars
     orchestrator = PipelineOrchestrator(**kwargs)  # type: ignore[arg-type]
@@ -169,6 +183,26 @@ def _run(
     text: str = THREE_SENTENCES,
 ) -> Job:
     return asyncio.run(orchestrator.run(job, text, workspace=workspace))
+
+
+def _seed_completed_chunks(workspace: Path, chunks: list, count: int, *, ext: str = "mp3") -> None:
+    workspace.mkdir(parents=True, exist_ok=True)
+    store = CheckpointStore(workspace)
+    for chunk in chunks[:count]:
+        translated = workspace / "chunks" / f"{chunk.id}.translated.txt"
+        translated.parent.mkdir(parents=True, exist_ok=True)
+        translated.write_text(f"seed-translated-{chunk.id}", encoding="utf-8")
+        store.record(chunk.id, STAGE_TRANSLATED, translated)
+        narrated = workspace / "chunks" / f"{chunk.id}.narrated.txt"
+        narrated.write_text(f"seed-narrated-{chunk.id}", encoding="utf-8")
+        store.record(chunk.id, STAGE_NARRATED, narrated)
+        raw = workspace / "audio" / f"{chunk.id}.{ext}"
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        raw.write_bytes(b"SEEDAUDIO")
+        store.record(chunk.id, STAGE_TTS, raw)
+        normalized = workspace / "audio" / f"{chunk.id}.normalized.{ext}"
+        normalized.write_bytes(b"SEEDAUDIO")
+        store.record(chunk.id, STAGE_NORMALIZED, normalized)
 
 
 def test_three_sentence_fixture_completes(tmp_path: Path) -> None:
@@ -550,3 +584,295 @@ def test_checkpoint_json_shape_after_success(tmp_path: Path) -> None:
         assert entry["stage"] in {STAGE_TRANSLATED, "narrated", "tts", "normalized"}
         artifact = workspace / entry["artifact_path"]
         assert artifact.is_file() and artifact.stat().st_size > 0
+
+
+def test_resume_after_chunk_2_of_5_does_not_regenerate_early_chunks(tmp_path: Path) -> None:
+    job = _job(status=JobStatus.GENERATING_AUDIO)
+    chunks = chunk_text(FIVE_SENTENCES, max_chars=20)
+    assert [chunk.id for chunk in chunks] == [
+        "chunk-001",
+        "chunk-002",
+        "chunk-003",
+        "chunk-004",
+        "chunk-005",
+    ]
+    orchestrator, workspace, translation, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=job, max_chars=20
+    )
+    _seed_completed_chunks(workspace, chunks, 2)
+
+    result = _run(orchestrator, job, workspace, text=FIVE_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+    assert (workspace / "output.mp3").is_file()
+
+    translated_texts = [call[0] for call in translation.calls]
+    assert chunks[0].text not in translated_texts
+    assert chunks[1].text not in translated_texts
+    assert chunks[2].text in translated_texts
+    assert chunks[3].text in translated_texts
+    assert chunks[4].text in translated_texts
+    assert (workspace / "chunks" / "chunk-001.translated.txt").read_text(
+        encoding="utf-8"
+    ) == "seed-translated-chunk-001"
+    assert (workspace / "audio" / "chunk-001.mp3").read_bytes() == b"SEEDAUDIO"
+
+    def _tts_mentions(chunk_text_value: str) -> int:
+        return sum(1 for call in tts.calls if chunk_text_value in call[0])
+
+    assert _tts_mentions(chunks[0].text) == 0
+    assert _tts_mentions(chunks[1].text) == 0
+    assert _tts_mentions(chunks[2].text) == 1
+    assert _tts_mentions(chunks[3].text) == 1
+    assert _tts_mentions(chunks[4].text) == 1
+
+
+def test_resume_always_remerges_existing_output(tmp_path: Path) -> None:
+    job = _job(status=JobStatus.GENERATING_AUDIO)
+    chunks = chunk_text(FIVE_SENTENCES, max_chars=20)
+    orchestrator, workspace, translation, _, tts, _, audio, _ = _orchestrator(
+        tmp_path, job=job, max_chars=20
+    )
+    _seed_completed_chunks(workspace, chunks, len(chunks))
+    stale = workspace / "output.mp3"
+    stale.write_bytes(b"STALE-MERGE")
+
+    result = _run(orchestrator, job, workspace, text=FIVE_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+    assert audio.merge_calls
+    assert stale.read_bytes() != b"STALE-MERGE"
+    assert stale.read_bytes() == b"SEEDAUDIO" * len(chunks)
+    assert translation.calls == []
+    assert tts.calls == []
+
+
+def test_resume_does_not_reverse_status(tmp_path: Path) -> None:
+    job = _job(status=JobStatus.GENERATING_AUDIO)
+    store = RecordingJobStore()
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, jobs=store, max_chars=20
+    )
+    chunks = chunk_text(FIVE_SENTENCES, max_chars=20)
+    _seed_completed_chunks(workspace, chunks, 2)
+    result = _run(orchestrator, job, workspace, text=FIVE_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+    assert JobStatus.PARSING not in store.statuses
+    assert JobStatus.QUEUED not in store.statuses
+    ordered: list[JobStatus] = []
+    for status in store.statuses:
+        if not ordered or ordered[-1] is not status:
+            ordered.append(status)
+    assert ordered[-2:] == [JobStatus.MERGING, JobStatus.COMPLETED]
+
+
+def test_run_is_noop_for_completed_and_failed(tmp_path: Path) -> None:
+    completed = _job(status=JobStatus.COMPLETED)
+    orchestrator, workspace, translation, _, tts, _, _, _ = _orchestrator(tmp_path, job=completed)
+    result = _run(orchestrator, completed, workspace)
+    assert result.status is JobStatus.COMPLETED
+    assert translation.calls == []
+    assert tts.calls == []
+
+    failed = _job(status=JobStatus.FAILED, id="22222222-2222-2222-2222-222222222222")
+    orchestrator, workspace, translation, _, tts, _, _, _ = _orchestrator(tmp_path, job=failed)
+    result = _run(orchestrator, failed, workspace)
+    assert result.status is JobStatus.FAILED
+    assert translation.calls == []
+    assert tts.calls == []
+
+
+def _pipeline_cache(tmp_path: Path, store: object | None = None) -> PipelineArtifactCache:
+    backend = store if store is not None else FilesystemArtifactCache(tmp_path / "cache")
+    return PipelineArtifactCache(
+        backend,  # type: ignore[arg-type]
+        CacheIdentity(
+            translation_provider="fake",
+            translation_model="fake",
+            tts_provider="fake",
+            tts_model="fake",
+        ),
+    )
+
+
+class _RecordingCache:
+    def __init__(self, inner: FilesystemArtifactCache) -> None:
+        self.inner = inner
+        self.gets: list[tuple[str, str]] = []
+        self.puts: list[tuple[str, str]] = []
+
+    def get(self, operation: str, key: str, destination: Path) -> bool:
+        self.gets.append((destination.name.split(".", 1)[0], operation))
+        return self.inner.get(operation, key, destination)
+
+    def put(self, operation: str, key: str, source: Path) -> None:
+        self.puts.append((operation, key))
+        self.inner.put(operation, key, source)
+
+
+class _FailingPutCache:
+    def __init__(self) -> None:
+        self.puts = 0
+
+    def get(self, operation: str, key: str, destination: Path) -> bool:
+        return False
+
+    def put(self, operation: str, key: str, source: Path) -> None:
+        self.puts += 1
+        raise OSError("disk full")
+
+
+def test_second_job_hits_translation_and_tts_cache(tmp_path: Path) -> None:
+    cache = _pipeline_cache(tmp_path)
+    first = _job()
+    first_orch, first_ws, translation, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=first, artifact_cache=cache
+    )
+    assert _run(first_orch, first, first_ws).status is JobStatus.COMPLETED
+    first_translation_calls = len(translation.calls)
+    first_tts_calls = len(tts.calls)
+    assert first_translation_calls > 0
+    assert first_tts_calls > 0
+
+    second = _job(id="22222222-2222-2222-2222-222222222222")
+    second_orch, second_ws, translation, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=second, translation=translation, tts=tts, artifact_cache=cache
+    )
+    result = _run(second_orch, second, second_ws)
+    assert result.status is JobStatus.COMPLETED
+    assert len(translation.calls) == first_translation_calls
+    assert len(tts.calls) == first_tts_calls
+    assert (second_ws / "output.mp3").is_file()
+    payload = json.loads((second_ws / "checkpoint.json").read_text(encoding="utf-8"))
+    stages = {(item["chunk_id"], item["stage"]) for item in payload}
+    assert ("chunk-001", STAGE_TRANSLATED) in stages
+    assert ("chunk-001", STAGE_TTS) in stages
+
+
+def test_target_language_change_misses_cache(tmp_path: Path) -> None:
+    cache = _pipeline_cache(tmp_path)
+    first = _job(target_language="ko-KR")
+    first_orch, first_ws, translation, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=first, artifact_cache=cache, voices=_voices_for("ko-KR")
+    )
+    _run(first_orch, first, first_ws)
+    after_first_t = len(translation.calls)
+
+    second = _job(id="22222222-2222-2222-2222-222222222222", target_language="en-US")
+    second_orch, second_ws, translation, _, tts_second, _, _, _ = _orchestrator(
+        tmp_path,
+        job=second,
+        translation=translation,
+        artifact_cache=cache,
+        voices=_voices_for("en-US"),
+        languages=["en-US", "ko-KR"],
+    )
+    _run(second_orch, second, second_ws)
+    assert len(translation.calls) > after_first_t
+    assert tts_second.calls
+
+
+def test_speed_change_misses_tts_but_hits_translation(tmp_path: Path) -> None:
+    cache = _pipeline_cache(tmp_path)
+    first = _job(speed=1.0)
+    first_orch, first_ws, translation, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=first, artifact_cache=cache
+    )
+    _run(first_orch, first, first_ws)
+    after_first_t = len(translation.calls)
+    after_first_tts = len(tts.calls)
+
+    second = _job(id="22222222-2222-2222-2222-222222222222", speed=1.25)
+    second_orch, _, translation, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=second, translation=translation, tts=tts, artifact_cache=cache
+    )
+    _run(second_orch, second, tmp_path / "jobs" / second.id)
+    assert len(translation.calls) == after_first_t
+    assert len(tts.calls) > after_first_tts
+
+
+def test_voice_change_misses_tts_cache(tmp_path: Path) -> None:
+    cache = _pipeline_cache(tmp_path)
+    voices = [
+        Voice(id="voice-a", language="ko-KR", label="A"),
+        Voice(id="voice-b", language="ko-KR", label="B"),
+    ]
+    first = _job(voice="voice-a")
+    first_orch, first_ws, _, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=first, artifact_cache=cache, voices=voices
+    )
+    _run(first_orch, first, first_ws)
+    after_first = len(tts.calls)
+
+    second = _job(id="22222222-2222-2222-2222-222222222222", voice="voice-b")
+    second_orch, _, _, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=second, tts=tts, artifact_cache=cache, voices=voices
+    )
+    _run(second_orch, second, tmp_path / "jobs" / second.id)
+    assert len(tts.calls) > after_first
+
+
+def test_checkpoint_skip_does_not_lookup_cache(tmp_path: Path) -> None:
+    recorder = _RecordingCache(FilesystemArtifactCache(tmp_path / "cache"))
+    cache = _pipeline_cache(tmp_path, store=recorder)
+    job = _job(status=JobStatus.GENERATING_AUDIO)
+    chunks = chunk_text(FIVE_SENTENCES, max_chars=20)
+    orchestrator, workspace, translation, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=job, max_chars=20, artifact_cache=cache
+    )
+    seeded = chunks[:2]
+    remaining = chunks[2:]
+    assert remaining
+    _seed_completed_chunks(workspace, chunks, len(seeded))
+    _run(orchestrator, job, workspace, text=FIVE_SENTENCES)
+    translation_texts = [call[0] for call in translation.calls]
+    tts_texts = [call[0] for call in tts.calls]
+    for chunk in seeded:
+        assert chunk.text not in translation_texts
+        assert f"seed-narrated-{chunk.id}" not in tts_texts
+    assert set(recorder.gets) == {
+        (chunk.id, operation) for chunk in remaining for operation in ("translation", "tts")
+    }
+
+
+def test_cache_put_failure_does_not_fail_job(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = _FailingPutCache()
+    cache = _pipeline_cache(tmp_path, store=store)
+    job = _job()
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, artifact_cache=cache
+    )
+    with caplog.at_level(logging.WARNING, logger="app.application.pipeline.artifact_cache"):
+        result = _run(orchestrator, job, workspace)
+    assert result.status is JobStatus.COMPLETED
+    assert store.puts > 0
+    assert (workspace / "chunks" / "chunk-001.translated.txt").stat().st_size > 0
+    assert (workspace / "audio" / "chunk-001.mp3").stat().st_size > 0
+    assert (workspace / "output.mp3").is_file()
+    failed_puts = [record for record in caplog.records if record.getMessage() == "cache_put_failed"]
+    assert failed_puts
+    assert {record.operation for record in failed_puts} >= {"translation", "tts"}
+    assert all(record.job_id == job.id for record in failed_puts)
+
+
+def test_empty_cache_blob_is_a_miss(tmp_path: Path) -> None:
+    cache = _pipeline_cache(tmp_path)
+    first = _job()
+    first_orch, first_ws, translation, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=first, artifact_cache=cache
+    )
+    _run(first_orch, first, first_ws)
+    blobs = list((tmp_path / "cache" / "translation").iterdir())
+    assert blobs
+    blobs[0].write_bytes(b"")
+    after_first = len(translation.calls)
+
+    second = _job(id="22222222-2222-2222-2222-222222222222")
+    second_orch, _, translation, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=second,
+        translation=translation,
+        artifact_cache=cache,
+    )
+    _run(second_orch, second, tmp_path / "jobs" / second.id)
+    assert len(translation.calls) > after_first

@@ -36,6 +36,8 @@ class JobStore(Protocol):
 
     async def delete(self, job_id: str) -> None: ...
 
+    async def list_ids(self) -> Sequence[str]: ...
+
 
 class JobQueue(Protocol):
     async def enqueue(self, job_id: str) -> None: ...
@@ -67,3 +69,11 @@ class AudioProcessor(Protocol):
         output_format: OutputFormat,
         bitrate_kbps: int,
     ) -> AudioArtifact: ...
+
+
+class ArtifactCache(Protocol):
+    """Content-addressed translation/TTS blobs. Not a job-status GET cache."""
+
+    def get(self, operation: str, key: str, destination: Path) -> bool: ...
+
+    def put(self, operation: str, key: str, source: Path) -> None: ...

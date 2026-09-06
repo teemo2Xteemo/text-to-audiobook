@@ -3,9 +3,11 @@ from pathlib import Path
 
 import pytest
 
+from app.application.pipeline.artifact_cache import PipelineArtifactCache
 from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.config.factory import (
     UnknownProviderError,
+    build_artifact_cache,
     build_audio_processor,
     build_language_detector,
     build_narration_processor,
@@ -15,6 +17,7 @@ from app.config.factory import (
 )
 from app.config.settings import Settings
 from app.domain.retry import RetryPolicy
+from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.providers.language_detection.cpu import CpuLanguageDetector
@@ -65,6 +68,15 @@ def test_factory_builds_conservative_narration() -> None:
     assert isinstance(build_narration_processor(), ConservativeNarrationProcessor)
 
 
+def test_artifact_cache_root_is_storage_cache_without_cache_path_setting(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    cache = build_artifact_cache(settings)
+    assert isinstance(cache, PipelineArtifactCache)
+    assert isinstance(cache._store, FilesystemArtifactCache)
+    assert cache._store._root == tmp_path / "cache"
+    assert "cache_path" not in Settings.model_fields
+
+
 def test_build_orchestrator_injects_conservative_narration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -94,6 +106,7 @@ def test_build_orchestrator_injects_conservative_narration(
     settings = Settings(_env_file=None, storage_path=tmp_path)
     build_orchestrator(settings)
     assert isinstance(seen["narration"], ConservativeNarrationProcessor)
+    assert isinstance(seen["artifact_cache"], PipelineArtifactCache)
     assert isinstance(seen["detector"], CpuLanguageDetector)
     assert seen["retry_policy"] == RetryPolicy(max_attempts=3, backoff_seconds=1.0)
 

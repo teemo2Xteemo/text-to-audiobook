@@ -25,6 +25,7 @@ describe("JobForm", () => {
     expect(targetValues).not.toContain("auto");
     expect(targetValues).toEqual(["en-US", "ja-JP"]);
     expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
   });
 
   it("filters voices by target and drops the previous language when target changes", async () => {

@@ -1,5 +1,7 @@
+import pytest
+
 from app.domain.audio import TTSSettings
-from app.domain.cache import build_cache_key
+from app.domain.cache import CACHE_OPERATIONS, build_cache_key
 
 
 def _key(**overrides: object) -> str:
@@ -52,7 +54,21 @@ def test_speed_change_is_cache_miss() -> None:
     assert _key(settings=TTSSettings(speed=1.0)) != _key(settings=TTSSettings(speed=1.25))
 
 
+def test_provider_change_is_cache_miss() -> None:
+    assert _key(provider="fake") != _key(provider="nllb")
+
+
+def test_model_change_is_cache_miss() -> None:
+    assert _key(model="fake-1") != _key(model="other-model")
+
+
 def test_operation_separates_translation_and_tts() -> None:
     translation = _key(operation="translation", voice="")
     tts = _key(operation="tts", voice="voice-a")
     assert translation != tts
+
+
+def test_operations_are_translation_and_tts_only() -> None:
+    assert CACHE_OPERATIONS == frozenset({"translation", "tts"})
+    with pytest.raises(ValueError, match="unsupported cache operation"):
+        _key(operation="narration")

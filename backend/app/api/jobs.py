@@ -11,7 +11,7 @@ from app.api.parse import parse_create_job
 from app.api.schemas import JobCreatedResponse, JobStatusResponse
 from app.application.jobs import JobService
 from app.config.settings import Settings
-from app.domain.errors import ErrorType
+from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import JobStatus, OutputFormat
 
 router = APIRouter()
@@ -76,6 +76,29 @@ async def download_job_audio(
         media_type=_MEDIA_TYPES[job.output_format],
         filename=f"{job.id}.{job.output_format.value}",
     )
+
+
+@router.post("/api/jobs/{job_id}/retry", status_code=202, response_model=JobCreatedResponse)
+async def retry_job(
+    job_id: str,
+    service: JobService = Depends(get_job_service),
+) -> JobCreatedResponse:
+    _require_uuid(job_id)
+    try:
+        retried = await service.retry(job_id)
+    except DomainError as exc:
+        if exc.error_type is ErrorType.INVALID_INPUT and exc.message == "job not found":
+            raise HTTPException(
+                status_code=404,
+                detail=envelope(ErrorType.INVALID_INPUT, "job not found"),
+            ) from exc
+        if exc.error_type is ErrorType.INVALID_INPUT and exc.message == "job cannot be retried":
+            raise HTTPException(
+                status_code=409,
+                detail=envelope(ErrorType.INVALID_INPUT, "job cannot be retried"),
+            ) from exc
+        raise
+    return JobCreatedResponse(job_id=retried.id, status=retried.status)
 
 
 def _require_uuid(job_id: str) -> None:
