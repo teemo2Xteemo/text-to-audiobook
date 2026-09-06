@@ -1,5 +1,5 @@
-# Worker image: FFmpeg + CPU torch. Edge TTS lands in M9.
-# Do not add CUDA or secrets. Do not COPY model weights into the image.
+# Worker image: FFmpeg + CPU torch + Edge TTS. Do not add CUDA or secrets.
+# Do not COPY model weights into the image.
 
 FROM python:3.12-slim AS builder
 
@@ -14,7 +14,7 @@ COPY pyproject.toml ./
 COPY app ./app
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir ".[nllb]"
+    && pip install --no-cache-dir ".[nllb,edge]"
 
 FROM python:3.12-slim AS runtime
 

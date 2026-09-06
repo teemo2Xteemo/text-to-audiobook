@@ -256,18 +256,19 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 **Adds/changes:**
 
-- `EdgeTTSProvider`: `voices_for(language)`, `synthesize` with `TTSSettings` (speed; pitch/volume if SDK allows). Voice IDs stay in adapter/config.
+- `EdgeTTSProvider`: `voices_for(language)`, `synthesize` with `TTSSettings` (**speed only**). Do not add pitch/volume to `TTSSettings` or `POST /api/jobs` in MVP (public API lock, §4 Bitrate / speed; cache identity, ADR 0006). Voice IDs stay in adapter/config.
 - Normalize Edge output with FFmpeg **before** merge: implement real FFmpeg normalize argv (codec/rate/channels); reuse the M4 concat helper. The M4 normalize **stage** stays; only the argv/encoder is filled in here. Composition root switches from `FakeAudioProcessor` (M5 fake TTS) to the real FFmpeg `AudioProcessor` when TTS is non-fake.
 - `TTS_PROVIDER=edge`; capabilities list real voices for `target_language`.
+- Slim API may `pip install ".[edge]"` so `GET /api/capabilities` can list voices: `edge-tts` is a lightweight network SDK (no model weights, no FFmpeg), which is not a precedent for installing compute-heavy provider SDKs (NLLB/torch, local TTS models) on the API image.
 - Unit tests with mocked Edge client; voice/language mismatch → typed error. Optional live integration marker.
 
-**Explicitly excludes:** Piper/XTTS/ElevenLabs, cloning, a global `vi-VN-*` in domain. Per-language default = first listed voice or env map.
+**Explicitly excludes:** Piper/XTTS/ElevenLabs, cloning, a global `vi-VN-*` in domain, pitch/volume on `TTSSettings` or the job API. Per-language default = first listed voice or env map.
 
-**Acceptance check:** `target_language=vi-VN` → playable MP3 (AC example). Another target → different voice list. Domain/application still do not import `edge_tts`.
+**Acceptance check:** `target_language=vi-VN` → playable MP3 (AC example). Another target → different voice list. Domain, application, and API routes still do not import `edge_tts` (lazy import only in `providers/tts/` + composition root).
 
 **Maps to:** AC-03, AC-04, AC-05, AC-11, §9–12, ADR 0008.
 
-**Env:** `TTS_PROVIDER`; optional `TTS_DEFAULT_VOICE_BY_LANGUAGE`. If unset, first `voices_for(target_language)`.
+**Env:** `TTS_PROVIDER`; optional `TTS_DEFAULT_VOICE_BY_LANGUAGE` (`bcp47=voiceId` comma pairs). If unset, first `voices_for(target_language)`. Normalize: 44100 Hz mono; MP3 `libmp3lame` at `OUTPUT_BITRATE_KBPS`; WAV `pcm_s16le`.
 
 ---
 
@@ -368,7 +369,7 @@ May be implemented against fakes after M4, but shipping it after M9 is the usefu
 | AC-08 | Resume | M4 checkpoints + M11 | No |
 | AC-09 | No GPU | M1, M5, M8, M13 | No |
 | AC-10 | `docker compose up` | M1, M5, M6, M13 | No |
-| AC-11 | Replace Edge TTS without rewriting business logic | M2, M5, FakeTTS + EdgeTTS | No Piper required to prove this |
+| AC-11 | Replace Edge TTS without rewriting business logic | M2, M5, M9 (FakeTTS + EdgeTTS) | No Piper required to prove this |
 | AC-12 | Narration rhythm, not raw translation | M7 | No — tested transforms, not YouTube match |
 
 Not in AC scope: §32 quality dashboard, §33 YouTube analysis, Phase 2–4 features.
@@ -439,7 +440,8 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 ### Images (M1, M5) — decided
 
 - **Decided (M5):** Two images as in `docs/ai/target-structure.md`: slim API `backend/Dockerfile` (no PyTorch, no FFmpeg); worker `backend/Dockerfile.worker` (FFmpeg now; torch + Edge TTS in M8/M9). Local/integration resolve ffmpeg **host PATH first**, else `backend/bin/ffmpeg`.
-- **Decided (M8):** Worker image **installs** CPU torch (PyTorch CPU index, never CUDA wheels) plus `pip install ".[nllb]"`. Slim API stays `pip install .` — no torch, no transformers.
+- **Decided (M8):** Worker image **installs** CPU torch (PyTorch CPU index, never CUDA wheels) plus `pip install ".[nllb]"`. Slim API stays without torch/transformers.
+- **Decided (M9):** Worker installs `".[nllb,edge]"`; API may `pip install ".[edge]"` because Edge is a lightweight network SDK for voice listing, not a compute-heavy runtime — still no FFmpeg/PyTorch on the API. Do not extend this to NLLB/transformers or other heavy provider SDKs.
 
 ### Compose default providers (M5, M13) — decided
 

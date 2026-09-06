@@ -9,7 +9,7 @@ from app.application.capabilities import CapabilitiesService
 from app.application.jobs import JobService
 from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
-from app.config.settings import Settings
+from app.config.settings import Settings, parse_tts_default_voice_by_language
 from app.domain.ports import (
     AudioProcessor,
     LanguageDetector,
@@ -18,6 +18,7 @@ from app.domain.ports import (
     TTSProvider,
 )
 from app.infrastructure.fake_audio import FakeAudioProcessor
+from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.job_store import DualWriteJobStore
 from app.infrastructure.redis_job_store import RedisJobCache
@@ -91,6 +92,15 @@ def build_tts_provider(settings: Settings) -> TTSProvider:
     name = settings.tts_provider.strip().lower()
     if name == "fake":
         return FakeTTSProvider(output_dir=_tts_tmp_dir(settings.storage_path))
+    if name == "edge":
+        from app.providers.tts.edge import EdgeTTSProvider
+
+        return EdgeTTSProvider(
+            output_dir=_tts_tmp_dir(settings.storage_path),
+            default_voice_by_language=parse_tts_default_voice_by_language(
+                settings.tts_default_voice_by_language
+            ),
+        )
     raise UnknownProviderError(f"unknown TTS_PROVIDER: {settings.tts_provider}")
 
 
@@ -99,12 +109,10 @@ def build_narration_processor() -> NarrationProcessor:
 
 
 def build_audio_processor(settings: Settings) -> AudioProcessor:
-    # Fake TTS emits non-media bytes; real FFmpeg lands in M9 with Edge.
+    # Fake TTS emits non-media bytes; Edge (and later real TTS) needs FFmpeg normalize/merge.
     if settings.tts_provider.strip().lower() == "fake":
         return FakeAudioProcessor()
-    raise UnknownProviderError(
-        f"no AudioProcessor registered for TTS_PROVIDER={settings.tts_provider}"
-    )
+    return FFmpegAudioProcessor()
 
 
 def _infrastructure(

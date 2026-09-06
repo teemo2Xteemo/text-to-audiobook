@@ -15,9 +15,11 @@ from app.config.factory import (
 )
 from app.config.settings import Settings
 from app.infrastructure.fake_audio import FakeAudioProcessor
+from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.providers.language_detection.cpu import CpuLanguageDetector
 from app.providers.translation.fake import FakeTranslationProvider
 from app.providers.translation.nllb import NllbTranslationProvider
+from app.providers.tts.edge import EdgeTTSProvider
 from app.providers.tts.fake import FakeTTSProvider
 
 
@@ -40,9 +42,22 @@ def test_factory_rejects_unknown_translation_provider(tmp_path: Path) -> None:
 
 
 def test_factory_rejects_unknown_tts_provider(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, storage_path=tmp_path, tts_provider="edge")
+    settings = Settings(_env_file=None, storage_path=tmp_path, tts_provider="piper")
     with pytest.raises(UnknownProviderError, match="TTS_PROVIDER"):
         build_tts_provider(settings)
+
+
+def test_factory_builds_edge_provider_without_calling_sdk(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        tts_provider="edge",
+        tts_default_voice_by_language="ja-JP=ja-JP-AdapterANeural",
+    )
+    provider = build_tts_provider(settings)
+    assert isinstance(provider, EdgeTTSProvider)
+    assert provider._defaults == {"ja-JP": "ja-JP-AdapterANeural"}
+    assert isinstance(build_audio_processor(settings), FFmpegAudioProcessor)
 
 
 def test_factory_builds_conservative_narration() -> None:
