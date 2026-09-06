@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     nllb_model_id: str = Field(default="facebook/nllb-200-distilled-600M", min_length=1)
     language_detect_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     tts_default_voice_by_language: str = Field(default="")
+    retry_max_attempts: int = Field(default=3, ge=1)
+    retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
 
 
 @lru_cache

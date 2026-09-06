@@ -14,6 +14,7 @@ from app.config.factory import (
     build_tts_provider,
 )
 from app.config.settings import Settings
+from app.domain.retry import RetryPolicy
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.providers.language_detection.cpu import CpuLanguageDetector
@@ -94,6 +95,42 @@ def test_build_orchestrator_injects_conservative_narration(
     build_orchestrator(settings)
     assert isinstance(seen["narration"], ConservativeNarrationProcessor)
     assert isinstance(seen["detector"], CpuLanguageDetector)
+    assert seen["retry_policy"] == RetryPolicy(max_attempts=3, backoff_seconds=1.0)
+
+
+def test_build_orchestrator_injects_retry_policy_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Capture:
+        def __init__(self, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr("app.config.factory.PipelineOrchestrator", Capture)
+    monkeypatch.setattr(
+        "app.config.factory._infrastructure",
+        lambda settings: (object(), object(), object()),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_translation_provider",
+        lambda settings: FakeTranslationProvider(),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_tts_provider",
+        lambda settings: FakeTTSProvider(output_dir=tmp_path),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_audio_processor",
+        lambda settings: FakeAudioProcessor(),
+    )
+    monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "5")
+    monkeypatch.setenv("RETRY_BACKOFF_SECONDS", "2.0")
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    assert settings.retry_max_attempts == 5
+    assert settings.retry_backoff_seconds == 2.0
+    build_orchestrator(settings)
+    assert seen["retry_policy"] == RetryPolicy(max_attempts=5, backoff_seconds=2.0)
 
 
 def test_factory_builds_nllb_provider_without_loading_weights(tmp_path: Path) -> None:

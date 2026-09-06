@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from app.application.pipeline.merge import merge_artifacts
 from app.application.pipeline.narrate import narrate_chunk
 from app.application.pipeline.normalize import normalize_chunk
 from app.application.pipeline.parse import parse_source
+from app.application.pipeline.retry import with_chunk_retry
 from app.application.pipeline.translate import translate_chunk
 from app.application.pipeline.tts import synthesize_chunk
 from app.domain.audio import TTSSettings
@@ -31,6 +34,7 @@ from app.domain.ports import (
     TranslationProvider,
     TTSProvider,
 )
+from app.domain.retry import RetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,8 @@ class PipelineOrchestrator:
         audio: AudioProcessor,
         jobs: JobStore,
         max_chars: int = CHUNK_MAX_CHARS,
+        retry_policy: RetryPolicy | None = None,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._translation = translation
         self._tts = tts
@@ -54,6 +60,11 @@ class PipelineOrchestrator:
         self._audio = audio
         self._jobs = jobs
         self._max_chars = max_chars
+        # TODO: require retry_policy (no constructor fallback). These literals
+        # duplicate Settings / factory defaults; Settings should be the only source.
+        self._retry_policy = retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0)
+        self._sleep = sleep or asyncio.sleep
+        self._active_chunk_id: str | None = None
 
     async def run(self, job: Job, text: str, *, workspace: Path) -> Job:
         workspace.mkdir(parents=True, exist_ok=True)
@@ -97,13 +108,25 @@ class PipelineOrchestrator:
     ) -> Job:
         job = await self._reset_chunk_progress(job)
         for chunk in chunks:
+            self._active_chunk_id = chunk.id
             path = workspace / "chunks" / f"{chunk.id}.translated.txt"
             if not checkpoints.is_complete(chunk.id, STAGE_TRANSLATED):
-                translated = await translate_chunk(
-                    chunk.text,
-                    source_language=job.source_language,
-                    target_language=job.target_language,
-                    provider=self._translation,
+
+                async def _translate(text: str = chunk.text) -> str:
+                    return await translate_chunk(
+                        text,
+                        source_language=job.source_language,
+                        target_language=job.target_language,
+                        provider=self._translation,
+                    )
+
+                translated = await with_chunk_retry(
+                    _translate,
+                    policy=self._retry_policy,
+                    sleep=self._sleep,
+                    job_id=job.id,
+                    chunk_id=chunk.id,
+                    stage=STAGE_TRANSLATED,
                 )
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(translated, encoding="utf-8")
@@ -120,6 +143,7 @@ class PipelineOrchestrator:
     ) -> Job:
         job = await self._reset_chunk_progress(job)
         for chunk in chunks:
+            self._active_chunk_id = chunk.id
             source = workspace / "chunks" / f"{chunk.id}.translated.txt"
             path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
             if not checkpoints.is_complete(chunk.id, STAGE_NARRATED):
@@ -145,20 +169,35 @@ class PipelineOrchestrator:
         ext = job.output_format.value
         settings = TTSSettings(speed=job.speed)
         for chunk in chunks:
+            self._active_chunk_id = chunk.id
             narrated_path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
             narrated = narrated_path.read_text(encoding="utf-8")
             raw_path = workspace / "audio" / f"{chunk.id}.{ext}"
             if not checkpoints.is_complete(chunk.id, STAGE_TTS):
-                artifact = await synthesize_chunk(
-                    narrated,
-                    language=job.target_language,
-                    voice=job.voice,
-                    settings=settings,
-                    provider=self._tts,
+
+                async def _synthesize(
+                    narrated_text: str = narrated,
+                    destination: Path = raw_path,
+                ) -> None:
+                    artifact = await synthesize_chunk(
+                        narrated_text,
+                        language=job.target_language,
+                        voice=job.voice,
+                        settings=settings,
+                        provider=self._tts,
+                    )
+                    _place_artifact(artifact.path, destination)
+                    if not _nonempty(destination):
+                        raise DomainError(ErrorType.TTS_FAILED, "tts failed")
+
+                await with_chunk_retry(
+                    _synthesize,
+                    policy=self._retry_policy,
+                    sleep=self._sleep,
+                    job_id=job.id,
+                    chunk_id=chunk.id,
+                    stage=STAGE_TTS,
                 )
-                _place_artifact(artifact.path, raw_path)
-                if not _nonempty(raw_path):
-                    raise DomainError(ErrorType.TTS_FAILED, "tts failed")
                 checkpoints.record(chunk.id, STAGE_TTS, raw_path)
 
             normalized_path = workspace / "audio" / f"{chunk.id}.normalized.{ext}"
@@ -226,6 +265,7 @@ class PipelineOrchestrator:
             extra={
                 "error_type": error_type.value,
                 "job_id": job.id,
+                "chunk_id": self._active_chunk_id,
                 "stage": stage,
             },
         )
