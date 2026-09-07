@@ -75,6 +75,7 @@ async def download_job_audio(
         path,
         media_type=_MEDIA_TYPES[job.output_format],
         filename=f"{job.id}.{job.output_format.value}",
+        content_disposition_type="inline",
     )
 
 
