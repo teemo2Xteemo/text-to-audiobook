@@ -1,3 +1,6 @@
+# CPU-only MVP (ADR 0009). Do not add `runtime: nvidia` or GPU reservations.
+# Default providers are fake/fake so compose boots offline. For the AC demo,
+# set TRANSLATION_PROVIDER=nllb and TTS_PROVIDER=edge in `.env` and rebuild.
 services:
   redis:
     image: redis:7-alpine
@@ -69,7 +72,20 @@ services:
       redis:
         condition: service_healthy
     # Recover non-terminal jobs from status.json, then consume the RQ queue.
+    # Image ENTRYPOINT chowns STORAGE_PATH then drops to uid 1000 (app).
     command: ["python", "-m", "app.workers"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, redis; redis.Redis.from_url(os.environ['REDIS_URL']).ping()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   frontend:
     build:

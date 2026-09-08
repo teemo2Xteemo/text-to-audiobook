@@ -321,7 +321,7 @@ Checkpoint FS I/O (`checkpoint.json` read/write, path confinement, atomic replac
 
 **HTTP retry (shipped, not optional):** `POST /api/jobs/{job_id}/retry` — `FAILED` only; same `job_id`; keep `source.txt` + `checkpoint.json` + chunk artifacts; clear `error_type` / `message`; languages/voice/speed unchanged. Success: **202** `{ job_id, status: queued }`. Missing: **404** `INVALID_INPUT` `"job not found"`. `COMPLETED` or in-progress: **409** `INVALID_INPUT` `"job cannot be retried"`.
 
-**SPA:** M11 does **not** add a Retry (or Cancel) control. Retry is API-only (`curl` / operator). A UI Retry button, if ever, is M13/Phase 2 — it is **not** Cancel and must not invent `CANCELLED`.
+**SPA:** M11 does **not** add a Retry (or Cancel) control. Retry is API-only (`curl` / operator) **through MVP**. A UI Retry button, if ever, is **post-MVP / Phase 2** — it is **not** Cancel and must not invent `CANCELLED`.
 
 **Tests:** stop after chunk 2 of 5; re-invoke; fakes show 1–2 not regenerated. `process_job` no-op on `COMPLETED`/`FAILED`. Recover enqueues non-terminal ids only.
 
@@ -365,17 +365,19 @@ May be implemented against fakes after M4, but shipping it after M9 is the usefu
 ### M13 — Compose completeness and MVP acceptance
 
 **Depends on:** M6, M9, M11 (M12 strongly recommended before calling MVP done)  
-**Touches layers:** devops, frontend, api
+**Touches layers:** devops, infrastructure (entrypoint), tests (frontend tests only: assert no Retry; no product UI or new API routes)  
+**Status:** Implemented. Do not re-scaffold Compose, Dockerfiles, or demo fixtures. SPA Retry stays operator-only (`curl`); Cursor stop hooks stay disabled. Fixture paths: `backend/tests/fixtures/sample-zh-CN.txt` and `sample-en-US.txt` — user still selects languages in the UI.
 
 **Adds/changes:**
 
-- Documented `docker compose up`: frontend + api + worker + redis; FFmpeg in worker; **no GPU**.
-- Complete `.env.example`; healthchecks; non-root where practical.
-- Fixture `.txt` (Chinese example path) under tests/docs — user still selects `zh-CN` / `vi-VN`.
-- Confirm a **second** language pair via UI.
-- Optional: enable fast ruff/pytest Cursor hooks per `docs/ai/hooks.md`.
+- Documented `docker compose up`: frontend + api + worker + redis; FFmpeg in worker; **no GPU**. Default `TRANSLATION_PROVIDER=fake` / `TTS_PROVIDER=fake`; nllb/edge via `.env` then `docker compose up --build`.
+- Complete `.env.example`.
+- Healthchecks: API `GET /health`; worker Python Redis `ping` via `REDIS_URL` (no worker HTTP `/health`); frontend `/health`; redis `redis-cli ping`. See `docker-compose.yml`.
+- Non-root: API and worker `ENTRYPOINT` is `python -m app.infrastructure.storage_entrypoint` — `lchown` `STORAGE_PATH` (no symlink follow), drop to uid 1000 (`app`), then exec CMD (`storage_entrypoint.py`).
+- Fixtures: `backend/tests/fixtures/sample-zh-CN.txt` — operator selects `zh-CN` / `vi-VN` in the UI. Second pair: `backend/tests/fixtures/sample-en-US.txt`; operator selects `en-US` → `vi-VN` from capabilities. Not domain/UI constants.
+- Cursor stop hooks stay disabled. Later enablement is `docs/ai/hooks.md`, not this milestone.
 
-**Explicitly excludes:** k8s, CDN, TLS, CI matrix, committing model weights.
+**Explicitly excludes:** k8s, CDN, TLS, CI matrix, committing model weights, SPA Retry/Cancel, `CANCELLED`, enabling stop hooks.
 
 **Acceptance check:** §3 table; `docker compose up` from a clean clone with env file.
 
@@ -462,7 +464,7 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 ### Resume (M11) — decided
 
 - **Decided (M11) — two mechanisms, do not merge:** (1) **Boot / queue recover** reads filesystem `status.json` via `JobStore.list_ids()` (UUID directories that contain `status.json`; Redis is not the recover source) and enqueues **non-terminal** jobs (`queued` … `merging`), then starts RQ. Command: `python -m app.workers`. Do **not** enqueue `failed` or `completed` on boot. Workers do **not** parse `checkpoint.json`. (2) **Orchestrator / artifact skip** loads `checkpoint.json` (M4) when running a non-terminal job and skips a chunk-stage iff the matching record exists **and** the artifact is non-empty. Merge always re-runs. `process_job` no-ops `COMPLETED` and `FAILED`.
-- **Decided (M11) — HTTP retry shipped:** `POST /api/jobs/{job_id}/retry` for **`FAILED` only**; same id; reuse `source.txt` + checkpoints + chunk artifacts; clear `error_type` / `message`; 202 `{ job_id, status: queued }`; 404 unknown; 409 if status is not `FAILED`. No SPA Retry (or Cancel) control in M11.
+- **Decided (M11) — HTTP retry shipped:** `POST /api/jobs/{job_id}/retry` for **`FAILED` only**; same id; reuse `source.txt` + checkpoints + chunk artifacts; clear `error_type` / `message`; 202 `{ job_id, status: queued }`; 404 unknown; 409 if status is not `FAILED`. No SPA Retry (or Cancel) control in M11 **or M13**. A UI Retry, if ever, is post-MVP / Phase 2.
 - **Decided (M11) — FSM:** `FAILED` remains terminal for the natural pipeline and for boot recover. The **only** outbound hop is `FAILED → QUEUED`, and **only** through that retry endpoint / `JobService.retry`. The orchestrator never issues that hop. Skip/reverse along the forward pipeline stay illegal. `_advance(target)` is a no-op when status is already at or past `target`; that is not a reverse edge. Do not add `RESUMING`.
 - **Decided (M11) — layers:** Checkpoint JSON I/O in `infrastructure/checkpoint_fs.py`; skip policy in `application/pipeline/checkpoint.py`. `JobStore.list_ids()` is the domain port for recover listing (FS implementation).
 
@@ -487,7 +489,7 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 
 ### Compose default providers (M5, M13) — decided
 
-- **Decided (M5):** Default `TRANSLATION_PROVIDER=fake`, `TTS_PROVIDER=fake` so `compose up` works offline. M8/M9 override via env/profile (`nllb` / `edge`). `.env.example` documents the override.
+- **Decided (M5):** Default `TRANSLATION_PROVIDER=fake`, `TTS_PROVIDER=fake` so `compose up` works offline. M8/M9/M13 override via env (`nllb` / `edge`) then `docker compose up --build` (frontend `VITE_*` are image build args; CPU only). `.env.example` documents the override.
 
 ### UI defaults (M6) — decided
 
