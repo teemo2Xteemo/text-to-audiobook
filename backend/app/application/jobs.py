@@ -89,6 +89,37 @@ class JobService:
     async def get(self, job_id: str) -> Job | None:
         return await self._jobs.get(job_id)
 
+    async def mark_failed(self, job_id: str, error_type: ErrorType, message: str) -> Job | None:
+        """Mark a non-terminal job FAILED from filesystem ``status.json``.
+
+        RQ timeout-kill never reaches ``PipelineOrchestrator._fail``. Without this
+        hop, GET polling stays on a non-terminal status (or boot recover silently
+        re-enqueues). No-op when the job is missing or already terminal.
+        """
+        job = await self._filesystem().get_job(job_id)
+        if job is None:
+            logger.warning("job_fail_missing", extra={"job_id": job_id, "chunk_id": None})
+            return None
+        if is_terminal(job.status):
+            logger.info(
+                "job_fail_skipped",
+                extra={"job_id": job.id, "chunk_id": None, "status": job.status.value},
+            )
+            return job
+        assert_legal_transition(job.status, JobStatus.FAILED)
+        job = replace(job, status=JobStatus.FAILED, error_type=error_type, message=message)
+        await self._jobs.save(job)
+        logger.info(
+            "job_failed",
+            extra={
+                "chunk_id": None,
+                "error_type": error_type.value,
+                "job_id": job.id,
+                "status": job.status.value,
+            },
+        )
+        return job
+
     async def retry(self, job_id: str) -> Job:
         """Re-queue a FAILED job from filesystem ``status.json`` only.
 

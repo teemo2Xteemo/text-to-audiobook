@@ -23,13 +23,20 @@ def storage_path_from_env(environ: dict[str, str] | None = None) -> Path:
 
 
 def prepare_storage(path: Path, uid: int, gid: int) -> Path:
-    """Create ``path`` if needed and ``lchown`` the tree. Does not follow symlinks."""
-    resolved = path.expanduser().resolve()
-    if resolved == Path("/"):
+    """Create ``path`` if needed and ``lchown`` the tree. Does not follow symlinks.
+
+    Use lexical ``abspath`` (not ``Path.resolve``) so a ``STORAGE_PATH`` that is
+    itself a symlink is chowned as the link, not its target.
+    """
+    configured = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+    if configured == Path("/"):
         raise SystemExit("STORAGE_PATH must not be /")
-    resolved.mkdir(parents=True, exist_ok=True)
-    chown_tree(resolved, uid, gid)
-    return resolved
+    if configured.is_symlink():
+        os.lchown(configured, uid, gid)
+        return configured
+    configured.mkdir(parents=True, exist_ok=True)
+    chown_tree(configured, uid, gid)
+    return configured
 
 
 def chown_tree(root: Path, uid: int, gid: int) -> None:

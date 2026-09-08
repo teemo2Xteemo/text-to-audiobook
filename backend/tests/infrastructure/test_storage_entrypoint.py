@@ -45,6 +45,27 @@ def test_prepare_storage_creates_and_chowns_tree(
     assert "status.json" in owned
 
 
+def test_prepare_storage_does_not_follow_root_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "secret"
+    target.mkdir()
+    (target / "outside.txt").write_text("nope", encoding="utf-8")
+    link = tmp_path / "storage"
+    link.symlink_to(target)
+    seen: list[str] = []
+
+    def fake_lchown(path: str | bytes | os.PathLike[str], uid: int, gid: int) -> None:
+        seen.append(os.fspath(path))
+
+    monkeypatch.setattr(os, "lchown", fake_lchown)
+    returned = prepare_storage(link, uid=1000, gid=1000)
+    assert returned == link
+    assert str(link) in seen
+    assert str(target / "outside.txt") not in seen
+    assert str(target) not in seen
+
+
 def test_chown_tree_does_not_follow_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

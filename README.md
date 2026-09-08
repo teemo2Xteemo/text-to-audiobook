@@ -92,3 +92,15 @@ python -m venv .venv
 .venv/bin/ruff format --check .
 .venv/bin/pytest -m "not integration"
 ```
+
+## Troubleshooting
+
+### Frontend `/api` returns 502 after recreating `api`
+
+Nginx in the `frontend` container resolves the Compose hostname `api` at process start and can cache a stale container IP. Recreating `api` (or `worker`) without recreating `frontend` then returns **502** for `/api` and `/health` on port 8080, even when `http://127.0.0.1:8000/health` is fine.
+
+Recreate frontend after those services:
+
+```bash
+docker compose up -d --force-recreate frontend
+```

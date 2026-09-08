@@ -15,6 +15,7 @@ from app.domain.errors import DomainError
 from app.domain.jobs import is_terminal
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.rq_queue import RQ_QUEUE_NAME
+from app.workers.rq_failure import handle_worker_exception
 
 logger = logging.getLogger(__name__)
 
@@ -62,5 +63,10 @@ async def _recover_async(settings: Settings) -> list[str]:
 
 def _listen(settings: Settings) -> None:
     connection = Redis.from_url(str(settings.redis_url))
-    queues = [Queue(RQ_QUEUE_NAME, connection=connection)]
-    Worker(queues, connection=connection).work()
+    timeout = settings.rq_job_timeout_seconds
+    queues = [Queue(RQ_QUEUE_NAME, connection=connection, default_timeout=timeout)]
+    Worker(
+        queues,
+        connection=connection,
+        exception_handlers=[handle_worker_exception],
+    ).work()

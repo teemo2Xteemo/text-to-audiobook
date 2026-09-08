@@ -149,7 +149,11 @@ def _infrastructure(
     queue_client = Redis.from_url(str(settings.redis_url))
     filesystem = FilesystemJobStorage(settings.storage_path)
     store = DualWriteJobStore(filesystem, RedisJobCache(cache_client))
-    queue = RQJobQueue(Queue(RQ_QUEUE_NAME, connection=queue_client))
+    timeout = settings.rq_job_timeout_seconds
+    queue = RQJobQueue(
+        Queue(RQ_QUEUE_NAME, connection=queue_client, default_timeout=timeout),
+        job_timeout=timeout,
+    )
     return filesystem, store, queue
 
 

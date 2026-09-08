@@ -371,7 +371,8 @@ May be implemented against fakes after M4, but shipping it after M9 is the usefu
 **Adds/changes:**
 
 - Documented `docker compose up`: frontend + api + worker + redis; FFmpeg in worker; **no GPU**. Default `TRANSLATION_PROVIDER=fake` / `TTS_PROVIDER=fake`; nllb/edge via `.env` then `docker compose up --build`.
-- Complete `.env.example`.
+- Complete `.env.example`, including `RQ_JOB_TIMEOUT_SECONDS` (default 1800; api + worker).
+- RQ `on_failure` / worker exception handler → `JobService.mark_failed` so a timeout-killed job becomes `failed` (`TIMEOUT`) instead of hanging non-terminal.
 - Healthchecks: API `GET /health`; worker Python Redis `ping` via `REDIS_URL` (no worker HTTP `/health`); frontend `/health`; redis `redis-cli ping`. See `docker-compose.yml`.
 - Non-root: API and worker `ENTRYPOINT` is `python -m app.infrastructure.storage_entrypoint` — `lchown` `STORAGE_PATH` (no symlink follow), drop to uid 1000 (`app`), then exec CMD (`storage_entrypoint.py`).
 - Fixtures: `backend/tests/fixtures/sample-zh-CN.txt` — operator selects `zh-CN` / `vi-VN` in the UI. Second pair: `backend/tests/fixtures/sample-en-US.txt`; operator selects `en-US` → `vi-VN` from capabilities. Not domain/UI constants.
@@ -460,6 +461,13 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 ### Pipeline FSM owner (M4, M5) — decided
 
 - **Decided (M4/M5):** The M4 orchestrator advances `JobStatus` / `chunk_current` / `chunk_total` via injected ports. M5 worker loads the job, calls the orchestrator, and persists Redis/FS. No pipeline loops in `app.workers`. M11 boot recover (`JobStore.list_ids` + enqueue non-terminal) is an application use-case invoked from worker `__main__` **before** RQ listen — still not a pipeline loop, and still not checkpoint I/O, in `app.workers`.
+
+### RQ worker timeout (M13 hotfix) — decided
+
+- **Assumption:** RQ `JobTimeoutException` aborts `process_job` without `PipelineOrchestrator._fail`, so `status.json` stayed non-terminal and GET polling never showed an error (live: RQ default 180s while still `translating`).
+- **Impact:** Operator-visible `failed` + `error_type=TIMEOUT`; `POST /api/jobs/{id}/retry` works; boot recover does not re-enqueue a killed job.
+- **Alternatives:** New milestone; rely on boot recover to silently retry; hard-code timeout only (no env).
+- **Recommendation (implemented):** `JobService.mark_failed` from RQ `on_failure` plus worker `exception_handlers`. `RQ_JOB_TIMEOUT_SECONDS` (default 1800) on api and worker — hardware-dependent, not a domain constant. No new milestone.
 
 ### Resume (M11) — decided
 
