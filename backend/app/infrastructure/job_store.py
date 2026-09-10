@@ -6,7 +6,7 @@ from typing import Protocol
 
 from redis.exceptions import RedisError
 
-from app.domain.jobs import Job, is_terminal
+from app.domain.jobs import Job
 from app.infrastructure.fs_storage import FilesystemJobStorage
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class JobStatusCache(Protocol):
 
 
 class DualWriteJobStore:
-    """Filesystem status.json is source of truth; Redis is a GET cache."""
+    """Filesystem status.json is source of truth; Redis is a write-through GET hint."""
 
     def __init__(self, filesystem: FilesystemJobStorage, cache: JobStatusCache) -> None:
         self._filesystem = filesystem
@@ -41,20 +41,13 @@ class DualWriteJobStore:
             cached = await self._cache.get(job_id)
         except RedisError:
             cached = None
-        if cached is not None and is_terminal(cached.status):
-            return cached
         job = await self._filesystem.get_job(job_id)
-        if job is not None and is_terminal(job.status):
-            if cached is None or cached != job:
+        if job is not None:
+            if cached != job:
                 with suppress(Exception):
                     await self._cache.save(job)
             return job
-        if cached is not None:
-            return cached
-        if job is not None:
-            with suppress(Exception):
-                await self._cache.save(job)
-        return job
+        return cached
 
     async def delete(self, job_id: str) -> None:
         with suppress(Exception):

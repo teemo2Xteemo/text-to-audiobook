@@ -465,8 +465,8 @@ Resolve with Assumption / Impact / Alternatives / Recommendation before or durin
 ### RQ worker timeout (M13 hotfix) — decided
 
 - **Assumption:** RQ `JobTimeoutException` aborts `process_job` without `PipelineOrchestrator._fail`, so `status.json` stayed non-terminal and GET polling never showed an error (live: RQ default 180s while still `translating`). Soft timeout hooks do **not** cover OOM / `SIGKILL` / work-horse hard kill; those stay non-terminal and boot recover may re-enqueue (follow-up: stale in-progress sweeper / heartbeat).
-- **Impact:** Soft timeout → operator-visible `failed` + `error_type=TIMEOUT`; uncaught worker exceptions → `WORKER_FAILED` (not `STORAGE_FAILED`); `POST /api/jobs/{id}/retry` works; boot recover does not re-enqueue a job that `mark_failed` persisted. DualWrite GET prefers filesystem when `status.json` is already terminal so a stale Redis non-terminal cannot hide `failed`.
-- **Alternatives:** New milestone; rely on boot recover to silently retry; hard-code timeout only (no env); disk-authoritative GET for every poll.
+- **Impact:** Soft timeout → operator-visible `failed` + `error_type=TIMEOUT`; uncaught worker exceptions → `WORKER_FAILED` (not `STORAGE_FAILED`); `POST /api/jobs/{id}/retry` works; boot recover does not re-enqueue a job that `mark_failed` persisted. DualWrite GET is disk-authoritative when `status.json` exists (Redis is write-through); a stale terminal Redis `failed` cannot hide a filesystem `queued` after retry.
+- **Alternatives:** New milestone; rely on boot recover to silently retry; hard-code timeout only (no env); Redis-first GET for in-progress polls only.
 - **Recommendation (implemented):** `JobService.mark_failed` from RQ `on_failure` plus worker `exception_handlers`. `RQ_JOB_TIMEOUT_SECONDS` (default 1800) on api and worker — hardware-dependent, not a domain constant. DualWrite `save` invalidates the GET cache if the cache write fails after filesystem write. No new milestone.
 
 ### Resume (M11) — decided

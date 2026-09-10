@@ -94,6 +94,24 @@ def test_dual_write_get_falls_back_when_redis_errors(tmp_path: Path) -> None:
     assert loaded == job
 
 
+def test_dual_write_get_prefers_filesystem_queued_over_stale_failed_cache(
+    tmp_path: Path,
+) -> None:
+    filesystem = FilesystemJobStorage(tmp_path)
+    cache = MemoryCache()
+    store = DualWriteJobStore(filesystem, cache)
+    queued = _job()
+    failed = replace(queued, status=JobStatus.FAILED, error_type=ErrorType.TIMEOUT)
+    asyncio.run(filesystem.save_job(queued))
+    cache.jobs[queued.id] = failed
+
+    loaded = asyncio.run(store.get(queued.id))
+    assert loaded == queued
+    assert loaded is not None
+    assert loaded.status is JobStatus.QUEUED
+    assert cache.jobs[queued.id] == queued
+
+
 def test_dual_write_get_prefers_filesystem_when_terminal(
     tmp_path: Path,
 ) -> None:

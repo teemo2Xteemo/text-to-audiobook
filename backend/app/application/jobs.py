@@ -123,8 +123,8 @@ class JobService:
     async def retry(self, job_id: str) -> Job:
         """Re-queue a FAILED job from filesystem ``status.json`` only.
 
-        Do not use ``JobStore.get`` (Redis GET cache). HTTP 202/409 must follow
-        the on-disk FSM even when the cache is stale or empty.
+        DualWrite.get prefers filesystem; retry still reads ``status.json``
+        directly so HTTP 202/409 follow the on-disk FSM without cache refresh.
         """
         job = await self._filesystem().get_job(job_id)
         if job is None:
@@ -156,8 +156,8 @@ class JobService:
     async def recover_in_progress(self) -> list[str]:
         """Re-enqueue non-terminal jobs from filesystem ``status.json`` only.
 
-        Do not use ``JobStore.get`` (Redis GET cache). Crash recovery must follow
-        the on-disk FSM even when the cache is stale or empty.
+        DualWrite.get prefers filesystem; recover still reads ``status.json``
+        directly so crash recovery follows the on-disk FSM without cache refresh.
         """
         filesystem = self._filesystem()
         recovered: list[str] = []
@@ -192,10 +192,10 @@ class JobService:
         return directory / f"output.{job.output_format.value}"
 
     def _filesystem(self) -> FilesystemJobStorage:
-        # TODO(defer, not M12): inject a disk-authoritative reader from the
-        # composition root (or JobStore.get_from_disk). DualWrite.get is Redis-first
-        # so recover/retry must not use it; constructing FilesystemJobStorage here
-        # is a layering smell, not a behavior bug.
+        # TODO(defer): inject a disk reader from the composition root.
+        # DualWrite.get prefers filesystem, but recover/retry still read
+        # status.json directly so FSM hops do not depend on cache refresh.
+        # Constructing FilesystemJobStorage here is a layering smell.
         return FilesystemJobStorage(self._storage_path)
 
     async def _cleanup(self, job_id: str) -> None:
