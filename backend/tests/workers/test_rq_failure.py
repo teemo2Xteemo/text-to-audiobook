@@ -101,5 +101,5 @@ def test_handle_worker_exception_marks_unexpected_failure(
     failed = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job_id))
     assert failed is not None
     assert failed.status is JobStatus.FAILED
-    assert failed.error_type is ErrorType.STORAGE_FAILED
-    assert failed.message == "worker task failed"
+    assert failed.error_type is ErrorType.WORKER_FAILED
+    assert failed.message == "worker task failed (RuntimeError)"

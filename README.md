@@ -33,7 +33,7 @@ docker compose up --build
 | API health | http://127.0.0.1:8000/health → `{"status":"ok","service":"api"}` |
 | Redis | 127.0.0.1:6379 |
 
-The **worker** image installs FFmpeg via apt (the slim API image does not). FFmpeg is invoked with argv lists only; no Python ffmpeg binding. API and worker start as root only long enough to `chown` the `./storage` bind-mount, then drop to uid 1000 (`app`). Frontend nginx listens on container port 80, published as `127.0.0.1:8080`.
+The **worker** image installs FFmpeg via apt (the slim API image does not). FFmpeg is invoked with argv lists only; no Python ffmpeg binding. API and worker start as root only long enough to `chown` the `./storage` bind-mount (a **real directory**, not a symlink; `chown` walks the tree on every start and can get slower as `storage/` grows), then drop to uid 1000 (`app`). Frontend nginx listens on container port 80, published as `127.0.0.1:8080`.
 
 Default providers are `fake` / `fake` so a clean clone boots **offline**. `VITE_*` values are baked into the frontend image; after changing them, run `docker compose up --build` again.
 
@@ -104,3 +104,13 @@ Recreate frontend after those services:
 ```bash
 docker compose up -d --force-recreate frontend
 ```
+
+### Job stays `translating` / `generating_audio` after the worker dies
+
+RQ **soft timeout** (`JobTimeoutException` / `RQ_JOB_TIMEOUT_SECONDS`) runs `on_failure` and marks the job `failed` with `error_type=TIMEOUT`. The SPA can show that error; retry with `POST /api/jobs/{job_id}/retry`.
+
+**Hard kill is not the same path.** OOM, `SIGKILL`, or an RQ work-horse death penalty that never raises in-process will **not** run those hooks. `status.json` can stay non-terminal; worker boot recover will re-enqueue (M11). There is no heartbeat / “stale in-progress → failed” sweeper yet.
+
+### `STORAGE_PATH` must be a real directory
+
+Do not point `STORAGE_PATH` at a symlink. The entrypoint only `lchown`s a symlink itself (it does not follow the target, so contents may stay root-owned and uid 1000 cannot write). Compose’s `./storage` bind-mount is a real directory.

@@ -10,6 +10,7 @@ class ErrorType(StrEnum):
     STORAGE_FAILED = "STORAGE_FAILED"
     PROVIDER_RATE_LIMIT = "PROVIDER_RATE_LIMIT"
     TIMEOUT = "TIMEOUT"
+    WORKER_FAILED = "WORKER_FAILED"
 
 
 class DomainError(Exception):

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 from contextlib import suppress
 from typing import Protocol
 
 from redis.exceptions import RedisError
 
-from app.domain.jobs import Job
+from app.domain.jobs import Job, is_terminal
 from app.infrastructure.fs_storage import FilesystemJobStorage
+
+logger = logging.getLogger(__name__)
 
 
 class JobStatusCache(Protocol):
@@ -26,16 +29,28 @@ class DualWriteJobStore:
 
     async def save(self, job: Job) -> None:
         await self._filesystem.save_job(job)
-        await self._cache.save(job)
+        try:
+            await self._cache.save(job)
+        except Exception:
+            logger.warning("job_cache_save_failed", extra={"job_id": job.id, "chunk_id": None})
+            with suppress(Exception):
+                await self._cache.delete(job.id)
 
     async def get(self, job_id: str) -> Job | None:
         try:
             cached = await self._cache.get(job_id)
         except RedisError:
             cached = None
-        if cached is not None:
+        if cached is not None and is_terminal(cached.status):
             return cached
         job = await self._filesystem.get_job(job_id)
+        if job is not None and is_terminal(job.status):
+            if cached is None or cached != job:
+                with suppress(Exception):
+                    await self._cache.save(job)
+            return job
+        if cached is not None:
+            return cached
         if job is not None:
             with suppress(Exception):
                 await self._cache.save(job)

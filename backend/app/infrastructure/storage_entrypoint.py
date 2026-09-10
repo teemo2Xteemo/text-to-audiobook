@@ -26,7 +26,10 @@ def prepare_storage(path: Path, uid: int, gid: int) -> Path:
     """Create ``path`` if needed and ``lchown`` the tree. Does not follow symlinks.
 
     Use lexical ``abspath`` (not ``Path.resolve``) so a ``STORAGE_PATH`` that is
-    itself a symlink is chowned as the link, not its target.
+    itself a symlink is chowned as the link, not its target. Compose must use a
+    real directory (the ``./storage`` bind-mount). Walking a symlink target could
+    chown files outside the intended tree; uid 1000 also will not own contents
+    behind a link. ``chown_tree`` runs on every start while still root.
     """
     configured = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
     if configured == Path("/"):

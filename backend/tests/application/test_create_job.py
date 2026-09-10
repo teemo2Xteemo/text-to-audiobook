@@ -308,6 +308,21 @@ def test_recover_does_not_enqueue_after_mark_failed(tmp_path: Path) -> None:
     assert queue.job_ids == []
 
 
+def test_get_returns_filesystem_failed_not_stale_non_terminal_cache(tmp_path: Path) -> None:
+    filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path)
+    running = _fs_job("dddddddd-dddd-dddd-dddd-dddddddddddd", JobStatus.TRANSLATING)
+    failed = replace(
+        running,
+        status=JobStatus.FAILED,
+        error_type=ErrorType.TIMEOUT,
+        message="timeout",
+    )
+    asyncio.run(filesystem.save_job(failed))
+    cache.jobs[running.id] = running
+    assert asyncio.run(service.get(running.id)) == failed
+    assert queue.job_ids == []
+
+
 def _fs_retry_service(
     tmp_path: Path,
 ) -> tuple[FilesystemJobStorage, _MemoryJobCache, DualWriteJobStore, InMemoryQueue, JobService]:

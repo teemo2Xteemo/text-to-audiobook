@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,53 @@ def test_dual_write_get_falls_back_when_redis_errors(tmp_path: Path) -> None:
     store = DualWriteJobStore(filesystem, cache)
     loaded = asyncio.run(store.get(job.id))
     assert loaded == job
+
+
+def test_dual_write_get_prefers_filesystem_when_terminal(
+    tmp_path: Path,
+) -> None:
+    filesystem = FilesystemJobStorage(tmp_path)
+    cache = MemoryCache()
+    store = DualWriteJobStore(filesystem, cache)
+    running = _job()
+    failed = replace(running, status=JobStatus.FAILED, error_type=ErrorType.TIMEOUT)
+    asyncio.run(filesystem.save_job(failed))
+    cache.jobs[running.id] = running
+
+    loaded = asyncio.run(store.get(running.id))
+    assert loaded == failed
+    assert loaded is not None
+    assert loaded.status is JobStatus.FAILED
+    assert cache.jobs[running.id] == failed
+
+
+def test_dual_write_save_invalidates_cache_when_cache_write_fails(tmp_path: Path) -> None:
+    filesystem = FilesystemJobStorage(tmp_path)
+    running = _job()
+    cache = _FailingSaveCache(running)
+    store = DualWriteJobStore(filesystem, cache)
+    failed = replace(running, status=JobStatus.FAILED, error_type=ErrorType.TIMEOUT)
+    asyncio.run(store.save(failed))
+    assert asyncio.run(filesystem.get_job(running.id)) == failed
+    assert running.id not in cache.jobs
+    loaded = asyncio.run(store.get(running.id))
+    assert loaded == failed
+    assert loaded is not None
+    assert loaded.status is JobStatus.FAILED
+
+
+class _FailingSaveCache:
+    def __init__(self, job: Job) -> None:
+        self.jobs: dict[str, Job] = {job.id: job}
+
+    async def save(self, job: Job) -> None:
+        raise RedisError("readonly replica")
+
+    async def get(self, job_id: str) -> Job | None:
+        return self.jobs.get(job_id)
+
+    async def delete(self, job_id: str) -> None:
+        self.jobs.pop(job_id, None)
 
 
 def test_filesystem_list_job_ids_uuid_only(tmp_path: Path) -> None:
