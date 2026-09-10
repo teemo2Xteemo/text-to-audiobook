@@ -1,6 +1,6 @@
 # ADR 0011: Ollama + TranslateGemma as first optional LLM translation adapter
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-10
 - Issue: [#12](https://github.com/teemo2Xteemo/text-to-audiobook/issues/12)
 
@@ -24,7 +24,7 @@ Constraints that still apply:
 1. **First optional LLM translation adapter** is **Ollama** calling a **TranslateGemma** (or compatible) model over Ollama’s HTTP API — *not* OpenAI-as-first.
 2. **Compose / offline MVP default remains NLLB** (`TRANSLATION_PROVIDER=nllb` with `NLLB_MODEL_ID` as today). Selecting the LLM adapter is an explicit env change.
 3. **OpenAI** (and Gemini, etc.) remain valid *later* optional adapters on the same port; they are **out of scope for the first implementation** of this ADR.
-4. **New ADR is required before adapter code merges** (this document). Do **not** supersede ADR 0009 / 0010 unless a future decision makes a paid/cloud translator the Compose default.
+4. **This ADR is Accepted.** Adapter code may follow in a later PR against this decision. Do **not** supersede ADR 0009 / 0010 unless a future decision makes a paid/cloud translator the Compose default.
 5. Model id, base URL, and timeouts are **configuration**, not domain constants.
 
 ### Configuration (names only — no secrets in git)
@@ -62,7 +62,7 @@ Document names in `.env.example` only. No API keys for Ollama local. If a future
 - `.env.example` — new names only.
 - `docs/ai/provider-development.md` — list Ollama/TranslateGemma as the first optional LLM path; keep LibreTranslate / OpenAI / Gemini as later.
 - README troubleshooting — Ollama not reachable, model not pulled, timeout under load.
-- This ADR: move **Proposed → Accepted** only when the decision is affirmed (merge of this ADR file can land as Proposed; accept in a follow-up edit or in the same PR if the owner explicitly accepts).
+- This ADR: **Accepted** (owner Teemo, 2026-09-10). Adapter implementation remains a later PR; this docs change does not ship `ollama.py`.
 
 ## Consequences
 
@@ -91,9 +91,9 @@ Document names in `.env.example` only. No API keys for Ollama local. If a future
 
 ## Implementation checklist (for planning)
 
-Ordered so Cursor can turn this ADR into a concrete plan/PR sequence. Do **not** start adapter code before this ADR is at least Proposed and linked from #12; prefer **Accepted** before merge of adapter code.
+Ordered so Cursor can turn this **Accepted** ADR into a later adapter PR. Keep this checklist; do **not** implement `ollama.py` in the same change as this docs-only ADR.
 
-1. **ADR land** — add `docs/adr/0011-ollama-translategemma-optional-translation.md`; row in `docs/adr/README.md`; link from issue #12.
+1. **ADR land** — **done (Accepted).** File `docs/adr/0011-ollama-translategemma-optional-translation.md`; row in `docs/adr/README.md`; align issue #12.
 2. **Settings + factory** — `OLLAMA_BASE_URL`, `OLLAMA_TRANSLATION_MODEL`; branch in DI when `TRANSLATION_PROVIDER=ollama`; ensure NLLB model is not constructed in that branch.
 3. **Adapter** — HTTP client, BCP-47 mapping, supported language set, error mapping, translation-only prompting, size/chunk guards.
 4. **Tests** — unit tests with fake HTTP/Ollama responses; optional `@pytest.mark.integration` against a live Ollama (skipped in CI by default).
