@@ -23,6 +23,10 @@ The product is a **multilingual story → audiobook** pipeline. Requirements: [`
 | [hooks.md](hooks.md) | What hooks do, when they fire, future hooks |
 | [../adr/README.md](../adr/README.md) | Architecture Decision Records |
 
+## Plans
+
+- [M14 Ollama TranslateGemma translation adapter](plans/m14-ollama-translation-adapter.md) — optional post-M13 provider (ADR 0011 / issue #12); docs-only until implemented
+
 ## What this repo is today
 
 Governance plus an accepted implementation plan. **M1**–**M13** are implemented (API + Redis Compose, domain ports, job HTTP, pipeline orchestrator, RQ worker + DI + capabilities + Compose worker, Vite job UI, conservative narration, NLLB CPU adapter + language detector, Edge TTS + FFmpeg normalize, chunk retry, checkpoint resume, translation/TTS cache, Compose completeness / MVP acceptance). Missing cache is not a license to invent an unrelated stack. Reuse `backend/app/domain` — do not duplicate ports. Follow `target-structure.md`, ADR 0010, and `implementation-plan.md`.
