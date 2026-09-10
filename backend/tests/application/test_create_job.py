@@ -184,7 +184,7 @@ def test_retry_reads_filesystem_status_not_job_store_cache(tmp_path: Path) -> No
     )
     asyncio.run(filesystem.save_job(failed))
     cache.jobs[failed.id] = replace(failed, status=JobStatus.COMPLETED)
-    assert asyncio.run(store.get(failed.id)).status is JobStatus.COMPLETED
+    assert asyncio.run(store.get(failed.id)).status is JobStatus.FAILED
 
     retried = asyncio.run(service.retry(failed.id))
     assert retried.status is JobStatus.QUEUED
@@ -231,11 +231,111 @@ def test_recover_reads_filesystem_status_not_job_store_cache(tmp_path: Path) -> 
     running = _fs_job("22222222-2222-2222-2222-222222222222", JobStatus.GENERATING_AUDIO)
     asyncio.run(filesystem.save_job(running))
     cache.jobs[running.id] = replace(running, status=JobStatus.COMPLETED)
-    assert asyncio.run(store.get(running.id)).status is JobStatus.COMPLETED
+    assert asyncio.run(store.get(running.id)).status is JobStatus.GENERATING_AUDIO
 
     recovered = asyncio.run(service.recover_in_progress())
     assert recovered == [running.id]
     assert queue.job_ids == [running.id]
+
+
+def test_mark_failed_from_non_terminal_updates_filesystem_and_cache(tmp_path: Path) -> None:
+    filesystem, cache, store, queue, service = _fs_retry_service(tmp_path)
+    running = _fs_job("66666666-6666-6666-6666-666666666666", JobStatus.GENERATING_AUDIO)
+    asyncio.run(filesystem.save_job(running))
+    cache.jobs[running.id] = replace(running, status=JobStatus.TRANSLATING)
+
+    failed = asyncio.run(
+        service.mark_failed(
+            running.id, ErrorType.TIMEOUT, "job exceeded the worker timeout (1800s)"
+        )
+    )
+    assert failed is not None
+    assert failed.status is JobStatus.FAILED
+    assert failed.error_type is ErrorType.TIMEOUT
+    assert failed.message == "job exceeded the worker timeout (1800s)"
+    assert asyncio.run(filesystem.get_job(running.id)) == failed
+    assert cache.jobs[running.id] == failed
+    assert queue.job_ids == []
+
+
+def test_mark_failed_is_noop_when_already_failed(tmp_path: Path) -> None:
+    filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path)
+    existing = replace(
+        _fs_job("77777777-7777-7777-7777-777777777777", JobStatus.FAILED),
+        error_type=ErrorType.TTS_FAILED,
+        message="tts failed",
+    )
+    asyncio.run(filesystem.save_job(existing))
+    cache.jobs[existing.id] = existing
+
+    result = asyncio.run(service.mark_failed(existing.id, ErrorType.TIMEOUT, "timeout"))
+    assert result == existing
+    assert asyncio.run(filesystem.get_job(existing.id)) == existing
+    assert cache.jobs[existing.id] == existing
+    assert queue.job_ids == []
+
+
+def test_mark_failed_is_noop_when_completed(tmp_path: Path) -> None:
+    filesystem, _cache, _store, queue, service = _fs_retry_service(tmp_path)
+    done = _fs_job("88888888-8888-8888-8888-888888888888", JobStatus.COMPLETED)
+    asyncio.run(filesystem.save_job(done))
+
+    result = asyncio.run(service.mark_failed(done.id, ErrorType.TIMEOUT, "timeout"))
+    assert result is not None
+    assert result.status is JobStatus.COMPLETED
+    assert result.error_type is None
+    assert asyncio.run(filesystem.get_job(done.id)) == done
+    assert queue.job_ids == []
+
+
+def test_mark_failed_missing_job_returns_none(tmp_path: Path) -> None:
+    _filesystem, _cache, _store, queue, service = _fs_retry_service(tmp_path)
+    result = asyncio.run(
+        service.mark_failed("99999999-9999-9999-9999-999999999999", ErrorType.TIMEOUT, "timeout")
+    )
+    assert result is None
+    assert queue.job_ids == []
+
+
+def test_recover_does_not_enqueue_after_mark_failed(tmp_path: Path) -> None:
+    filesystem, _cache, _store, queue, service = _fs_retry_service(tmp_path)
+    running = _fs_job("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", JobStatus.TRANSLATING)
+    asyncio.run(filesystem.save_job(running))
+    asyncio.run(service.mark_failed(running.id, ErrorType.TIMEOUT, "timeout"))
+
+    recovered = asyncio.run(service.recover_in_progress())
+    assert recovered == []
+    assert queue.job_ids == []
+
+
+def test_get_returns_filesystem_failed_not_stale_non_terminal_cache(tmp_path: Path) -> None:
+    filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path)
+    running = _fs_job("dddddddd-dddd-dddd-dddd-dddddddddddd", JobStatus.TRANSLATING)
+    failed = replace(
+        running,
+        status=JobStatus.FAILED,
+        error_type=ErrorType.TIMEOUT,
+        message="timeout",
+    )
+    asyncio.run(filesystem.save_job(failed))
+    cache.jobs[running.id] = running
+    assert asyncio.run(service.get(running.id)) == failed
+    assert queue.job_ids == []
+
+
+def test_get_returns_filesystem_queued_not_stale_failed_cache(tmp_path: Path) -> None:
+    filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path)
+    queued = _fs_job("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", JobStatus.QUEUED)
+    failed = replace(
+        queued,
+        status=JobStatus.FAILED,
+        error_type=ErrorType.TIMEOUT,
+        message="timeout",
+    )
+    asyncio.run(filesystem.save_job(queued))
+    cache.jobs[queued.id] = failed
+    assert asyncio.run(service.get(queued.id)) == queued
+    assert queue.job_ids == []
 
 
 def _fs_retry_service(

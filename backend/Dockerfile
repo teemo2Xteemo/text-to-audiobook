@@ -26,7 +26,8 @@ RUN groupadd --system --gid 1000 app \
 
 COPY --from=builder /opt/venv /opt/venv
 
-USER app
+# Start as root so the entrypoint can chown the storage bind-mount, then drop to app.
+ENTRYPOINT ["python", "-m", "app.infrastructure.storage_entrypoint"]
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

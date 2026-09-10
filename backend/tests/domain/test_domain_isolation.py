@@ -31,6 +31,7 @@ def test_error_type_codes_match_backend_rule() -> None:
         "STORAGE_FAILED",
         "PROVIDER_RATE_LIMIT",
         "TIMEOUT",
+        "WORKER_FAILED",
     }
 
 

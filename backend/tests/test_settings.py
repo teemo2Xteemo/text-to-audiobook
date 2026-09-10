@@ -18,6 +18,7 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TTS_DEFAULT_VOICE_BY_LANGUAGE", raising=False)
     monkeypatch.delenv("RETRY_MAX_ATTEMPTS", raising=False)
     monkeypatch.delenv("RETRY_BACKOFF_SECONDS", raising=False)
+    monkeypatch.delenv("RQ_JOB_TIMEOUT_SECONDS", raising=False)
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://localhost:6379/0"
     assert settings.storage_path == Path("storage")
@@ -31,6 +32,7 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.tts_default_voice_by_language == ""
     assert settings.retry_max_attempts == 3
     assert settings.retry_backoff_seconds == 1.0
+    assert settings.rq_job_timeout_seconds == 1800
 
 
 def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -49,6 +51,7 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     )
     monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "5")
     monkeypatch.setenv("RETRY_BACKOFF_SECONDS", "0.5")
+    monkeypatch.setenv("RQ_JOB_TIMEOUT_SECONDS", "3600")
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://example:6379/1"
     assert settings.storage_path == tmp_path
@@ -68,6 +71,7 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     }
     assert settings.retry_max_attempts == 5
     assert settings.retry_backoff_seconds == 0.5
+    assert settings.rq_job_timeout_seconds == 3600
 
 
 def test_parse_tts_default_voice_by_language_skips_malformed() -> None:

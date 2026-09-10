@@ -230,3 +230,45 @@ def test_boot_recovers_then_listens(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     boot()
     assert recovered == ["ok"]
     assert listened == [True]
+
+
+def test_listen_uses_settings_timeout_and_failure_handler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.workers.rq_failure import handle_worker_exception
+
+    captured: dict[str, object] = {}
+
+    class _FakeRedis:
+        @classmethod
+        def from_url(cls, url: str) -> object:
+            captured["redis_url"] = url
+            return object()
+
+    class _FakeQueue:
+        def __init__(self, name: str, connection: object, default_timeout: int) -> None:
+            captured["queue"] = (name, default_timeout)
+
+    class _FakeWorker:
+        def __init__(
+            self,
+            queues: object,
+            connection: object = None,
+            exception_handlers: object = None,
+        ) -> None:
+            captured["handlers"] = exception_handlers
+
+        def work(self) -> None:
+            captured["work"] = True
+
+    settings = Settings(_env_file=None, storage_path=tmp_path, rq_job_timeout_seconds=2400)
+    monkeypatch.setattr("app.workers.runner.Redis", _FakeRedis)
+    monkeypatch.setattr("app.workers.runner.Queue", _FakeQueue)
+    monkeypatch.setattr("app.workers.runner.Worker", _FakeWorker)
+
+    from app.workers.runner import _listen
+
+    _listen(settings)
+    assert captured["queue"] == ("jobs", 2400)
+    assert captured["handlers"] == [handle_worker_exception]
+    assert captured["work"] is True

@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     tts_default_voice_by_language: str = Field(default="")
     retry_max_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
+    rq_job_timeout_seconds: int = Field(default=1800, ge=1)
 
 
 @lru_cache

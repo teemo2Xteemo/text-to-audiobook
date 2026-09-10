@@ -89,11 +89,42 @@ class JobService:
     async def get(self, job_id: str) -> Job | None:
         return await self._jobs.get(job_id)
 
+    async def mark_failed(self, job_id: str, error_type: ErrorType, message: str) -> Job | None:
+        """Mark a non-terminal job FAILED from filesystem ``status.json``.
+
+        RQ timeout-kill never reaches ``PipelineOrchestrator._fail``. Without this
+        hop, GET polling stays on a non-terminal status (or boot recover silently
+        re-enqueues). No-op when the job is missing or already terminal.
+        """
+        job = await self._filesystem().get_job(job_id)
+        if job is None:
+            logger.warning("job_fail_missing", extra={"job_id": job_id, "chunk_id": None})
+            return None
+        if is_terminal(job.status):
+            logger.info(
+                "job_fail_skipped",
+                extra={"job_id": job.id, "chunk_id": None, "status": job.status.value},
+            )
+            return job
+        assert_legal_transition(job.status, JobStatus.FAILED)
+        job = replace(job, status=JobStatus.FAILED, error_type=error_type, message=message)
+        await self._jobs.save(job)
+        logger.info(
+            "job_failed",
+            extra={
+                "chunk_id": None,
+                "error_type": error_type.value,
+                "job_id": job.id,
+                "status": job.status.value,
+            },
+        )
+        return job
+
     async def retry(self, job_id: str) -> Job:
         """Re-queue a FAILED job from filesystem ``status.json`` only.
 
-        Do not use ``JobStore.get`` (Redis GET cache). HTTP 202/409 must follow
-        the on-disk FSM even when the cache is stale or empty.
+        DualWrite.get prefers filesystem; retry still reads ``status.json``
+        directly so HTTP 202/409 follow the on-disk FSM without cache refresh.
         """
         job = await self._filesystem().get_job(job_id)
         if job is None:
@@ -125,8 +156,8 @@ class JobService:
     async def recover_in_progress(self) -> list[str]:
         """Re-enqueue non-terminal jobs from filesystem ``status.json`` only.
 
-        Do not use ``JobStore.get`` (Redis GET cache). Crash recovery must follow
-        the on-disk FSM even when the cache is stale or empty.
+        DualWrite.get prefers filesystem; recover still reads ``status.json``
+        directly so crash recovery follows the on-disk FSM without cache refresh.
         """
         filesystem = self._filesystem()
         recovered: list[str] = []
@@ -161,10 +192,10 @@ class JobService:
         return directory / f"output.{job.output_format.value}"
 
     def _filesystem(self) -> FilesystemJobStorage:
-        # TODO(defer, not M12): inject a disk-authoritative reader from the
-        # composition root (or JobStore.get_from_disk). DualWrite.get is Redis-first
-        # so recover/retry must not use it; constructing FilesystemJobStorage here
-        # is a layering smell, not a behavior bug.
+        # TODO(defer): inject a disk reader from the composition root.
+        # DualWrite.get prefers filesystem, but recover/retry still read
+        # status.json directly so FSM hops do not depend on cache refresh.
+        # Constructing FilesystemJobStorage here is a layering smell.
         return FilesystemJobStorage(self._storage_path)
 
     async def _cleanup(self, job_id: str) -> None:
