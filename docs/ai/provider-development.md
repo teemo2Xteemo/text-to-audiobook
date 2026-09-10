@@ -36,7 +36,7 @@ M7 implements `NarrationProcessor`. M8 adds a CPU `LanguageDetector` adapter at 
 4. Register the adapter in config (`TRANSLATION_PROVIDER=...`) / DI — no `if provider ==` in application services.
 5. Fake it in unit tests; optional integration test behind a marker.
 
-MVP candidate: NLLB (CPU distilled). Later: LibreTranslate, OpenAI, Gemini.
+MVP candidate: NLLB (CPU distilled). Later: LibreTranslate, OpenAI, Gemini. Ollama + TranslateGemma is the first optional LLM translation path per ADR 0011.
 
 ## Adding a TTS adapter
 
