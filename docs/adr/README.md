@@ -14,5 +14,6 @@ ADRs record *why* a durable choice was made. Add a new file when you change port
 | [0008](0008-edge-tts-mvp-provider.md) | Edge TTS as first adapter, not the model |
 | [0009](0009-cpu-first-mvp.md) | CPU / 16GB / no GPU constraint |
 | [0010](0010-stack-and-project-layout.md) | FastAPI, React, Redis, Compose layout |
+| [0011](0011-ollama-translategemma-optional-translation.md) | Ollama + TranslateGemma first optional LLM translation (NLLB stays default) |
 
 Status values: Proposed, Accepted, Superseded.
