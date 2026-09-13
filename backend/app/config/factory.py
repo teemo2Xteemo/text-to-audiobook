@@ -27,7 +27,7 @@ from app.infrastructure.job_store import DualWriteJobStore
 from app.infrastructure.redis_job_store import RedisJobCache
 from app.infrastructure.rq_queue import RQ_QUEUE_NAME, RQJobQueue
 from app.providers.translation.fake import FakeTranslationProvider
-from app.providers.tts.fake import FakeTTSProvider
+from app.providers.tts.fake import FAKE_TTS_CACHE_MODEL, FakeTTSProvider
 
 
 class UnknownProviderError(ValueError):
@@ -151,7 +151,7 @@ def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
         translation_provider=translation,
         translation_model=translation_model,
         tts_provider=tts,
-        tts_model=tts,
+        tts_model=FAKE_TTS_CACHE_MODEL if tts == "fake" else tts,
     )
 
 

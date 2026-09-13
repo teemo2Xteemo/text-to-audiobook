@@ -213,6 +213,14 @@ def test_cache_identity_from_settings_uses_provider_model(tmp_path: Path) -> Non
     )
     assert fake.translation_provider == "fake"
     assert fake.translation_model == "fake"
+    assert fake.tts_provider == "fake"
+    assert fake.tts_model == "fake-silent-mp3"
+
+    edge = cache_identity_from_settings(
+        Settings(_env_file=None, storage_path=tmp_path, tts_provider="edge")
+    )
+    assert edge.tts_provider == "edge"
+    assert edge.tts_model == "edge"
 
 
 def test_factory_builds_cpu_language_detector(tmp_path: Path) -> None:
