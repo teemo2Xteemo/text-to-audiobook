@@ -15,6 +15,9 @@ REQUIRED_ENV_NAMES = (
     "TTS_DEFAULT_VOICE_BY_LANGUAGE",
     "WORKER_CONCURRENCY",
     "NLLB_MODEL_ID",
+    "OLLAMA_BASE_URL",
+    "OLLAMA_TRANSLATION_MODEL",
+    "OLLAMA_HTTP_TIMEOUT_SECONDS",
     "LANGUAGE_DETECT_MIN_CONFIDENCE",
     "RETRY_MAX_ATTEMPTS",
     "RETRY_BACKOFF_SECONDS",
@@ -46,3 +49,11 @@ def test_compose_is_cpu_only_with_worker_redis_healthcheck() -> None:
     assert "gpus:" not in body
     assert WORKER_REDIS_PROBE in text
     assert "interval: 10s" in text
+    assert "OLLAMA_BASE_URL" in text
+    assert "OLLAMA_TRANSLATION_MODEL" in text
+    assert "OLLAMA_HTTP_TIMEOUT_SECONDS" in text
+    assert body.count("OLLAMA_BASE_URL: ${OLLAMA_BASE_URL") == 2
+    assert body.count("OLLAMA_TRANSLATION_MODEL: ${OLLAMA_TRANSLATION_MODEL") == 2
+    assert body.count("OLLAMA_HTTP_TIMEOUT_SECONDS: ${OLLAMA_HTTP_TIMEOUT_SECONDS") == 2
+    assert body.count("host.docker.internal:host-gateway") == 2
+    assert body.count("OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}") == 2

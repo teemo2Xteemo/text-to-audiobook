@@ -18,6 +18,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "127.0.0.1:8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       STORAGE_PATH: ${STORAGE_PATH:-/data/storage}
@@ -27,6 +29,9 @@ services:
       TTS_PROVIDER: ${TTS_PROVIDER:-fake}
       TTS_DEFAULT_VOICE_BY_LANGUAGE: ${TTS_DEFAULT_VOICE_BY_LANGUAGE:-}
       NLLB_MODEL_ID: ${NLLB_MODEL_ID:-facebook/nllb-200-distilled-600M}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_TRANSLATION_MODEL: ${OLLAMA_TRANSLATION_MODEL:-translategemma:4b}
+      OLLAMA_HTTP_TIMEOUT_SECONDS: ${OLLAMA_HTTP_TIMEOUT_SECONDS:-120}
       LANGUAGE_DETECT_MIN_CONFIDENCE: ${LANGUAGE_DETECT_MIN_CONFIDENCE:-0.5}
       RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
       RETRY_BACKOFF_SECONDS: ${RETRY_BACKOFF_SECONDS:-1}
@@ -53,6 +58,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       STORAGE_PATH: ${STORAGE_PATH:-/data/storage}
@@ -62,6 +69,9 @@ services:
       TTS_DEFAULT_VOICE_BY_LANGUAGE: ${TTS_DEFAULT_VOICE_BY_LANGUAGE:-}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       NLLB_MODEL_ID: ${NLLB_MODEL_ID:-facebook/nllb-200-distilled-600M}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_TRANSLATION_MODEL: ${OLLAMA_TRANSLATION_MODEL:-translategemma:4b}
+      OLLAMA_HTTP_TIMEOUT_SECONDS: ${OLLAMA_HTTP_TIMEOUT_SECONDS:-120}
       LANGUAGE_DETECT_MIN_CONFIDENCE: ${LANGUAGE_DETECT_MIN_CONFIDENCE:-0.5}
       RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
       RETRY_BACKOFF_SECONDS: ${RETRY_BACKOFF_SECONDS:-1}

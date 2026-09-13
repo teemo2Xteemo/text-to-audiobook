@@ -27,7 +27,7 @@ from app.infrastructure.job_store import DualWriteJobStore
 from app.infrastructure.redis_job_store import RedisJobCache
 from app.infrastructure.rq_queue import RQ_QUEUE_NAME, RQJobQueue
 from app.providers.translation.fake import FakeTranslationProvider
-from app.providers.tts.fake import FakeTTSProvider
+from app.providers.tts.fake import FAKE_TTS_CACHE_MODEL, FakeTTSProvider
 
 
 class UnknownProviderError(ValueError):
@@ -87,6 +87,14 @@ def build_translation_provider(settings: Settings) -> TranslationProvider:
         from app.providers.translation.nllb import NllbTranslationProvider
 
         return NllbTranslationProvider(model_id=settings.nllb_model_id)
+    if name == "ollama":
+        from app.providers.translation.ollama import OllamaTranslationProvider
+
+        return OllamaTranslationProvider(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_translation_model,
+            timeout_seconds=settings.ollama_http_timeout_seconds,
+        )
     raise UnknownProviderError(f"unknown TRANSLATION_PROVIDER: {settings.translation_provider}")
 
 
@@ -117,7 +125,7 @@ def build_narration_processor() -> NarrationProcessor:
 
 
 def build_audio_processor(settings: Settings) -> AudioProcessor:
-    # Fake TTS emits non-media bytes; Edge (and later real TTS) needs FFmpeg normalize/merge.
+    # Fake TTS already emits a tiny valid MP3; skip FFmpeg (slim API image has none).
     if settings.tts_provider.strip().lower() == "fake":
         return FakeAudioProcessor()
     return FFmpegAudioProcessor()
@@ -133,12 +141,17 @@ def build_artifact_cache(settings: Settings) -> PipelineArtifactCache:
 def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
     translation = settings.translation_provider.strip().lower()
     tts = settings.tts_provider.strip().lower()
-    translation_model = settings.nllb_model_id if translation == "nllb" else "fake"
+    if translation == "nllb":
+        translation_model = settings.nllb_model_id
+    elif translation == "ollama":
+        translation_model = settings.ollama_translation_model
+    else:
+        translation_model = "fake"
     return CacheIdentity(
         translation_provider=translation,
         translation_model=translation_model,
         tts_provider=tts,
-        tts_model=tts,
+        tts_model=FAKE_TTS_CACHE_MODEL if tts == "fake" else tts,
     )
 
 
