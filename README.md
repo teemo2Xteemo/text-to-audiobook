@@ -59,16 +59,13 @@ NLLB stays the Compose/MVP default. For local LLM translation ([ADR 0011](docs/a
 ollama pull translategemma:4b
 ```
 
-In `.env`:
+In `.env`, set only:
 
 ```bash
 TRANSLATION_PROVIDER=ollama
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_TRANSLATION_MODEL=translategemma:4b
-OLLAMA_HTTP_TIMEOUT_SECONDS=120
 ```
 
-Restart **api and worker** after changing these (`GET /api/capabilities` is built from the translation provider). On Linux/WSL, if `host.docker.internal` does not resolve from the container, use `http://172.17.0.1:11434` or the host LAN IP. You can also set Compose `extra_hosts: ["host.docker.internal:host-gateway"]` on api/worker; it is optional. Leave `TTS_PROVIDER=edge` or `fake`. Raise `RQ_JOB_TIMEOUT_SECONDS` if long chapters plus a slow CPU model exceed the worker soft timeout (`OLLAMA_HTTP_TIMEOUT_SECONDS` is per HTTP call, not the RQ limit).
+Compose maps `host.docker.internal` into **api** and **worker** (`extra_hosts`) and defaults `OLLAMA_BASE_URL` to `http://host.docker.internal:11434`. Restart **api and worker** after changing the provider (`GET /api/capabilities` is built from the translation provider). Override `OLLAMA_BASE_URL` only if Ollama is not on the host (LAN IP). A host-run worker (no Compose) still uses Settings default `http://127.0.0.1:11434`. Leave `TTS_PROVIDER=edge` or `fake`. Raise `RQ_JOB_TIMEOUT_SECONDS` if long chapters plus a slow CPU model exceed the worker soft timeout (`OLLAMA_HTTP_TIMEOUT_SECONDS` is per HTTP call, not the RQ limit).
 
 There is **no Retry or Cancel button** in the SPA. To retry a `failed` job (same `job_id`, keeps checkpoints):
 
@@ -136,7 +133,7 @@ Do not point `STORAGE_PATH` at a symlink. The entrypoint only `lchown`s a symlin
 
 ### Ollama translation (`TRANSLATION_PROVIDER=ollama`)
 
-**Ollama is not running / connection refused.** The adapter talks HTTP to `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`). From Compose, `127.0.0.1` is the **container**, not the host. Point at the host (`host.docker.internal`, `172.17.0.1`, or the host LAN IP) and confirm `ollama serve` is listening. Jobs should fail with typed `TRANSLATION_FAILED` or `TIMEOUT`, not stay non-terminal.
+**Ollama is not running / connection refused.** Compose defaults `OLLAMA_BASE_URL` to `http://host.docker.internal:11434` and adds `extra_hosts` so that hostname is the **host**, not the container. Confirm `ollama serve` is listening on the host. A host-run process (no Compose) uses `http://127.0.0.1:11434`. Jobs should fail with typed `TRANSLATION_FAILED` or `TIMEOUT`, not stay non-terminal.
 
 **Model not pulled.** `ollama pull translategemma:4b` (or `:12b`). A missing tag typically returns HTTP 4xx/5xx mapped to `TRANSLATION_FAILED`.
 

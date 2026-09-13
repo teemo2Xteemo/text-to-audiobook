@@ -55,3 +55,5 @@ def test_compose_is_cpu_only_with_worker_redis_healthcheck() -> None:
     assert body.count("OLLAMA_BASE_URL: ${OLLAMA_BASE_URL") == 2
     assert body.count("OLLAMA_TRANSLATION_MODEL: ${OLLAMA_TRANSLATION_MODEL") == 2
     assert body.count("OLLAMA_HTTP_TIMEOUT_SECONDS: ${OLLAMA_HTTP_TIMEOUT_SECONDS") == 2
+    assert body.count("host.docker.internal:host-gateway") == 2
+    assert body.count("OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}") == 2

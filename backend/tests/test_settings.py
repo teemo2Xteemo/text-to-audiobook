@@ -101,6 +101,17 @@ def test_ollama_http_timeout_must_be_positive() -> None:
         Settings(_env_file=None, ollama_http_timeout_seconds=0)
 
 
+def test_ollama_base_url_rejects_empty_and_non_http() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, ollama_base_url="")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, ollama_base_url="file:///tmp/ollama")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, ollama_base_url="ftp://127.0.0.1:11434")
+    settings = Settings(_env_file=None, ollama_base_url="https://ollama.example:11434")
+    assert settings.ollama_base_url == "https://ollama.example:11434"
+
+
 def test_get_settings_returns_settings() -> None:
     get_settings.cache_clear()
     settings = get_settings()

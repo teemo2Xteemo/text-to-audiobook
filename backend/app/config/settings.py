@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     retry_max_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
     rq_job_timeout_seconds: int = Field(default=1800, ge=1)
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def ollama_base_url_must_be_http(cls, value: str) -> str:
+        url = value.strip()
+        if not url.lower().startswith(("http://", "https://")):
+            raise ValueError("OLLAMA_BASE_URL must be an http or https URL")
+        return url
 
 
 @lru_cache

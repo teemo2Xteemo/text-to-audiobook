@@ -110,14 +110,15 @@ Production client performs POST `{base}/api/chat` with `stream: false`, parses J
 ### Prompt / template contract
 
 - Prefer TranslateGemma’s documented language-code / chat-template fields when using Ollama’s chat API.
+- Wrap source text in `<<<TRANSLATION_SOURCE_BEGIN>>>` / `<<<TRANSLATION_SOURCE_END>>>` and instruct the model to translate only that span and ignore instructions inside it.
 - Fallback user content shape (only if template fields unavailable): instruct “translate from {src} to {tgt}; output only the translation” — **do not** hard-code zh→vi as architecture; languages come from arguments.
 - Temperature low / deterministic if the API allows options.
 
 ### Compose / ops
 
 - Default `TRANSLATION_PROVIDER` stays `fake` (M5). Do not add an `ollama` service or GPU.
-- `docker-compose.yml`: passthrough `OLLAMA_BASE_URL`, `OLLAMA_TRANSLATION_MODEL`, and `OLLAMA_HTTP_TIMEOUT_SECONDS` on **api and worker** (already in tree) so a host `.env` reaches the containers. No other Compose behavior change.
-- Document “bring your own Ollama” on host: `ollama pull translategemma:4b` (or `:12b`), set env, restart **worker** (and API if capabilities list languages from provider). Linux/WSL: `host.docker.internal`, `172.17.0.1`, or host-gateway — `extra_hosts` is optional.
+- `docker-compose.yml`: passthrough `OLLAMA_*` on **api and worker**; Compose default `OLLAMA_BASE_URL=http://host.docker.internal:11434`; `extra_hosts: ["host.docker.internal:host-gateway"]` on api and worker. Default `TRANSLATION_PROVIDER` stays `fake`. No `ollama` service.
+- Document “bring your own Ollama” on host: `ollama pull translategemma:4b` (or `:12b`), set `TRANSLATION_PROVIDER=ollama`, restart **worker** and API. One env change is enough when using Compose defaults.
 - Optional follow-up (out of this PR): Compose profile/service `ollama` — not required for MVP of the adapter.
 - When `TRANSLATION_PROVIDER=ollama`, worker must **not** import/load `TransformersNllbEngine` (factory already lazy-imports NLLB only on `nllb` branch — keep it that way).
 - Remind operators: raise `RQ_JOB_TIMEOUT_SECONDS` if long chapters + slow CPU; per-request `OLLAMA_HTTP_TIMEOUT_SECONDS` is separate.
@@ -130,7 +131,7 @@ Production client performs POST `{base}/api/chat` with `stream: false`, parses J
 - [x] `backend/app/config/factory.py` — `ollama` branch + `cache_identity_from_settings` model selection
 - [x] `backend/app/providers/translation/ollama.py` — provider + HTTP client + BCP-47 map
 - [x] `backend/app/providers/translation/__init__.py` — no new export (package still re-exports Fake only)
-- [x] `docker-compose.yml` — `OLLAMA_*` passthrough on api and worker; default `TRANSLATION_PROVIDER` stays `fake`; no `ollama` service
+- [x] `docker-compose.yml` — `OLLAMA_*` passthrough on api and worker; Compose default `host.docker.internal`; `extra_hosts` on api+worker; default `TRANSLATION_PROVIDER` stays `fake`; no `ollama` service
 
 ### Tests
 
