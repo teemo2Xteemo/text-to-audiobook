@@ -8,6 +8,8 @@ from pathlib import Path
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
 
 # 1s silent MPEG-1 Layer III (32 kbps, 44.1 kHz, mono) so the SPA player can decode fake jobs.
+# Bump this when fake bytes change so artifact cache does not reuse unplayable FAKEAUDIO blobs.
+FAKE_TTS_CACHE_MODEL = "fake-silent-mp3"
 FAKE_AUDIO_BYTES = zlib.decompress(
     b64decode(
         "eNr7/1vgCAPzAQbGJQwMDAoMDCYNDAwsPo6+rsZ6hgYGoRQChEH/fwsd0WxGsyeUagDZIoEj"

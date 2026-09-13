@@ -14,6 +14,7 @@ from app.config.factory import (
     build_orchestrator,
     build_translation_provider,
     build_tts_provider,
+    cache_identity_from_settings,
 )
 from app.config.settings import Settings
 from app.domain.retry import RetryPolicy
@@ -160,6 +161,20 @@ def test_factory_builds_nllb_provider_without_loading_weights(tmp_path: Path) ->
     assert "vi-VN" in languages
     assert "ja-JP" in languages
     assert "en-US" in languages
+
+
+def test_cache_identity_bumps_fake_tts_audio_format(tmp_path: Path) -> None:
+    fake = cache_identity_from_settings(
+        Settings(_env_file=None, storage_path=tmp_path, tts_provider="fake")
+    )
+    assert fake.tts_provider == "fake"
+    assert fake.tts_model == "fake-silent-mp3"
+
+    edge = cache_identity_from_settings(
+        Settings(_env_file=None, storage_path=tmp_path, tts_provider="edge")
+    )
+    assert edge.tts_provider == "edge"
+    assert edge.tts_model == "edge"
 
 
 def test_factory_builds_cpu_language_detector(tmp_path: Path) -> None:
