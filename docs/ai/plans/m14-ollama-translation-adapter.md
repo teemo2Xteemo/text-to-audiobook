@@ -1,9 +1,9 @@
 # Implementation plan: Ollama + TranslateGemma translation adapter
 
-- Status: Ready for implementation
-- Depends on: **ADR 0011 Accepted** ([PR #15](https://github.com/teemo2Xteemo/text-to-audiobook/pull/15) — merge before or with this work)
+- Status: Contract pinned (post-M13 optional provider). Adapter/factory/settings/Compose `OLLAMA_*` passthrough/tests are **not** on `main` as of the 2026-09-13 read-only check; lab smoke not verified. Do **not** insert M14 into the M1–M13 sequence.
+- Depends on: **ADR 0011 Accepted** ([PR #15](https://github.com/teemo2Xteemo/text-to-audiobook/pull/15), merged)
 - Tracks: [Issue #12](https://github.com/teemo2Xteemo/text-to-audiobook/issues/12)
-- Milestone feel: post-M13 optional provider (do **not** change Compose default away from NLLB/`fake`)
+- Milestone feel: post-M13 optional provider (do **not** change Compose boot default away from `fake`; NLLB remains the real-translation MVP default when operators opt in)
 
 ## Goal
 
@@ -11,7 +11,7 @@ Add `TRANSLATION_PROVIDER=ollama` that calls a local Ollama HTTP API with a Tran
 
 ## Non-goals
 
-- Replacing NLLB as Compose default
+- Replacing Compose boot default (`fake`) or NLLB as the real-translation MVP default when operators opt in
 - OpenAI / Gemini adapters (later PRs)
 - FSM, chunking identity, narration, TTS changes
 - Baking model weights into Docker images
@@ -26,7 +26,7 @@ Add `TRANSLATION_PROVIDER=ollama` that calls a local Ollama HTTP API with a Tran
 | NLLB pattern | `backend/app/providers/translation/nllb.py` | Injected `NllbEngine` Protocol for tests; BCP-47 map inside adapter; rejects `auto` source |
 | Fake | `backend/app/providers/translation/fake.py` | Offline stub |
 | DI | `backend/app/config/factory.py` → `build_translation_provider` | Branch on `settings.translation_provider`; lazy-import heavy adapters |
-| Cache identity | `cache_identity_from_settings` | Today: `nllb` → `nllb_model_id`, else `"fake"`. **Must** learn `ollama` → `OLLAMA_TRANSLATION_MODEL` |
+| Cache identity | `cache_identity_from_settings` | `nllb` → `nllb_model_id`; `ollama` → `ollama_translation_model`; else `"fake"` |
 | Settings | `backend/app/config/settings.py` | Add Ollama fields alongside `nllb_model_id` |
 | Factory tests | `backend/tests/config/test_factory.py` | Mirror `test_factory_builds_nllb_provider_without_loading_weights` |
 | Env docs | `.env.example`, `docs/ai/provider-development.md`, README | Names only; no secrets |
@@ -59,11 +59,10 @@ In `cache_identity_from_settings`:
 ```text
 if translation == "nllb": model = settings.nllb_model_id
 elif translation == "ollama": model = settings.ollama_translation_model
-elif translation == "fake": model = "fake"
-else: model = translation  # or raise — keep consistent with UnknownProvider
+else: model = "fake"
 ```
 
-Changing `OLLAMA_TRANSLATION_MODEL` must change cache keys (ADR 0006).
+Do not use the translation provider name as the model id, and do not raise from the cache helper for an unknown provider (factory `build_translation_provider` still raises `UnknownProviderError`). Changing `OLLAMA_TRANSLATION_MODEL` must change cache keys (ADR 0006).
 
 ### Adapter module
 
@@ -86,9 +85,9 @@ def __init__(
 
 **Responsibilities**
 
-1. `supported_languages()` — return BCP-47 tags the adapter maps (start from the same demo-relevant set as NLLB’s table intersection with TranslateGemma’s 55 langs; at minimum include `zh-CN`, `zh-Hans`, `zh-TW`/`zh-Hant`, `vi-VN`, `en-US`, plus other TranslateGemma-supported tags you map cleanly). Unsupported BCP-47 → `UNSUPPORTED_LANGUAGE`.
+1. `supported_languages()` — return the **same domain BCP-47 keys** as NLLB (`nllb.py` `_BCP47_TO_FLORES`). Unsupported BCP-47 → `UNSUPPORTED_LANGUAGE`.
 2. `translate` — reject `source_language == auto` with the same message pattern as NLLB (`auto is not a translation source; resolve it first`).
-3. Map BCP-47 → provider lang codes **inside the adapter** (TranslateGemma chat template often wants ISO 639-1 or regionalized codes like `zh-Hans` / `vi` — verify against current Ollama/TranslateGemma docs and pin the mapping in code + tests).
+3. Map domain BCP-47 → prompt language codes **inside the adapter** (`backend/app/providers/translation/ollama.py`). See **Pinned BCP-47** below.
 4. Call Ollama over HTTP (prefer `/api/chat` with the model’s chat template / language-code fields if required; otherwise a single user message that requests translation-only output). **No** Ollama Python SDK in domain/application/routes; stdlib or existing HTTP stack only (e.g. `urllib` / `httpx` if already a dependency — do not add heavy deps without need).
 5. Strip commentary; return translation text only. If the model wraps output in markdown fences, strip them defensively.
 6. Map errors:
@@ -96,7 +95,7 @@ def __init__(
    - HTTP timeout → `TIMEOUT`
    - HTTP 4xx/5xx / empty body → `TRANSLATION_FAILED`
    - rate-limit style 429 if ever seen → `PROVIDER_RATE_LIMIT`
-7. Guard input size: refuse absurdly large single calls (character or rough token ceiling aligned with ~2K translation context). Prefer failing with `TRANSLATION_FAILED` (“text exceeds model context”) rather than silent truncation. Pipeline already chunks; adapter is a last line of defense.
+7. Guard input size: fail when `len(text) > 8000` with `TRANSLATION_FAILED` / `"text exceeds model context"`. Do **not** use `len(text) // 4` (or any other token heuristic) for this guard. Pipeline already chunks; adapter is a last line of defense. No silent truncation.
 8. Logging: `provider=ollama`, `model=...`, languages, `character_count` — never log full story text or URLs with credentials.
 
 **HTTP client Protocol** (for fakes):
@@ -108,6 +107,25 @@ class OllamaHttpClient(Protocol):
 
 Production client performs POST `{base}/api/chat` with `stream: false`, parses JSON message content.
 
+### Pinned BCP-47 (adapter-only)
+
+Same domain keys as NLLB. Prompt codes are ISO 639-1 except Chinese script tags. Implement the map in `backend/app/providers/translation/ollama.py`.
+
+| Domain (BCP-47) | Prompt code |
+| --- | --- |
+| `zh-Hans` | `zh-Hans` |
+| `zh-Hant` | `zh-Hant` |
+| `zh-CN`, `zh-SG` | `zh-Hans` |
+| `zh-TW`, `zh-HK` | `zh-Hant` |
+| `bn-BD` | `bn` |
+| `ms-MY` | `ms` |
+| `nb-NO` | `nb` |
+| other NLLB keys (e.g. `vi-VN`, `en-US`) | ISO 639-1 primary subtag (`vi`, `en`, …) |
+
+### Pinned input guard
+
+Fail when `len(text) > 8000` with `ErrorType.TRANSLATION_FAILED` and message `"text exceeds model context"`. Do **not** estimate tokens with `len(text) // 4`.
+
 ### Prompt / template contract
 
 - Prefer TranslateGemma’s documented language-code / chat-template fields when using Ollama’s chat API.
@@ -116,9 +134,10 @@ Production client performs POST `{base}/api/chat` with `stream: false`, parses J
 
 ### Compose / ops
 
-- Default Compose unchanged (`fake`/`nllb` paths).
+- Default Compose **boot** provider stays `fake` (`docker-compose.yml`: `TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-fake}` on **api** and **worker**). Do **not** add an `ollama` Compose service.
+- Passthrough of `OLLAMA_BASE_URL`, `OLLAMA_TRANSLATION_MODEL`, and `OLLAMA_HTTP_TIMEOUT_SECONDS` on **api + worker** is in scope (capabilities and the worker share the same adapter config). Values come from `.env`; Compose must not hard-code `TRANSLATION_PROVIDER=ollama`.
 - Document “bring your own Ollama” on host: `ollama pull translategemma:4b` (or `:12b`), set env, restart **worker** (and API if capabilities list languages from provider).
-- Optional follow-up (out of this PR): Compose profile/service `ollama` — not required for MVP of the adapter.
+- Optional follow-up (out of this adapter): Compose profile/service `ollama` — not required for MVP of the adapter (ADR 0011 item 7).
 - When `TRANSLATION_PROVIDER=ollama`, worker must **not** import/load `TransformersNllbEngine` (factory already lazy-imports NLLB only on `nllb` branch — keep it that way).
 - Remind operators: raise `RQ_JOB_TIMEOUT_SECONDS` if long chapters + slow CPU; per-request `OLLAMA_HTTP_TIMEOUT_SECONDS` is separate.
 
@@ -152,9 +171,9 @@ Production client performs POST `{base}/api/chat` with `stream: false`, parses J
 ### Docs
 
 - [ ] `.env.example` — commented block for Ollama
-- [ ] `docs/ai/provider-development.md` — already mentions Ollama first optional; add implementer pointer if needed
+- [x] `docs/ai/provider-development.md` — already mentions Ollama first optional; add implementer pointer if needed
 - [ ] README troubleshooting — Ollama not running / model not pulled / timeout
-- [ ] Link this plan from issue #12 comment when PR opens
+- [x] Link this plan from issue #12 comment when PR opens
 
 ## Suggested implementation order
 

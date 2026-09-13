@@ -64,6 +64,8 @@ Document names in `.env.example` only. No API keys for Ollama local. If a future
 - README troubleshooting — Ollama not reachable, model not pulled, timeout under load.
 - This ADR: **Accepted** (owner Teemo, 2026-09-10). Adapter implementation remains a later PR; this docs change does not ship `ollama.py`.
 
+**Note (2026-09-13):** The M14 plan is on main (`docs/ai/plans/m14-ollama-translation-adapter.md`). Compose **boot** default stays `TRANSLATION_PROVIDER=fake` (M5/M13). NLLB is the real-translation MVP default when operators opt in (`TRANSLATION_PROVIDER=nllb`). That clarification does not change M5 or the Decision body above. Item 7 (OpenAI adapter, Compose `ollama` service) remains follow-up.
+
 ## Consequences
 
 - Operators can opt into literary-quality local translation without paying OpenAI or sending story text to a third-party LLM API.

@@ -556,7 +556,7 @@ Justified by requirements Phase 2–4 (§37), ADR 0008/0009, ADR 0003.
 - GitHub Actions CI as a blocking milestone
 - NLLB weights in git or the API image
 - `CANCELLED`, multi-tenant ownership
-- LLM translation providers
+- LLM translation as Compose/MVP default (optional Ollama/TranslateGemma is ADR 0011 / docs/ai/plans/m14-ollama-translation-adapter.md; OpenAI/Gemini remain later).
 
 ---
 
