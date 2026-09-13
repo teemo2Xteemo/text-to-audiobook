@@ -51,6 +51,25 @@ Needs network on first worker start, CPU, and about 16 GB RAM. Distilled NLLB we
 3. In the UI, **upload** [`backend/tests/fixtures/sample-zh-CN.txt`](backend/tests/fixtures/sample-zh-CN.txt) (or paste the same text). Select source **zh-CN** (or Auto) and target **vi-VN** from the capabilities dropdowns, then a matching voice. Generate and wait until the job is `completed`; play the MP3.
 4. Second pair (same UI, still from capabilities — not a hard-coded pair): upload or paste [`backend/tests/fixtures/sample-en-US.txt`](backend/tests/fixtures/sample-en-US.txt), select source **en-US** and target **vi-VN**, generate, and play.
 
+### Optional literary translation (Ollama + TranslateGemma)
+
+NLLB stays the Compose/MVP default. For local LLM translation ([ADR 0011](docs/adr/0011-ollama-translategemma-optional-translation.md)), run Ollama **on the host** (do not co-load NLLB in the same worker):
+
+```bash
+ollama pull translategemma:4b
+```
+
+In `.env`:
+
+```bash
+TRANSLATION_PROVIDER=ollama
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_TRANSLATION_MODEL=translategemma:4b
+OLLAMA_HTTP_TIMEOUT_SECONDS=120
+```
+
+Restart **api and worker** after changing these (`GET /api/capabilities` is built from the translation provider). On Linux/WSL, if `host.docker.internal` does not resolve from the container, use `http://172.17.0.1:11434` or the host LAN IP. You can also set Compose `extra_hosts: ["host.docker.internal:host-gateway"]` on api/worker; it is optional. Leave `TTS_PROVIDER=edge` or `fake`. Raise `RQ_JOB_TIMEOUT_SECONDS` if long chapters plus a slow CPU model exceed the worker soft timeout (`OLLAMA_HTTP_TIMEOUT_SECONDS` is per HTTP call, not the RQ limit).
+
 There is **no Retry or Cancel button** in the SPA. To retry a `failed` job (same `job_id`, keeps checkpoints):
 
 ```bash
@@ -114,3 +133,13 @@ RQ **soft timeout** (`JobTimeoutException` / `RQ_JOB_TIMEOUT_SECONDS`) runs `on_
 ### `STORAGE_PATH` must be a real directory
 
 Do not point `STORAGE_PATH` at a symlink. The entrypoint only `lchown`s a symlink itself (it does not follow the target, so contents may stay root-owned and uid 1000 cannot write). Compose’s `./storage` bind-mount is a real directory.
+
+### Ollama translation (`TRANSLATION_PROVIDER=ollama`)
+
+**Ollama is not running / connection refused.** The adapter talks HTTP to `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`). From Compose, `127.0.0.1` is the **container**, not the host. Point at the host (`host.docker.internal`, `172.17.0.1`, or the host LAN IP) and confirm `ollama serve` is listening. Jobs should fail with typed `TRANSLATION_FAILED` or `TIMEOUT`, not stay non-terminal.
+
+**Model not pulled.** `ollama pull translategemma:4b` (or `:12b`). A missing tag typically returns HTTP 4xx/5xx mapped to `TRANSLATION_FAILED`.
+
+**Timeout under load.** `OLLAMA_HTTP_TIMEOUT_SECONDS` is the per-request HTTP timeout (default 120). RQ still kills the worker function at `RQ_JOB_TIMEOUT_SECONDS`. Raise the RQ value for long chapters on CPU; raising only the HTTP timeout does not keep the job alive past RQ.
+
+**Do not co-load NLLB.** When `TRANSLATION_PROVIDER=ollama`, the factory does not construct the NLLB engine. Do not also set the worker to load NLLB weights in the same process.

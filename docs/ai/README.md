@@ -25,7 +25,7 @@ The product is a **multilingual story → audiobook** pipeline. Requirements: [`
 
 ## Plans
 
-- [M14 Ollama TranslateGemma translation adapter](plans/m14-ollama-translation-adapter.md) — optional post-M13 provider (ADR 0011 / issue #12); docs-only until implemented
+- [M14 Ollama TranslateGemma translation adapter](plans/m14-ollama-translation-adapter.md) — optional post-M13 provider (ADR 0011 / issue #12)
 
 ## What this repo is today
 
