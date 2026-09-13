@@ -117,7 +117,7 @@ def build_narration_processor() -> NarrationProcessor:
 
 
 def build_audio_processor(settings: Settings) -> AudioProcessor:
-    # Fake TTS emits non-media bytes; Edge (and later real TTS) needs FFmpeg normalize/merge.
+    # Fake TTS already emits a tiny valid MP3; skip FFmpeg (slim API image has none).
     if settings.tts_provider.strip().lower() == "fake":
         return FakeAudioProcessor()
     return FFmpegAudioProcessor()
