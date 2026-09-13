@@ -39,6 +39,8 @@ Constraints that still apply:
 
 Document names in `.env.example` only. No API keys for Ollama local. If a future remote Ollama needs auth headers, add an optional env later — do not invent secrets in this ADR.
 
+Compose boot default stays `fake` (M5). NLLB is the real-translation MVP default when operators opt in via env; do not change M5.
+
 ### Adapter shape
 
 - Path: `backend/app/providers/translation/ollama.py` (name may vary; keep under `providers/translation/`).
@@ -62,7 +64,7 @@ Document names in `.env.example` only. No API keys for Ollama local. If a future
 - `.env.example` — new names only.
 - `docs/ai/provider-development.md` — list Ollama/TranslateGemma as the first optional LLM path; keep LibreTranslate / OpenAI / Gemini as later.
 - README troubleshooting — Ollama not reachable, model not pulled, timeout under load.
-- This ADR: **Accepted** (owner Teemo, 2026-09-10). Adapter implementation remains a later PR; this docs change does not ship `ollama.py`.
+- This ADR: **Accepted** (owner Teemo, 2026-09-10). M14 adapter implementation has landed (`backend/app/providers/translation/ollama.py`). Checklist item 7 (OpenAI adapter, Compose `ollama` service) remains a follow-up.
 
 ## Consequences
 
@@ -91,7 +93,7 @@ Document names in `.env.example` only. No API keys for Ollama local. If a future
 
 ## Implementation checklist (for planning)
 
-Ordered so Cursor can turn this **Accepted** ADR into a later adapter PR. Keep this checklist; do **not** implement `ollama.py` in the same change as this docs-only ADR.
+Ordered so Cursor can turn this **Accepted** ADR into an adapter PR. Items **2–6** landed in the M14 adapter change. Item **7** remains a follow-up.
 
 1. **ADR land** — **done (Accepted).** File `docs/adr/0011-ollama-translategemma-optional-translation.md`; row in `docs/adr/README.md`; align issue #12.
 2. **Settings + factory** — `OLLAMA_BASE_URL`, `OLLAMA_TRANSLATION_MODEL`; branch in DI when `TRANSLATION_PROVIDER=ollama`; ensure NLLB model is not constructed in that branch.
