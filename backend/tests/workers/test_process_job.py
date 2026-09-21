@@ -17,7 +17,7 @@ from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.rq_queue import RQ_PROCESS_JOB
 from app.providers.translation.fake import FakeTranslationProvider
-from app.providers.tts.fake import FAKE_AUDIO_BYTES, FakeTTSProvider
+from app.providers.tts.fake import FakeTTSProvider
 from app.workers.runner import boot, process_job
 from tests.fakes import InMemoryJobStore
 
@@ -72,7 +72,7 @@ def test_process_job_completes_with_fakes(tmp_path: Path, monkeypatch: pytest.Mo
     assert done.status is JobStatus.COMPLETED
     output = tmp_path / "jobs" / job.id / "output.mp3"
     assert output.is_file()
-    assert output.read_bytes() == FAKE_AUDIO_BYTES
+    assert output.read_bytes() == b"FAKEAUDIO"
 
 
 def test_process_job_completed_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

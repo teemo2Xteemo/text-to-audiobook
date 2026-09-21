@@ -1,20 +1,9 @@
 import asyncio
-import zlib
-from base64 import b64decode
 from collections.abc import Sequence
 from os import getenv
 from pathlib import Path
 
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
-
-# 1s silent MPEG-1 Layer III (32 kbps, 44.1 kHz, mono) so the SPA player can decode fake jobs.
-FAKE_AUDIO_BYTES = zlib.decompress(
-    b64decode(
-        "eNr7/1vgCAPzAQbGJQwMDAoMDCYNDAwsPo6+rsZ6hgYGoRQChEH/fwsd0WxGsyeUagDZIoEj"
-        "wTSzCNVDtcx08tByZvp46AK9YuganTx0ddRDox4a9dCoh0Y9NOqhUQ+NemjUQ6MeGvVQKPUB"
-        "jT2EbNGohwa3hwBTRygn"
-    )
-)
 
 # Fixture voices for offline Compose — fake IDs only, never Edge *Neural names.
 _DEFAULT_VOICES: tuple[Voice, ...] = (
@@ -54,7 +43,7 @@ class FakeTTSProvider:
         self._count += 1
         self._output_dir.mkdir(parents=True, exist_ok=True)
         path = self._output_dir / f"synth-{self._count:03d}.bin"
-        path.write_bytes(FAKE_AUDIO_BYTES)
+        path.write_bytes(b"FAKEAUDIO")
         return AudioArtifact(path=path)
 
 
