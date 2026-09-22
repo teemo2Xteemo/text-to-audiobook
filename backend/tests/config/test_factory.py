@@ -1,4 +1,5 @@
 import ast
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from app.config.factory import (
     build_orchestrator,
     build_translation_provider,
     build_tts_provider,
+    cache_identity_from_settings,
 )
 from app.config.settings import Settings
 from app.domain.retry import RetryPolicy
@@ -23,6 +25,7 @@ from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.providers.language_detection.cpu import CpuLanguageDetector
 from app.providers.translation.fake import FakeTranslationProvider
 from app.providers.translation.nllb import NllbTranslationProvider
+from app.providers.translation.ollama import OllamaTranslationProvider
 from app.providers.tts.edge import EdgeTTSProvider
 from app.providers.tts.fake import FakeTTSProvider
 
@@ -160,6 +163,56 @@ def test_factory_builds_nllb_provider_without_loading_weights(tmp_path: Path) ->
     assert "vi-VN" in languages
     assert "ja-JP" in languages
     assert "en-US" in languages
+
+
+def test_factory_builds_ollama_provider_without_network(tmp_path: Path) -> None:
+    sys.modules.pop("app.providers.translation.nllb", None)
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="ollama",
+        ollama_base_url="http://127.0.0.1:11434",
+        ollama_translation_model="translategemma:4b",
+        ollama_http_timeout_seconds=120.0,
+    )
+    provider = build_translation_provider(settings)
+    assert isinstance(provider, OllamaTranslationProvider)
+    languages = set(provider.supported_languages())
+    assert "zh-CN" in languages
+    assert "vi-VN" in languages
+    assert "ja-JP" in languages
+    assert "en-US" in languages
+    assert "app.providers.translation.nllb" not in sys.modules
+
+
+def test_cache_identity_from_settings_uses_provider_model(tmp_path: Path) -> None:
+    nllb = cache_identity_from_settings(
+        Settings(
+            _env_file=None,
+            storage_path=tmp_path,
+            translation_provider="nllb",
+            nllb_model_id="facebook/nllb-200-distilled-1.3B",
+        )
+    )
+    assert nllb.translation_provider == "nllb"
+    assert nllb.translation_model == "facebook/nllb-200-distilled-1.3B"
+
+    ollama = cache_identity_from_settings(
+        Settings(
+            _env_file=None,
+            storage_path=tmp_path,
+            translation_provider="ollama",
+            ollama_translation_model="translategemma:12b",
+        )
+    )
+    assert ollama.translation_provider == "ollama"
+    assert ollama.translation_model == "translategemma:12b"
+
+    fake = cache_identity_from_settings(
+        Settings(_env_file=None, storage_path=tmp_path, translation_provider="fake")
+    )
+    assert fake.translation_provider == "fake"
+    assert fake.translation_model == "fake"
 
 
 def test_factory_builds_cpu_language_detector(tmp_path: Path) -> None:
