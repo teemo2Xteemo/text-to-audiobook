@@ -21,6 +21,7 @@ REQUIRED_ENV_NAMES = (
     "LANGUAGE_DETECT_MIN_CONFIDENCE",
     "RETRY_MAX_ATTEMPTS",
     "RETRY_BACKOFF_SECONDS",
+    "MAX_RECOVERY_ATTEMPTS",
     "RQ_JOB_TIMEOUT_SECONDS",
     "VITE_API_BASE_URL",
     "VITE_DEFAULT_SOURCE_LANGUAGE",
@@ -57,3 +58,8 @@ def test_compose_is_cpu_only_with_worker_redis_healthcheck() -> None:
     assert body.count("OLLAMA_HTTP_TIMEOUT_SECONDS: ${OLLAMA_HTTP_TIMEOUT_SECONDS") == 2
     assert body.count("host.docker.internal:host-gateway") == 2
     assert body.count("OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}") == 2
+
+
+def test_compose_worker_wires_max_recovery_attempts() -> None:
+    body = _compose_without_comments(COMPOSE.read_text(encoding="utf-8"))
+    assert body.count("MAX_RECOVERY_ATTEMPTS: ${MAX_RECOVERY_ATTEMPTS:-3}") == 1

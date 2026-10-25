@@ -1009,6 +1009,17 @@ def test_pipeline_rejects_srt_with_only_timecodes_and_no_dialogue(tmp_path: Path
     assert result.error_type is ErrorType.INVALID_INPUT
 
 
+def test_webvtt_with_dot_timecodes_is_stripped() -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    vtt = (
+        "WEBVTT\n\n"
+        "00:00:01.000 --> 00:00:02.500\nHello <i>there</i>.\n\n"
+        "00:00:03.000 --> 00:00:04.000\nSecond line.\n"
+    )
+    assert strip_srt(vtt) == "Hello there.\n\nSecond line."
+
+
 def test_plain_txt_with_embedded_timecode_and_chapter_numbers_is_not_stripped(
     tmp_path: Path,
 ) -> None:

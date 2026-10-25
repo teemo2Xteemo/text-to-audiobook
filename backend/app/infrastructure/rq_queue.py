@@ -28,8 +28,13 @@ class RQJobQueue:
         fetch_job = getattr(self._queue, "fetch_job", None)
         if callable(fetch_job):
             existing = fetch_job(rq_job_id)
-            if existing is not None and existing.get_status() in {"queued", "started"}:
-                return
+            if existing is not None:
+                if existing.get_status() == "queued":
+                    return
+                # A `started` entry may be stale after a hard worker crash. The per-job
+                # workspace flock already prevents a live duplicate from running, so drop
+                # the old entry (and its registry membership) and enqueue a fresh one.
+                existing.delete()
         self._queue.enqueue(
             RQ_PROCESS_JOB,
             job_id,

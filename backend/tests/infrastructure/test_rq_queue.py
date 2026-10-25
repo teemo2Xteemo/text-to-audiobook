@@ -63,6 +63,9 @@ def test_enqueue_uses_deterministic_job_id_and_skips_when_already_queued() -> No
             del refresh
             return self._status
 
+        def delete(self) -> None:
+            return None
+
     class _DedupQueue(_CaptureQueue):
         def __init__(self) -> None:
             super().__init__()
@@ -89,3 +92,35 @@ def test_enqueue_uses_deterministic_job_id_and_skips_when_already_queued() -> No
     queue.existing[f"process-{job_id}"] = _ExistingJob("failed")
     asyncio.run(rq_queue.enqueue(job_id))
     assert queue.calls == 2
+
+
+def test_enqueue_replaces_stale_started_entry_after_crash() -> None:
+    job_id = "11111111-1111-1111-1111-111111111111"
+    rq_id = f"process-{job_id}"
+    deleted: list[str] = []
+
+    class _StartedJob:
+        def get_status(self, refresh: bool = True) -> str:
+            del refresh
+            return "started"
+
+        def delete(self) -> None:
+            deleted.append(rq_id)
+
+    class _CrashedQueue(_CaptureQueue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def fetch_job(self, rq_job_id: str) -> _StartedJob | None:
+            return _StartedJob() if rq_job_id == rq_id else None
+
+        def enqueue(self, *args: object, **kwargs: object) -> None:
+            self.calls += 1
+            super().enqueue(*args, **kwargs)
+
+    queue = _CrashedQueue()
+    asyncio.run(RQJobQueue(queue, job_timeout=1800).enqueue(job_id))  # type: ignore[arg-type]
+    assert deleted == [rq_id]
+    assert queue.calls == 1
+    assert queue.kwargs["job_id"] == rq_id

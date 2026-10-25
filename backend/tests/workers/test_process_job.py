@@ -475,3 +475,36 @@ def test_process_job_skips_when_workspace_lock_is_held(
         process_job(job.id)
 
     assert ran == []
+
+
+def test_process_job_rereads_job_after_acquiring_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    job = _queued_job("88888888-8888-8888-8888-888888888888", provider="fake", model="fake")
+    _persist_job(tmp_path, job, "Finished elsewhere.")
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    built: list[str] = []
+    real_get = FilesystemJobStorage.get_job
+    calls = 0
+
+    async def _get_then_complete(self: FilesystemJobStorage, job_id: str) -> Job | None:
+        nonlocal calls
+        loaded = await real_get(self, job_id)
+        calls += 1
+        if calls == 1:
+            await self.save_job(replace(job, status=JobStatus.COMPLETED))
+        return loaded
+
+    def _unexpected_build(effective: Settings) -> PipelineOrchestrator:
+        del effective
+        built.append("built")
+        raise AssertionError("orchestrator must not be built for a job completed before lock")
+
+    monkeypatch.setattr(FilesystemJobStorage, "get_job", _get_then_complete)
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", _unexpected_build)
+
+    process_job(job.id)
+    assert built == []

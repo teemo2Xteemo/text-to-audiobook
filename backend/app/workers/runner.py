@@ -63,9 +63,22 @@ async def _process_job_async(job_id: str) -> None:
             logger.info("worker_job_locked", extra={"job_id": job_id, "chunk_id": None})
             return
         try:
+            # Re-read under the lock: another worker may have finished this job since
+            # the pre-lock snapshot above was taken.
+            fresh = await filesystem.get_job(job_id)
+            if fresh is None or is_terminal(fresh.status):
+                logger.info(
+                    "worker_job_skipped",
+                    extra={
+                        "job_id": job_id,
+                        "chunk_id": None,
+                        "status": fresh.status.value if fresh is not None else "missing",
+                    },
+                )
+                return
             text = await filesystem.read_source(job_id)
-            orchestrator = build_orchestrator(settings_for_translation_pin(settings, job))
-            await orchestrator.run(job, text, workspace=workspace)
+            orchestrator = build_orchestrator(settings_for_translation_pin(settings, fresh))
+            await orchestrator.run(fresh, text, workspace=workspace)
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
