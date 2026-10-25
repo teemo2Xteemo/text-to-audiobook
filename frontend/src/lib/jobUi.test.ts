@@ -3,10 +3,15 @@ import { describe, expect, it } from "vitest";
 import type { Voice } from "../api/types";
 import {
   canGenerate,
+  computeProgressPercent,
+  estimateTextMetrics,
+  isSrtContent,
   playerSrc,
   progressCopy,
   resolveSourceDefault,
   resolveTargetDefault,
+  stepVisualState,
+  stripSrtToText,
   voicesForTarget,
 } from "./jobUi";
 
@@ -78,5 +83,60 @@ describe("jobUi", () => {
     expect(canGenerate({ ...ready, speed: 0.49 })).toBe(false);
     expect(canGenerate({ ...ready, speed: 2.01 })).toBe(false);
     expect(canGenerate({ ...ready, speed: Number.NaN })).toBe(false);
+  });
+
+  it("detects and strips SRT subtitle blocks into clean narrative text", () => {
+    const sampleSrt = [
+      "1",
+      "00:00:01,000 --> 00:00:04,000",
+      "<i>Hello world,</i>",
+      "this is line one.",
+      "",
+      "2",
+      "00:00:05,000 --> 00:00:08,500",
+      "Second subtitle block.",
+    ].join("\n");
+
+    expect(isSrtContent(sampleSrt)).toBe(true);
+    expect(isSrtContent("Plain story paragraph without timecodes.")).toBe(false);
+    expect(stripSrtToText(sampleSrt)).toBe(
+      "Hello world, this is line one.\n\nSecond subtitle block.",
+    );
+  });
+
+  it("does not detect or alter text quoting timecodes without SRT document structure", () => {
+    const textWithQuote =
+      "Chapter 1\nThe detective noticed 00:00:01,000 --> 00:00:03,000 on the tape.\nCase closed.";
+    expect(isSrtContent(textWithQuote)).toBe(false);
+    expect(stripSrtToText(textWithQuote)).toBe(textWithQuote);
+  });
+
+  it("strips a two-cue SRT to the same output as backend strip_srt", () => {
+    const srt =
+      "1\n00:00:01,000 --> 00:00:03,000\nHello world.\n\n2\n00:00:04,000 --> 00:00:06,000\nSecond line.";
+    expect(isSrtContent(srt)).toBe(true);
+    expect(stripSrtToText(srt)).toBe("Hello world.\n\nSecond line.");
+  });
+
+  it("returns empty string when SRT has only timestamps and indices without dialogue", () => {
+    const metadataOnlySrt =
+      "1\n00:00:01,000 --> 00:00:03,000\n\n2\n00:00:04,000 --> 00:00:06,000\n";
+    expect(isSrtContent(metadataOnlySrt)).toBe(true);
+    expect(stripSrtToText(metadataOnlySrt)).toBe("");
+  });
+
+  it("computes text metrics and pipeline progress percentage", () => {
+    const metrics = estimateTextMetrics("One two three");
+    expect(metrics.chars).toBe(13);
+    expect(metrics.words).toBe(3);
+    expect(metrics.estimatedChunks).toBe(1);
+    expect(metrics.isSrt).toBe(false);
+
+    expect(computeProgressPercent("queued", 0, 0)).toBe(6);
+    expect(computeProgressPercent("translating", 5, 10)).toBe(35);
+    expect(computeProgressPercent("completed", 10, 10)).toBe(100);
+    expect(stepVisualState("translating", "translating", "queued")).toBe("done");
+    expect(stepVisualState("translating", "translating", "translating")).toBe("active");
+    expect(stepVisualState("translating", "translating", "merging")).toBe("upcoming");
   });
 });
