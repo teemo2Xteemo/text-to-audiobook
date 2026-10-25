@@ -46,8 +46,7 @@ class CheckpointEntry:
 
 
 class CheckpointStore:
-    def __init__(self, workspace: Path, *, storage: CheckpointStorage) -> None:
-        del workspace
+    def __init__(self, *, storage: CheckpointStorage) -> None:
         self._fs: CheckpointStorage = storage
         self._entries: list[CheckpointEntry] | None = None
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 from multiprocessing import Process
 
@@ -52,10 +53,21 @@ async def _process_job_async(job_id: str) -> None:
         )
         return
 
-    text = await filesystem.read_source(job_id)
     workspace = settings.storage_path / "jobs" / job_id
-    orchestrator = build_orchestrator(settings_for_translation_pin(settings, job))
-    await orchestrator.run(job, text, workspace=workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    lock_path = workspace / ".lock"
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            logger.info("worker_job_locked", extra={"job_id": job_id, "chunk_id": None})
+            return
+        try:
+            text = await filesystem.read_source(job_id)
+            orchestrator = build_orchestrator(settings_for_translation_pin(settings, job))
+            await orchestrator.run(job, text, workspace=workspace)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 async def _recover_async(settings: Settings) -> list[str]:
@@ -75,6 +87,9 @@ def _run_worker(settings: Settings) -> None:
 
 
 def _listen(settings: Settings) -> None:
+    # Note: on Python >= 3.14, Linux defaults multiprocessing to 'forkserver',
+    # so Settings must remain picklable. For production multi-worker supervision,
+    # scaling independent containers (`docker compose up --scale worker=N`) is preferred.
     children: list[Process] = []
     for _ in range(max(0, settings.worker_concurrency - 1)):
         proc = Process(target=_run_worker, args=(settings,), daemon=True)

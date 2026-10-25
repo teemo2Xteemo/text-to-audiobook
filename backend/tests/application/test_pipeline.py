@@ -189,7 +189,7 @@ def _run(
 
 def _seed_completed_chunks(workspace: Path, chunks: list, count: int, *, ext: str = "mp3") -> None:
     workspace.mkdir(parents=True, exist_ok=True)
-    store = CheckpointStore(workspace, storage=CheckpointFilesystem(workspace))
+    store = CheckpointStore(storage=CheckpointFilesystem(workspace))
     for chunk in chunks[:count]:
         translated = workspace / "chunks" / f"{chunk.id}.translated.txt"
         translated.parent.mkdir(parents=True, exist_ok=True)
@@ -324,7 +324,7 @@ def test_checkpoint_skips_completed_translate_chunk(tmp_path: Path) -> None:
     translated = workspace / "chunks" / f"{chunks[0].id}.translated.txt"
     translated.parent.mkdir(parents=True)
     translated.write_text("already-translated", encoding="utf-8")
-    CheckpointStore(workspace, storage=CheckpointFilesystem(workspace)).record(
+    CheckpointStore(storage=CheckpointFilesystem(workspace)).record(
         chunks[0].id, STAGE_TRANSLATED, translated
     )
 
@@ -347,7 +347,7 @@ def test_checkpoint_does_not_skip_empty_translate_artifact(tmp_path: Path) -> No
     translated = workspace / "chunks" / f"{chunks[0].id}.translated.txt"
     translated.parent.mkdir(parents=True)
     translated.write_bytes(b"")
-    CheckpointStore(workspace, storage=CheckpointFilesystem(workspace)).record(
+    CheckpointStore(storage=CheckpointFilesystem(workspace)).record(
         chunks[0].id, STAGE_TRANSLATED, translated
     )
     assert translated.stat().st_size == 0
@@ -959,7 +959,7 @@ def test_checkpoint_store_caches_entries_in_memory_and_preserves_state_on_save_f
         def resolve(self, artifact_path: str) -> Path:
             return real_fs.resolve(artifact_path)
 
-    store = CheckpointStore(workspace, storage=_CountingStorage())
+    store = CheckpointStore(storage=_CountingStorage())
     a1 = workspace / "chunks" / "chunk-001.translated.txt"
     a1.parent.mkdir(parents=True)
     a1.write_text("one", encoding="utf-8")
@@ -1007,3 +1007,27 @@ def test_pipeline_rejects_srt_with_only_timecodes_and_no_dialogue(tmp_path: Path
     result = _run(orchestrator, job, workspace, text=srt_only_meta)
     assert result.status is JobStatus.FAILED
     assert result.error_type is ErrorType.INVALID_INPUT
+
+
+def test_plain_txt_with_embedded_timecode_and_chapter_numbers_is_not_stripped(
+    tmp_path: Path,
+) -> None:
+    del tmp_path
+    from app.application.pipeline.parse import parse_source
+
+    story = "1\nChapter One\n\n00:00:01,000 --> 00:00:02,000\nLine two of the paragraph."
+    normalized, resolved = asyncio.run(parse_source(story, "en-US", FakeLanguageDetector("en-US")))
+    assert resolved == "en-US"
+    assert normalized == story
+
+
+def test_pipeline_resets_recovery_attempts_when_chunk_progress_advances(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    job = replace(_job(), recovery_attempts=2)
+    orchestrator, workspace, _, _, _, _, _, store = _orchestrator(tmp_path, job=job, max_chars=20)
+    result = _run(orchestrator, job, workspace, text=FOUR_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+    assert result.recovery_attempts == 0
+    saved = asyncio.run(store.get(job.id))
+    assert saved is not None and saved.recovery_attempts == 0

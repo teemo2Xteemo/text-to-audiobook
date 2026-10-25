@@ -75,9 +75,7 @@ class PipelineOrchestrator:
         if is_terminal(job.status):
             return job
         workspace.mkdir(parents=True, exist_ok=True)
-        checkpoints = CheckpointStore(
-            workspace, storage=self._checkpoint_storage_factory(workspace)
-        )
+        checkpoints = CheckpointStore(storage=self._checkpoint_storage_factory(workspace))
         if job.status is not JobStatus.QUEUED:
             logger.info(
                 "pipeline_resumed",
@@ -339,7 +337,12 @@ class PipelineOrchestrator:
         active_status: JobStatus,
     ) -> Job:
         if job.status is active_status:
-            job = replace(job, chunk_current=max(job.chunk_current, chunk.index))
+            advanced = chunk.index > job.chunk_current
+            job = replace(
+                job,
+                chunk_current=max(job.chunk_current, chunk.index),
+                recovery_attempts=0 if advanced else job.recovery_attempts,
+            )
             await self._jobs.save(job)
         logger.info(
             "pipeline_chunk_done",

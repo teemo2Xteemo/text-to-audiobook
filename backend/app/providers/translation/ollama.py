@@ -134,7 +134,7 @@ class OllamaTranslationProvider:
             raise
         except Exception as exc:
             raise _map_ollama_error(exc) from exc
-        stripped = _strip_translation(raw)
+        stripped = _strip_translation(raw, source_text=text)
         if not stripped:
             raise DomainError(ErrorType.TRANSLATION_FAILED, "translation failed")
         if stripped != raw.strip():
@@ -225,13 +225,19 @@ def _translation_prompt(
     )
 
 
-def _strip_translation(text: str) -> str:
+def _strip_translation(text: str, *, source_text: str = "") -> str:
     stripped = _unwrap_fences(text.strip())
+    sanitized_source = source_text.replace(_SOURCE_BEGIN, "").replace(_SOURCE_END, "").strip()
     if _SOURCE_BEGIN in stripped and _SOURCE_END in stripped:
         start = stripped.find(_SOURCE_BEGIN) + len(_SOURCE_BEGIN)
         end = stripped.rfind(_SOURCE_END)
         if start <= end:
-            stripped = stripped[start:end].strip()
+            inside = _unwrap_fences(stripped[start:end].strip())
+            after = _unwrap_fences(stripped[end + len(_SOURCE_END) :].strip())
+            if sanitized_source and inside == sanitized_source:
+                stripped = after
+            else:
+                stripped = inside
         else:
             stripped = stripped.replace(_SOURCE_BEGIN, "").replace(_SOURCE_END, "").strip()
     elif _SOURCE_BEGIN in stripped:

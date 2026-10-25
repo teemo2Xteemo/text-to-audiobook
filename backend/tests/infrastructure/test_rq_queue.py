@@ -50,3 +50,42 @@ def test_enqueue_runs_in_worker_thread() -> None:
     asyncio.run(RQJobQueue(queue, job_timeout=1800).enqueue("11111111-1111-1111-1111-111111111111"))  # type: ignore[arg-type]
     assert len(seen) == 1
     assert seen[0] is not main_thread
+
+
+def test_enqueue_uses_deterministic_job_id_and_skips_when_already_queued() -> None:
+    job_id = "11111111-1111-1111-1111-111111111111"
+
+    class _ExistingJob:
+        def __init__(self, status: str) -> None:
+            self._status = status
+
+        def get_status(self, refresh: bool = True) -> str:
+            del refresh
+            return self._status
+
+    class _DedupQueue(_CaptureQueue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+            self.existing: dict[str, _ExistingJob] = {}
+
+        def fetch_job(self, rq_job_id: str) -> _ExistingJob | None:
+            return self.existing.get(rq_job_id)
+
+        def enqueue(self, *args: object, **kwargs: object) -> None:
+            self.calls += 1
+            super().enqueue(*args, **kwargs)
+            rq_id = str(kwargs["job_id"])
+            self.existing[rq_id] = _ExistingJob("queued")
+
+    queue = _DedupQueue()
+    rq_queue = RQJobQueue(queue, job_timeout=1800)  # type: ignore[arg-type]
+    asyncio.run(rq_queue.enqueue(job_id))
+    asyncio.run(rq_queue.enqueue(job_id))
+    assert queue.calls == 1
+    assert queue.kwargs["job_id"] == f"process-{job_id}"
+
+    # When the previous RQ job is failed/finished, re-enqueueing is allowed (e.g. retry)
+    queue.existing[f"process-{job_id}"] = _ExistingJob("failed")
+    asyncio.run(rq_queue.enqueue(job_id))
+    assert queue.calls == 2

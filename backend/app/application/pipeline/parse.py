@@ -12,10 +12,35 @@ _SRT_INDEX_RE = re.compile(r"^\s*\d+\s*$")
 _SRT_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
 
 
+def _is_srt_cue_block(block: str) -> bool:
+    lines = [line.strip() for line in block.split("\n") if line.strip()]
+    if not lines:
+        return False
+    if _SRT_TIMECODE_RE.match(lines[0]):
+        return True
+    return len(lines) >= 2 and bool(
+        _SRT_INDEX_RE.match(lines[0]) and _SRT_TIMECODE_RE.match(lines[1])
+    )
+
+
+def _is_srt_document(blocks: list[str]) -> bool:
+    non_empty = [block.strip() for block in blocks if block.strip()]
+    if not non_empty:
+        return False
+    first = non_empty[0].lstrip("\ufeff")
+    first_lines = [line.strip() for line in first.split("\n") if line.strip()]
+    if first_lines and first_lines[0].upper().startswith("WEBVTT"):
+        remaining = "\n".join(first_lines[1:])
+        if remaining and _is_srt_cue_block(remaining):
+            return True
+        return len(non_empty) >= 2 and _is_srt_cue_block(non_empty[1])
+    return _is_srt_cue_block(first)
+
+
 def strip_srt(text: str) -> str:
-    if not _SRT_TIMECODE_RE.search(text):
-        return text
     blocks = re.split(r"\n{2,}", text)
+    if not _is_srt_document(blocks):
+        return text
     cleaned_blocks: list[str] = []
     for block in blocks:
         lines: list[str] = []

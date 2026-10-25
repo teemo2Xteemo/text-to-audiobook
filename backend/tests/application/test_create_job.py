@@ -378,6 +378,23 @@ def test_recover_increments_recovery_attempts_and_retry_resets_it(tmp_path: Path
     assert len(queue.job_ids) == 3
 
 
+def test_recover_queued_job_does_not_burn_recovery_attempts_or_fail(tmp_path: Path) -> None:
+    filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path, max_recovery_attempts=2)
+    queued = _fs_job("11111111-1111-1111-1111-111111111111", JobStatus.QUEUED)
+    asyncio.run(filesystem.save_job(queued))
+
+    for _ in range(4):
+        assert asyncio.run(service.recover_in_progress()) == [queued.id]
+
+    reloaded = asyncio.run(filesystem.get_job(queued.id))
+    assert reloaded is not None
+    assert reloaded.status is JobStatus.QUEUED
+    assert reloaded.recovery_attempts == 0
+    assert cache.jobs[queued.id].status is JobStatus.QUEUED
+    assert cache.jobs[queued.id].recovery_attempts == 0
+    assert len(queue.job_ids) == 4
+
+
 def test_mark_failed_from_non_terminal_updates_filesystem_and_cache(tmp_path: Path) -> None:
     filesystem, cache, store, queue, service = _fs_retry_service(tmp_path)
     running = _fs_job("66666666-6666-6666-6666-666666666666", JobStatus.GENERATING_AUDIO)

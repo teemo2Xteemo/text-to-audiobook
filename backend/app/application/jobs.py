@@ -125,9 +125,6 @@ class JobService:
             status=JobStatus.FAILED,
             error_type=error_type,
             message=message,
-            translation_provider=job.translation_provider,
-            translation_model=job.translation_model,
-            recovery_attempts=job.recovery_attempts,
         )
         await self._jobs.save(job)
         logger.info(
@@ -160,8 +157,6 @@ class JobService:
             message=None,
             chunk_current=0,
             chunk_total=0,
-            translation_provider=job.translation_provider,
-            translation_model=job.translation_model,
             recovery_attempts=0,
         )
         await self._jobs.save(job)
@@ -196,15 +191,17 @@ class JobService:
                 continue
             if job is None or is_terminal(job.status):
                 continue
-            if job.recovery_attempts >= self._max_recovery_attempts:
-                await self.mark_failed(
-                    job.id,
-                    ErrorType.WORKER_FAILED,
-                    "job exceeded max crash recovery attempts",
-                )
-                continue
-            updated = replace(job, recovery_attempts=job.recovery_attempts + 1)
-            await filesystem.save_job(updated)
+            if job.status is JobStatus.QUEUED:
+                updated = job
+            else:
+                if job.recovery_attempts >= self._max_recovery_attempts:
+                    await self.mark_failed(
+                        job.id,
+                        ErrorType.WORKER_FAILED,
+                        "job exceeded max crash recovery attempts",
+                    )
+                    continue
+                updated = replace(job, recovery_attempts=job.recovery_attempts + 1)
             await self._jobs.save(updated)
             await self._queue.enqueue(job.id)
             recovered.append(job.id)

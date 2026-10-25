@@ -19,7 +19,7 @@ class FilesystemJobStorage:
     async def write_source(self, job_id: str, text: str) -> None:
         directory = self._job_dir(job_id)
         destination = directory / _SOURCE_FILENAME
-        tmp = destination.with_name(f"{_SOURCE_FILENAME}.tmp")
+        tmp = destination.with_name(f".{_SOURCE_FILENAME}.{uuid.uuid4().hex}.tmp")
         try:
             directory.mkdir(parents=True, exist_ok=True)
             tmp.write_text(text, encoding="utf-8")
@@ -40,7 +40,7 @@ class FilesystemJobStorage:
     async def save_job(self, job: Job) -> None:
         directory = self._job_dir(job.id)
         destination = directory / _STATUS_FILENAME
-        tmp = destination.with_name(f"{_STATUS_FILENAME}.tmp")
+        tmp = destination.with_name(f".{_STATUS_FILENAME}.{uuid.uuid4().hex}.tmp")
         try:
             directory.mkdir(parents=True, exist_ok=True)
             payload = json.dumps(job.to_dict(), ensure_ascii=False, indent=2)

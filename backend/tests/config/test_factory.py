@@ -298,6 +298,25 @@ def test_factory_builds_cpu_language_detector(tmp_path: Path) -> None:
     assert isinstance(build_language_detector(settings), CpuLanguageDetector)
 
 
+def test_build_job_service_uses_dedicated_max_recovery_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.config.factory import build_job_service
+
+    monkeypatch.setattr(
+        "app.config.factory._infrastructure",
+        lambda settings: (object(), object(), object()),
+    )
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        retry_max_attempts=5,
+        max_recovery_attempts=2,
+    )
+    service = build_job_service(settings)
+    assert service._max_recovery_attempts == 2
+
+
 def test_factory_module_has_no_top_level_vendor_imports() -> None:
     path = Path(__file__).resolve().parents[2] / "app" / "config" / "factory.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))

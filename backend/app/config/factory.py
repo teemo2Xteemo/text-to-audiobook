@@ -46,7 +46,7 @@ def build_job_service(settings: Settings) -> JobService:
         output_bitrate_kbps=settings.output_bitrate_kbps,
         storage_path=settings.storage_path,
         disk_jobs=filesystem,
-        max_recovery_attempts=settings.retry_max_attempts,
+        max_recovery_attempts=settings.max_recovery_attempts,
         translation_provider=provider,
         translation_model=model,
     )

@@ -176,6 +176,23 @@ def test_translate_only_echoed_markers_is_translation_failed() -> None:
     assert exc.value.error_type is ErrorType.TRANSLATION_FAILED
 
 
+def test_translate_uses_text_after_end_marker_when_inside_echoes_source() -> None:
+    http = FakeOllamaHttp(
+        response=f"{_SOURCE_BEGIN}\nhello world\n{_SOURCE_END}\nxin chào thế giới"
+    )
+    provider = _provider(http)
+    result = asyncio.run(provider.translate("hello world", "en-US", "vi-VN"))
+    assert result == "xin chào thế giới"
+
+
+def test_translate_fails_when_inside_only_echoes_untranslated_source() -> None:
+    http = FakeOllamaHttp(response=f"{_SOURCE_BEGIN}\nhello world\n{_SOURCE_END}")
+    provider = _provider(http)
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(provider.translate("hello world", "en-US", "vi-VN"))
+    assert exc.value.error_type is ErrorType.TRANSLATION_FAILED
+
+
 def test_translate_logs_when_output_is_sanitized(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

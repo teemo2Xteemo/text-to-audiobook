@@ -174,7 +174,7 @@ def test_process_job_resumes_generating_audio(
     settings = Settings(_env_file=None, storage_path=tmp_path)
     workspace = tmp_path / "jobs" / job.id
     workspace.mkdir(parents=True, exist_ok=True)
-    checkpoints = CheckpointStore(workspace, storage=CheckpointFilesystem(workspace))
+    checkpoints = CheckpointStore(storage=CheckpointFilesystem(workspace))
     for chunk in chunks[:2]:
         translated = workspace / "chunks" / f"{chunk.id}.translated.txt"
         translated.parent.mkdir(parents=True, exist_ok=True)
@@ -445,3 +445,33 @@ def test_listen_spawns_extra_processes_when_worker_concurrency_above_one(
         "terminate",
         "join",
     ]
+
+
+def test_process_job_skips_when_workspace_lock_is_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import fcntl
+
+    job = _queued_job(
+        "77777777-7777-7777-7777-777777777777",
+        provider="fake",
+        model="fake",
+    )
+    _persist_job(tmp_path, job, "Locked story.")
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    ran: list[str] = []
+
+    def _unexpected_build(effective: Settings) -> PipelineOrchestrator:
+        del effective
+        ran.append("built")
+        raise AssertionError("orchestrator should not be built when job lock is held")
+
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", _unexpected_build)
+
+    lock_path = tmp_path / "jobs" / job.id / ".lock"
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        process_job(job.id)
+
+    assert ran == []
