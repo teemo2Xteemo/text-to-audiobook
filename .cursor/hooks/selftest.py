@@ -65,6 +65,10 @@ def main() -> int:
     findings = lib.scan_text("backend/app/domain/pipeline.py", bad_import)
     assert any(f.rule == "vendor_import_in_domain" for f in findings), findings
 
+    torch_import = "import torch\n"
+    findings = lib.scan_text("backend/app/application/pipeline/translate.py", torch_import)
+    assert any(f.rule == "vendor_import_in_domain" for f in findings), findings
+
     findings = lib.scan_text("backend/app/providers/tts/edge.py", bad_import)
     assert not any(f.rule == "vendor_import_in_domain" for f in findings), findings
 
@@ -90,6 +94,20 @@ def main() -> int:
             "tool_input": {
                 "path": str(ROOT / "backend/app/domain/jobs.py"),
                 "contents": bad_import,
+            },
+            "workspace_roots": [str(ROOT)],
+        },
+    )
+    assert "additional_context" in out
+    assert "vendor_import_in_domain" in out["additional_context"], out
+
+    out = run(
+        "post_tool_use.py",
+        {
+            "tool_name": "write_file",
+            "tool_input": {
+                "Path": str(ROOT / "backend/app/domain/jobs.py"),
+                "Content": bad_import,
             },
             "workspace_roots": [str(ROOT)],
         },

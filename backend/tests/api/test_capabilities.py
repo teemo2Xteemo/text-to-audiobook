@@ -53,3 +53,30 @@ def test_capabilities_unknown_language_returns_empty_voices(
     response = capabilities_client.get("/api/capabilities", params={"language": "xx-XX"})
     assert response.status_code == 200
     assert response.json()["voices"] == []
+
+
+def test_get_capabilities_service_caches_instance_on_app_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    translation = FakeTranslationProvider(languages=["en-US"])
+    tts = FakeTTSProvider(
+        voices=[Voice(id="fake-en", language="en-US", label="English")],
+        output_dir=tmp_path / "tts",
+    )
+    service = CapabilitiesService(translation=translation, tts=tts)
+    calls = 0
+
+    def _fake_build(settings: Settings) -> CapabilitiesService:
+        nonlocal calls
+        del settings
+        calls += 1
+        return service
+
+    monkeypatch.setattr("app.api.deps.build_capabilities_service", _fake_build)
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    with TestClient(app) as client:
+        assert client.get("/api/capabilities").status_code == 200
+        assert client.get("/api/capabilities").status_code == 200
+    assert calls == 1
+    assert app.state.capabilities_service is service

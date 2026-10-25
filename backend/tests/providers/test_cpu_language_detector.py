@@ -82,3 +82,26 @@ def test_unmapped_iso_asks_user_to_set_source(monkeypatch: pytest.MonkeyPatch) -
     with pytest.raises(DomainError) as exc:
         asyncio.run(detector.detect(ENGLISH))
     assert exc.value.error_type is ErrorType.INVALID_INPUT
+
+
+def test_detect_runs_langdetect_in_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    main_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+
+    class Candidate:
+        lang = "en"
+        prob = 0.99
+
+    def _fake_detect(text: str) -> list[Candidate]:
+        del text
+        seen.append(threading.current_thread())
+        return [Candidate()]
+
+    monkeypatch.setattr("app.providers.language_detection.cpu.detect_langs", _fake_detect)
+    detector = CpuLanguageDetector()
+    result = asyncio.run(detector.detect(ENGLISH))
+    assert result.language_code == "en-US"
+    assert len(seen) == 1
+    assert seen[0] is not main_thread

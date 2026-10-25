@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -29,12 +30,13 @@ class CheckpointFilesystem:
 
     def save_raw(self, entries: list[dict[str, str]]) -> None:
         payload = json.dumps(entries, ensure_ascii=False, indent=2)
-        tmp = self._file.with_suffix(".json.tmp")
+        tmp = self._file.with_name(f".{CHECKPOINT_FILENAME}.{uuid.uuid4().hex}.tmp")
         try:
             self._workspace.mkdir(parents=True, exist_ok=True)
             tmp.write_text(payload, encoding="utf-8")
             tmp.replace(self._file)
         except OSError as exc:
+            tmp.unlink(missing_ok=True)
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to write checkpoint") from exc
 
     def relative(self, artifact: Path) -> str:

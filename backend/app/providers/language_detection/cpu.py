@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from langdetect import DetectorFactory, LangDetectException, detect_langs
 
 from app.domain.errors import DomainError, ErrorType
@@ -69,6 +71,9 @@ class CpuLanguageDetector:
         _configure_seed()
 
     async def detect(self, text: str) -> LanguageDetection:
+        return await asyncio.to_thread(self._detect_sync, text)
+
+    def _detect_sync(self, text: str) -> LanguageDetection:
         _configure_seed()
         stripped = text.strip()
         if not stripped:

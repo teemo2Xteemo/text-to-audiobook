@@ -18,10 +18,14 @@ class FilesystemJobStorage:
 
     async def write_source(self, job_id: str, text: str) -> None:
         directory = self._job_dir(job_id)
+        destination = directory / _SOURCE_FILENAME
+        tmp = destination.with_name(f".{_SOURCE_FILENAME}.{uuid.uuid4().hex}.tmp")
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            (directory / _SOURCE_FILENAME).write_text(text, encoding="utf-8")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(destination)
         except OSError as exc:
+            tmp.unlink(missing_ok=True)
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to write source text") from exc
 
     async def read_source(self, job_id: str) -> str:
@@ -35,11 +39,15 @@ class FilesystemJobStorage:
 
     async def save_job(self, job: Job) -> None:
         directory = self._job_dir(job.id)
+        destination = directory / _STATUS_FILENAME
+        tmp = destination.with_name(f".{_STATUS_FILENAME}.{uuid.uuid4().hex}.tmp")
         try:
             directory.mkdir(parents=True, exist_ok=True)
             payload = json.dumps(job.to_dict(), ensure_ascii=False, indent=2)
-            (directory / _STATUS_FILENAME).write_text(payload, encoding="utf-8")
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(destination)
         except OSError as exc:
+            tmp.unlink(missing_ok=True)
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to write job status") from exc
 
     async def get_job(self, job_id: str) -> Job | None:

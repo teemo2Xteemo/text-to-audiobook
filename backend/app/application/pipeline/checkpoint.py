@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.domain.errors import DomainError, ErrorType
-from app.infrastructure.checkpoint_fs import CHECKPOINT_FILENAME, CheckpointFilesystem
+from app.domain.ports import CheckpointStorage
 
+CHECKPOINT_FILENAME = "checkpoint.json"
 STAGE_TRANSLATED = "translated"
 STAGE_NARRATED = "narrated"
 STAGE_TTS = "tts"
@@ -45,8 +46,9 @@ class CheckpointEntry:
 
 
 class CheckpointStore:
-    def __init__(self, workspace: Path) -> None:
-        self._fs = CheckpointFilesystem(workspace)
+    def __init__(self, *, storage: CheckpointStorage) -> None:
+        self._fs: CheckpointStorage = storage
+        self._entries: list[CheckpointEntry] | None = None
 
     def is_complete(self, chunk_id: str, stage: str) -> bool:
         entry = self._find(chunk_id, stage)
@@ -62,12 +64,15 @@ class CheckpointStore:
         ]
         entries.append(CheckpointEntry(chunk_id=chunk_id, stage=stage, artifact_path=relative))
         self._fs.save_raw([entry.to_dict() for entry in entries])
+        self._entries = entries
 
     def load(self) -> list[CheckpointEntry]:
-        try:
-            return [CheckpointEntry.from_dict(item) for item in self._fs.load_raw()]
-        except (KeyError, TypeError) as exc:
-            raise DomainError(ErrorType.STORAGE_FAILED, "failed to read checkpoint") from exc
+        if self._entries is None:
+            try:
+                self._entries = [CheckpointEntry.from_dict(item) for item in self._fs.load_raw()]
+            except (KeyError, TypeError) as exc:
+                raise DomainError(ErrorType.STORAGE_FAILED, "failed to read checkpoint") from exc
+        return list(self._entries)
 
     def _find(self, chunk_id: str, stage: str) -> CheckpointEntry | None:
         for entry in reversed(self.load()):

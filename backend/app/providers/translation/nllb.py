@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Protocol
@@ -85,6 +86,9 @@ class NllbTranslationProvider:
         return list(_BCP47_TO_FLORES)
 
     async def translate(self, text: str, source_language: str, target_language: str) -> str:
+        return await asyncio.to_thread(self._translate_sync, text, source_language, target_language)
+
+    def _translate_sync(self, text: str, source_language: str, target_language: str) -> str:
         if source_language == AUTO_SOURCE_LANGUAGE:
             raise DomainError(
                 ErrorType.UNSUPPORTED_LANGUAGE,

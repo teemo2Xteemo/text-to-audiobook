@@ -11,6 +11,7 @@ from app.application.pipeline.artifact_cache import CacheIdentity, PipelineArtif
 from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
 from app.config.settings import Settings, parse_tts_default_voice_by_language
+from app.domain.jobs import Job
 from app.domain.ports import (
     AudioProcessor,
     LanguageDetector,
@@ -20,6 +21,7 @@ from app.domain.ports import (
 )
 from app.domain.retry import RetryPolicy
 from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
+from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
@@ -36,12 +38,17 @@ class UnknownProviderError(ValueError):
 
 def build_job_service(settings: Settings) -> JobService:
     filesystem, store, queue = _infrastructure(settings)
+    provider, model = translation_pin_from_settings(settings)
     return JobService(
         jobs=store,
         source_storage=filesystem,
         queue=queue,
         output_bitrate_kbps=settings.output_bitrate_kbps,
         storage_path=settings.storage_path,
+        disk_jobs=filesystem,
+        max_recovery_attempts=settings.max_recovery_attempts,
+        translation_provider=provider,
+        translation_model=model,
     )
 
 
@@ -62,6 +69,7 @@ def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
         audio=build_audio_processor(settings),
         jobs=store,
         artifact_cache=build_artifact_cache(settings),
+        checkpoint_storage_factory=CheckpointFilesystem,
         retry_policy=RetryPolicy(
             max_attempts=settings.retry_max_attempts,
             backoff_seconds=settings.retry_backoff_seconds,
@@ -136,6 +144,35 @@ def build_artifact_cache(settings: Settings) -> PipelineArtifactCache:
         FilesystemArtifactCache(settings.storage_path / "cache"),
         cache_identity_from_settings(settings),
     )
+
+
+def translation_pin_from_settings(settings: Settings) -> tuple[str, str]:
+    """Lab choice copied onto new stories. Not read from the create request."""
+    name = settings.translation_provider.strip().lower()
+    if name == "nllb":
+        return name, settings.nllb_model_id
+    if name == "ollama":
+        return name, settings.ollama_translation_model
+    if name == "fake":
+        return "fake", "fake"
+    raise UnknownProviderError(f"unknown TRANSLATION_PROVIDER: {settings.translation_provider}")
+
+
+def settings_for_translation_pin(settings: Settings, job: Job) -> Settings:
+    """Use the story pin when both fields are present. Otherwise keep live settings."""
+    provider = job.translation_provider
+    model = job.translation_model
+    if provider is None or model is None:
+        return settings
+    if provider == "nllb":
+        return settings.model_copy(update={"translation_provider": "nllb", "nllb_model_id": model})
+    if provider == "ollama":
+        return settings.model_copy(
+            update={"translation_provider": "ollama", "ollama_translation_model": model}
+        )
+    if provider == "fake":
+        return settings.model_copy(update={"translation_provider": "fake"})
+    raise UnknownProviderError(f"unknown translation pin: {provider}")
 
 
 def cache_identity_from_settings(settings: Settings) -> CacheIdentity:

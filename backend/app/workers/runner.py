@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
+from multiprocessing import Process
 
 from redis import Redis
 from rq import Queue, Worker
@@ -9,6 +11,7 @@ from rq import Queue, Worker
 from app.config.factory import (
     build_job_service,
     build_orchestrator,
+    settings_for_translation_pin,
 )
 from app.config.settings import Settings
 from app.domain.errors import DomainError
@@ -34,7 +37,6 @@ def boot() -> None:
 async def _process_job_async(job_id: str) -> None:
     settings = Settings()
     filesystem = FilesystemJobStorage(settings.storage_path)
-    orchestrator = build_orchestrator(settings)
 
     try:
         job = await filesystem.get_job(job_id)
@@ -51,9 +53,34 @@ async def _process_job_async(job_id: str) -> None:
         )
         return
 
-    text = await filesystem.read_source(job_id)
     workspace = settings.storage_path / "jobs" / job_id
-    await orchestrator.run(job, text, workspace=workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    lock_path = workspace / ".lock"
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            logger.info("worker_job_locked", extra={"job_id": job_id, "chunk_id": None})
+            return
+        try:
+            # Re-read under the lock: another worker may have finished this job since
+            # the pre-lock snapshot above was taken.
+            fresh = await filesystem.get_job(job_id)
+            if fresh is None or is_terminal(fresh.status):
+                logger.info(
+                    "worker_job_skipped",
+                    extra={
+                        "job_id": job_id,
+                        "chunk_id": None,
+                        "status": fresh.status.value if fresh is not None else "missing",
+                    },
+                )
+                return
+            text = await filesystem.read_source(job_id)
+            orchestrator = build_orchestrator(settings_for_translation_pin(settings, fresh))
+            await orchestrator.run(fresh, text, workspace=workspace)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 async def _recover_async(settings: Settings) -> list[str]:
@@ -61,7 +88,7 @@ async def _recover_async(settings: Settings) -> list[str]:
     return await service.recover_in_progress()
 
 
-def _listen(settings: Settings) -> None:
+def _run_worker(settings: Settings) -> None:
     connection = Redis.from_url(str(settings.redis_url))
     timeout = settings.rq_job_timeout_seconds
     queues = [Queue(RQ_QUEUE_NAME, connection=connection, default_timeout=timeout)]
@@ -70,3 +97,21 @@ def _listen(settings: Settings) -> None:
         connection=connection,
         exception_handlers=[handle_worker_exception],
     ).work()
+
+
+def _listen(settings: Settings) -> None:
+    # Note: on Python >= 3.14, Linux defaults multiprocessing to 'forkserver',
+    # so Settings must remain picklable. For production multi-worker supervision,
+    # scaling independent containers (`docker compose up --scale worker=N`) is preferred.
+    children: list[Process] = []
+    for _ in range(max(0, settings.worker_concurrency - 1)):
+        proc = Process(target=_run_worker, args=(settings,), daemon=True)
+        proc.start()
+        children.append(proc)
+    try:
+        _run_worker(settings)
+    finally:
+        for proc in children:
+            if proc.is_alive():
+                proc.terminate()
+            proc.join(timeout=5)

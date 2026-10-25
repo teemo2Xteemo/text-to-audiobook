@@ -172,6 +172,23 @@ def test_edge_module_has_no_top_level_edge_tts_import() -> None:
     assert "edge_tts" not in imported
 
 
+def test_edge_synthesize_cleans_up_empty_or_failed_temp_file(tmp_path: Path) -> None:
+    class _BrokenClient:
+        def list_voices(self) -> list[dict[str, str]]:
+            return [{"ShortName": _EN, "Locale": "en-US", "FriendlyName": "Adapter EN"}]
+
+        async def synthesize(self, text: str, voice: str, rate: str, output_path: Path) -> None:
+            del text, voice, rate
+            output_path.write_bytes(b"")
+
+    out_dir = tmp_path / "edge-tmp"
+    provider = EdgeTTSProvider(out_dir, client=_BrokenClient())
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(provider.synthesize("hello", "en-US", _EN, TTSSettings(speed=1.0)))
+    assert exc.value.error_type is ErrorType.TTS_FAILED
+    assert list(out_dir.glob("*.mp3")) == []
+
+
 @pytest.mark.integration
 def test_edge_live_synthesize_opt_in(tmp_path: Path) -> None:
     if os.environ.get("EDGE_TTS_INTEGRATION") != "1":

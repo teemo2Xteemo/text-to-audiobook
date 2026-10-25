@@ -7,6 +7,7 @@ from fastapi import Request, UploadFile
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from app.api.errors import validation_message
 from app.api.schemas import CreateJobJsonBody
 from app.application.jobs import CreateJobCommand
 from app.config.settings import Settings
@@ -18,7 +19,7 @@ _JSON_CONTENT = "application/json"
 _MULTIPART_CONTENT = "multipart/form-data"
 _MULTIPART_OVERHEAD = 4096
 _READ_CHUNK = 64 * 1024
-_ALLOWED_FILE_MIME = frozenset({"application/octet-stream", "text/plain"})
+_ALLOWED_FILE_MIME = frozenset({"application/octet-stream", "application/x-subrip", "text/plain"})
 
 
 async def parse_create_job(request: Request, settings: Settings) -> CreateJobCommand:
@@ -61,7 +62,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
     try:
         parsed = CreateJobJsonBody.model_validate(payload)
     except ValidationError as exc:
-        raise DomainError(ErrorType.INVALID_INPUT, _first_pydantic_message(exc)) from exc
+        raise DomainError(ErrorType.INVALID_INPUT, validation_message(list(exc.errors()))) from exc
     text = _decode_source_text(parsed.text.encode("utf-8"), max_upload_bytes)
     return CreateJobCommand(
         source_language=parsed.source_language,
@@ -136,8 +137,8 @@ def _assert_safe_txt_filename(filename: str | None) -> None:
     if ".." in normalized.split("/"):
         raise DomainError(ErrorType.INVALID_INPUT, "filename must not contain path traversal")
     name = Path(filename).name
-    if name in {".", ".."} or not name.lower().endswith(".txt"):
-        raise DomainError(ErrorType.INVALID_INPUT, "file must be a .txt document")
+    if name in {".", ".."} or not name.lower().endswith((".txt", ".srt")):
+        raise DomainError(ErrorType.INVALID_INPUT, "file must be a .txt or .srt document")
 
 
 def _assert_text_mime(content_type: str | None) -> None:
@@ -173,13 +174,3 @@ def _parse_speed(value: object) -> float:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError) as exc:
         raise DomainError(ErrorType.INVALID_INPUT, "speed must be a number") from exc
-
-
-def _first_pydantic_message(exc: ValidationError) -> str:
-    errors = exc.errors()
-    if not errors:
-        return "invalid request"
-    first = errors[0]
-    loc = ".".join(str(part) for part in first.get("loc", ()))
-    msg = str(first.get("msg", "invalid request"))
-    return f"{loc}: {msg}" if loc else msg

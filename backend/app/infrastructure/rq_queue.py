@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from rq import Queue
 from rq.job import Callback
 
@@ -17,11 +19,27 @@ class RQJobQueue:
 
     async def enqueue(self, job_id: str) -> None:
         try:
-            self._queue.enqueue(
-                RQ_PROCESS_JOB,
-                job_id,
-                job_timeout=self._job_timeout,
-                on_failure=Callback(RQ_ON_FAILURE),
-            )
+            await asyncio.to_thread(self._enqueue_sync, job_id)
         except Exception as exc:
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to enqueue job") from exc
+
+    def _enqueue_sync(self, job_id: str) -> None:
+        rq_job_id = f"process-{job_id}"
+        fetch_job = getattr(self._queue, "fetch_job", None)
+        if callable(fetch_job):
+            existing = fetch_job(rq_job_id)
+            if existing is not None:
+                if existing.get_status() == "queued":
+                    return
+                # Any non-queued entry (started, deferred, scheduled, failed, finished)
+                # is replaced. In particular, a `started` entry may be stale after a hard
+                # worker crash. Workspace flock prevents live duplicate execution, so drop
+                # the old entry (and its registry membership) and enqueue a fresh one.
+                existing.delete()
+        self._queue.enqueue(
+            RQ_PROCESS_JOB,
+            job_id,
+            job_id=rq_job_id,
+            job_timeout=self._job_timeout,
+            on_failure=Callback(RQ_ON_FAILURE),
+        )

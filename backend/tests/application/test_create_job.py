@@ -18,6 +18,9 @@ def _service(
     jobs: InMemoryJobStore | None = None,
     source: InMemorySourceStorage | None = None,
     queue: InMemoryQueue | FailingQueue | None = None,
+    *,
+    translation_provider: str = "fake",
+    translation_model: str = "fake",
 ) -> tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue | FailingQueue]:
     store = jobs or InMemoryJobStore()
     storage = source or InMemorySourceStorage()
@@ -28,8 +31,97 @@ def _service(
         queue=queued,
         output_bitrate_kbps=128,
         storage_path=Path("storage"),
+        translation_provider=translation_provider,
+        translation_model=translation_model,
     )
     return service, store, storage, queued
+
+
+def test_create_stamps_lab_pin_not_the_request() -> None:
+    service, store, _, _ = _service(
+        translation_provider="ollama",
+        translation_model="translategemma:4b",
+    )
+    command = CreateJobCommand(
+        source_language="en-US",
+        target_language="ja-JP",
+        text="story",
+    )
+    assert "translation_provider" not in CreateJobCommand.__dataclass_fields__
+    assert "translation_model" not in CreateJobCommand.__dataclass_fields__
+    first = asyncio.run(service.create(command))
+    second = asyncio.run(service.create(command))
+    assert first.translation_provider == "ollama"
+    assert first.translation_model == "translategemma:4b"
+    assert second.translation_provider == "ollama"
+    assert second.translation_model == "translategemma:4b"
+    assert store.jobs[first.id].translation_model == "translategemma:4b"
+
+
+def test_create_with_fake_lab_stores_fake_pin() -> None:
+    service, _, _, _ = _service()
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="ja-JP",
+                text="story",
+            )
+        )
+    )
+    assert job.translation_provider == "fake"
+    assert job.translation_model == "fake"
+
+
+def test_retry_and_mark_failed_keep_pin_and_new_lab_does_not(tmp_path: Path) -> None:
+    filesystem, _, _, _, service = _fs_retry_service(
+        tmp_path,
+        translation_provider="nllb",
+        translation_model="facebook/nllb-200-distilled-600M",
+    )
+    running = replace(
+        _fs_job("11111111-1111-1111-1111-111111111111", JobStatus.TRANSLATING),
+        chunk_current=2,
+        chunk_total=5,
+        translation_provider="ollama",
+        translation_model="translategemma:4b",
+    )
+    asyncio.run(filesystem.save_job(running))
+    asyncio.run(filesystem.write_source(running.id, "story to retry"))
+    marked = asyncio.run(service.mark_failed(running.id, ErrorType.TIMEOUT, "timeout"))
+    assert marked is not None
+    assert marked.status is JobStatus.FAILED
+    assert marked.translation_provider == "ollama"
+    assert marked.translation_model == "translategemma:4b"
+
+    retried = asyncio.run(service.retry(running.id))
+    assert retried.translation_provider == "ollama"
+    assert retried.translation_model == "translategemma:4b"
+    assert retried.status is JobStatus.QUEUED
+    assert retried.error_type is None
+    assert retried.message is None
+    assert retried.chunk_current == 0
+    assert retried.chunk_total == 0
+
+    later, _, _, _ = _service(
+        translation_provider="nllb",
+        translation_model="facebook/nllb-200-distilled-1.3B",
+    )
+    created = asyncio.run(
+        later.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="ja-JP",
+                text="story",
+            )
+        )
+    )
+    assert created.translation_provider == "nllb"
+    assert created.translation_model == "facebook/nllb-200-distilled-1.3B"
+    stored = asyncio.run(filesystem.get_job(running.id))
+    assert stored is not None
+    assert stored.translation_provider == "ollama"
+    assert stored.translation_model == "translategemma:4b"
 
 
 def test_create_job_persists_queued_and_enqueues_id_only() -> None:
@@ -201,6 +293,7 @@ def test_recover_enqueues_non_terminal_only(tmp_path: Path) -> None:
         queue=queue,
         output_bitrate_kbps=128,
         storage_path=tmp_path,
+        disk_jobs=filesystem,
     )
     queued = _fs_job("11111111-1111-1111-1111-111111111111", JobStatus.QUEUED)
     running = _fs_job("22222222-2222-2222-2222-222222222222", JobStatus.MERGING)
@@ -227,6 +320,7 @@ def test_recover_reads_filesystem_status_not_job_store_cache(tmp_path: Path) -> 
         queue=queue,
         output_bitrate_kbps=128,
         storage_path=tmp_path,
+        disk_jobs=filesystem,
     )
     running = _fs_job("22222222-2222-2222-2222-222222222222", JobStatus.GENERATING_AUDIO)
     asyncio.run(filesystem.save_job(running))
@@ -236,6 +330,110 @@ def test_recover_reads_filesystem_status_not_job_store_cache(tmp_path: Path) -> 
     recovered = asyncio.run(service.recover_in_progress())
     assert recovered == [running.id]
     assert queue.job_ids == [running.id]
+
+
+def test_recover_marks_job_failed_when_recovery_attempts_exceeded(tmp_path: Path) -> None:
+    filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path, max_recovery_attempts=2)
+    running = replace(
+        _fs_job("22222222-2222-2222-2222-222222222222", JobStatus.GENERATING_AUDIO),
+        recovery_attempts=2,
+    )
+    asyncio.run(filesystem.save_job(running))
+    cache.jobs[running.id] = running
+
+    recovered = asyncio.run(service.recover_in_progress())
+    assert recovered == []
+    assert queue.job_ids == []
+    failed = asyncio.run(filesystem.get_job(running.id))
+    assert failed is not None
+    assert failed.status is JobStatus.FAILED
+    assert failed.error_type is ErrorType.WORKER_FAILED
+    assert failed.message == "job exceeded max crash recovery attempts"
+    assert cache.jobs[running.id] == failed
+
+
+def test_recover_increments_recovery_attempts_and_retry_resets_it(tmp_path: Path) -> None:
+    filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path, max_recovery_attempts=2)
+    running = _fs_job("22222222-2222-2222-2222-222222222222", JobStatus.TRANSLATING)
+    asyncio.run(filesystem.save_job(running))
+
+    assert asyncio.run(service.recover_in_progress()) == [running.id]
+    after_first = asyncio.run(filesystem.get_job(running.id))
+    assert after_first is not None and after_first.recovery_attempts == 1
+    assert cache.jobs[running.id].recovery_attempts == 1
+
+    assert asyncio.run(service.recover_in_progress()) == [running.id]
+    after_second = asyncio.run(filesystem.get_job(running.id))
+    assert after_second is not None and after_second.recovery_attempts == 2
+
+    # Third recovery attempt hits the cap (max_recovery_attempts=2) -> FAILED
+    assert asyncio.run(service.recover_in_progress()) == []
+    exhausted = asyncio.run(filesystem.get_job(running.id))
+    assert exhausted is not None and exhausted.status is JobStatus.FAILED
+
+    # Explicit user retry resets recovery_attempts to 0
+    retried = asyncio.run(service.retry(running.id))
+    assert retried.status is JobStatus.QUEUED
+    assert retried.recovery_attempts == 0
+    assert len(queue.job_ids) == 3
+
+
+def test_recover_queued_job_does_not_burn_recovery_attempts_or_fail(tmp_path: Path) -> None:
+    filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path, max_recovery_attempts=2)
+    queued = _fs_job("11111111-1111-1111-1111-111111111111", JobStatus.QUEUED)
+    asyncio.run(filesystem.save_job(queued))
+
+    for _ in range(4):
+        assert asyncio.run(service.recover_in_progress()) == [queued.id]
+
+    reloaded = asyncio.run(filesystem.get_job(queued.id))
+    assert reloaded is not None
+    assert reloaded.status is JobStatus.QUEUED
+    assert reloaded.recovery_attempts == 0
+    assert cache.jobs[queued.id].status is JobStatus.QUEUED
+    assert cache.jobs[queued.id].recovery_attempts == 0
+    assert len(queue.job_ids) == 4
+
+
+def test_recover_skips_actively_locked_job_without_incrementing_recovery_attempts(
+    tmp_path: Path,
+) -> None:
+    import fcntl
+
+    filesystem, _cache, _store, queue, service = _fs_retry_service(
+        tmp_path, max_recovery_attempts=2
+    )
+    running = _fs_job("22222222-2222-2222-2222-222222222222", JobStatus.TRANSLATING)
+    asyncio.run(filesystem.save_job(running))
+
+    workspace = tmp_path / "jobs" / running.id
+    workspace.mkdir(parents=True, exist_ok=True)
+    lock_path = workspace / ".lock"
+
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # Worker holds lock: recover must skip, not re-enqueue, not increment recovery_attempts
+        recovered = asyncio.run(service.recover_in_progress())
+        assert recovered == []
+        assert queue.job_ids == []
+
+        fresh = asyncio.run(filesystem.get_job(running.id))
+        assert fresh is not None
+        assert fresh.recovery_attempts == 0
+        assert fresh.status is JobStatus.TRANSLATING
+
+        # Worker process finishes/exits, releasing the flock
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    # Now unlocked: recover picks up the job and increments recovery_attempts
+    recovered_after = asyncio.run(service.recover_in_progress())
+    assert recovered_after == [running.id]
+    assert queue.job_ids == [running.id]
+
+    fresh_after = asyncio.run(filesystem.get_job(running.id))
+    assert fresh_after is not None
+    assert fresh_after.recovery_attempts == 1
 
 
 def test_mark_failed_from_non_terminal_updates_filesystem_and_cache(tmp_path: Path) -> None:
@@ -340,6 +538,10 @@ def test_get_returns_filesystem_queued_not_stale_failed_cache(tmp_path: Path) ->
 
 def _fs_retry_service(
     tmp_path: Path,
+    *,
+    translation_provider: str = "fake",
+    translation_model: str = "fake",
+    max_recovery_attempts: int = 3,
 ) -> tuple[FilesystemJobStorage, _MemoryJobCache, DualWriteJobStore, InMemoryQueue, JobService]:
     filesystem = FilesystemJobStorage(tmp_path)
     cache = _MemoryJobCache()
@@ -351,6 +553,10 @@ def _fs_retry_service(
         queue=queue,
         output_bitrate_kbps=128,
         storage_path=tmp_path,
+        disk_jobs=filesystem,
+        max_recovery_attempts=max_recovery_attempts,
+        translation_provider=translation_provider,
+        translation_model=translation_model,
     )
     return filesystem, cache, store, queue, service
 

@@ -225,6 +225,23 @@ def test_transformers_engine_tokenizes_with_truncation_false(
         assert call["text"] == "hello"
 
 
+def test_translate_runs_engine_in_worker_thread() -> None:
+    import threading
+
+    main_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+
+    class _ThreadEngine(FakeNllbEngine):
+        def generate(self, text: str, source_flores: str, target_flores: str) -> str:
+            seen.append(threading.current_thread())
+            return super().generate(text, source_flores, target_flores)
+
+    provider = NllbTranslationProvider(model_id="test-model", engine=_ThreadEngine())
+    assert asyncio.run(provider.translate("hello", "en-US", "ja-JP")) == "jpn_Jpan:hello"
+    assert len(seen) == 1
+    assert seen[0] is not main_thread
+
+
 @pytest.mark.integration
 def test_nllb_live_translate_opt_in() -> None:
     if os.environ.get("NLLB_INTEGRATION") != "1":

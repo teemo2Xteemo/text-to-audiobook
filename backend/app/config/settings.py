@@ -1,4 +1,3 @@
-from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -57,6 +56,7 @@ class Settings(BaseSettings):
     tts_default_voice_by_language: str = Field(default="")
     retry_max_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
+    max_recovery_attempts: int = Field(default=3, ge=1)
     rq_job_timeout_seconds: int = Field(default=1800, ge=1)
 
     @field_validator("ollama_base_url")
@@ -66,8 +66,3 @@ class Settings(BaseSettings):
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("OLLAMA_BASE_URL must be an http or https URL")
         return url
-
-
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
