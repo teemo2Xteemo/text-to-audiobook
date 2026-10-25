@@ -40,6 +40,8 @@ export type JobStatusResponse = {
   speed: number;
   output_format: OutputFormat;
   audio_url: string | null;
+  translation_provider?: string | null;
+  translation_model?: string | null;
 };
 
 export type ErrorEnvelope = {

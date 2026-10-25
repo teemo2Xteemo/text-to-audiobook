@@ -59,4 +59,14 @@ describe("JobForm", () => {
     expect(payload.file).toBe(file);
     expect(payload.text).toBeUndefined();
   });
+
+  it("offers one-click SRT timestamp cleaning when SRT content is pasted", async () => {
+    const user = userEvent.setup();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={() => undefined} />);
+    const srtText = "1\n00:00:01,000 --> 00:00:03,000\nChapter One begins.";
+    await user.type(screen.getByLabelText("Paste story"), srtText);
+    const cleanBtn = await screen.findByRole("button", { name: "Strip SRT timestamps" });
+    await user.click(cleanBtn);
+    expect(screen.getByLabelText("Paste story")).toHaveValue("Chapter One begins.");
+  });
 });
