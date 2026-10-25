@@ -117,48 +117,99 @@ export function voiceDisplayParts(label: string, id: string): { title: string; s
 }
 
 const SRT_TIMECODE_LINE_RE =
-  /^\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}.*$/gm;
+  /^\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}.*$/;
 const SRT_INDEX_LINE_RE = /^\s*\d+\s*$/;
 const SRT_HTML_TAG_RE = /<\/?[a-zA-Z][^>]*>/g;
+
+function isSrtCueBlock(block: string): boolean {
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return false;
+  }
+  if (SRT_TIMECODE_LINE_RE.test(lines[0])) {
+    return true;
+  }
+  return (
+    lines.length >= 2 &&
+    SRT_INDEX_LINE_RE.test(lines[0]) &&
+    SRT_TIMECODE_LINE_RE.test(lines[1])
+  );
+}
+
+function isSrtDocument(blocks: string[]): boolean {
+  const nonEmpty = blocks.map((b) => b.trim()).filter(Boolean);
+  if (nonEmpty.length === 0) {
+    return false;
+  }
+  const first = nonEmpty[0].replace(/^\ufeff/, "");
+  const firstLines = first
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (firstLines.length > 0 && firstLines[0].toUpperCase().startsWith("WEBVTT")) {
+    const remaining = firstLines.slice(1).join("\n");
+    if (remaining && isSrtCueBlock(remaining)) {
+      return true;
+    }
+    return nonEmpty.length >= 2 && isSrtCueBlock(nonEmpty[1]);
+  }
+  return isSrtCueBlock(first);
+}
 
 export function isSrtContent(text: string): boolean {
   if (!text.trim()) {
     return false;
   }
-  SRT_TIMECODE_LINE_RE.lastIndex = 0;
-  return SRT_TIMECODE_LINE_RE.test(text);
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const blocks = normalized.split(/\n{2,}/);
+  return isSrtDocument(blocks);
 }
 
 export function stripSrtToText(raw: string): string {
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const blocks = normalized.split(/\n{2,}/);
+  if (!isSrtDocument(blocks)) {
+    return raw;
+  }
+
   const cleanedBlocks: string[] = [];
 
   for (const block of blocks) {
-    const lines = block
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => {
-        if (!line) {
-          return false;
+    const rawLines = block.split("\n");
+    const cueLines: string[] = [];
+    let i = 0;
+    while (i < rawLines.length) {
+      const line = rawLines[i].trim();
+      if (!line || line.toUpperCase() === "WEBVTT") {
+        i++;
+        continue;
+      }
+      if (SRT_INDEX_LINE_RE.test(line)) {
+        let nextIdx = i + 1;
+        while (nextIdx < rawLines.length && !rawLines[nextIdx].trim()) {
+          nextIdx++;
         }
-        if (line.toUpperCase() === "WEBVTT") {
-          return false;
+        if (nextIdx < rawLines.length && SRT_TIMECODE_LINE_RE.test(rawLines[nextIdx].trim())) {
+          i = nextIdx;
+          continue;
         }
-        if (SRT_INDEX_LINE_RE.test(line)) {
-          return false;
-        }
-        SRT_TIMECODE_LINE_RE.lastIndex = 0;
-        if (SRT_TIMECODE_LINE_RE.test(line)) {
-          return false;
-        }
-        return true;
-      })
-      .map((line) => line.replace(SRT_HTML_TAG_RE, "").trim())
-      .filter(Boolean);
+      }
+      if (SRT_TIMECODE_LINE_RE.test(line)) {
+        i++;
+        continue;
+      }
+      const cleaned = line.replace(SRT_HTML_TAG_RE, "").trim();
+      if (cleaned) {
+        cueLines.push(cleaned);
+      }
+      i++;
+    }
 
-    if (lines.length > 0) {
-      cleanedBlocks.push(lines.join(" "));
+    if (cueLines.length > 0) {
+      cleanedBlocks.push(cueLines.join(" "));
     }
   }
 

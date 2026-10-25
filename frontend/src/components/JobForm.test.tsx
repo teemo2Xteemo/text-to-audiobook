@@ -51,7 +51,7 @@ describe("JobForm", () => {
     render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
     await user.type(screen.getByLabelText("Paste story"), "Once upon a time");
     const file = new File(["uploaded"], "story.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("Or upload a .txt file"), file);
+    await user.upload(screen.getByLabelText("Or upload a .txt or .srt file"), file);
     expect(screen.getByLabelText("Paste story")).toHaveValue("");
     await user.click(screen.getByRole("button", { name: "Generate" }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -68,5 +68,52 @@ describe("JobForm", () => {
     const cleanBtn = await screen.findByRole("button", { name: "Strip SRT timestamps" });
     await user.click(cleanBtn);
     expect(screen.getByLabelText("Paste story")).toHaveValue("Chapter One begins.");
+  });
+
+  it("provides an accessible swap button that exchanges source and target languages", async () => {
+    const user = userEvent.setup();
+    render(
+      <JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={() => undefined} />,
+    );
+    const swapBtn = screen.getByRole("button", { name: /swap/i });
+    expect(swapBtn).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText("Source language"), "ja-JP");
+    expect(swapBtn).not.toBeDisabled();
+    expect(screen.getByLabelText("Source language")).toHaveValue("ja-JP");
+    expect(screen.getByLabelText("Target language")).toHaveValue("en-US");
+
+    await user.click(swapBtn);
+    expect(screen.getByLabelText("Source language")).toHaveValue("en-US");
+    expect(screen.getByLabelText("Target language")).toHaveValue("ja-JP");
+  });
+
+  it("accepts uploaded .srt file as-is and reaches onSubmit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    const srtFile = new File(
+      ["1\n00:00:01,000 --> 00:00:03,000\nHello world.\n"],
+      "captions.srt",
+      { type: "application/x-subrip" },
+    );
+    await user.upload(screen.getByLabelText(/upload a/i), srtFile);
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const payload = onSubmit.mock.calls[0]?.[0] as { file?: File };
+    expect(payload.file).toBe(srtFile);
+    expect(payload.file?.name).toBe("captions.srt");
+  });
+
+  it("tabs to the voice select and changes it with the keyboard", async () => {
+    const user = userEvent.setup();
+    render(
+      <JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={() => undefined} />,
+    );
+    const voiceSelect = screen.getByLabelText("Voice");
+    voiceSelect.focus();
+    expect(voiceSelect).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(voiceSelect).toHaveValue("fake-en");
   });
 });

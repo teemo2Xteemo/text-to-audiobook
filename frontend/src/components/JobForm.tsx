@@ -157,36 +157,19 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     if (!text.trim()) {
       return;
     }
-    setText(stripSrtToText(text));
+    const cleaned = stripSrtToText(text);
+    setText(cleaned);
   }
 
-  async function processSelectedFile(next: File | null) {
+  function handleFileChange(next: File | null) {
     if (!next) {
       setFile(null);
       setUploadedDisplayName(null);
       return;
     }
     setText("");
-    const lowerName = next.name.toLowerCase();
-    if (lowerName.endsWith(".srt")) {
-      try {
-        const raw = await next.text();
-        const cleaned = stripSrtToText(raw) || raw;
-        const txtName = next.name.replace(/\.srt$/i, ".txt");
-        const converted = new File([cleaned], txtName, { type: "text/plain" });
-        setFile(converted);
-        setUploadedDisplayName(`${next.name} (SRT cleaned)`);
-        return;
-      } catch {
-        // Fallback to original file if reading fails
-      }
-    }
     setFile(next);
     setUploadedDisplayName(next.name);
-  }
-
-  function handleFileChange(next: File | null) {
-    void processSelectedFile(next);
   }
 
   function handleRemoveFile() {
@@ -296,7 +279,8 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
               }
             />
 
-            <div
+            <button
+              type="button"
               className={`route-connector ${
                 sourceLanguage !== AUTO_SOURCE_LANGUAGE ? "route-connector-swappable" : ""
               }`}
@@ -305,6 +289,8 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                   ? "Click to swap source and target languages"
                   : "Translation direction"
               }
+              aria-label="Swap source and target languages"
+              disabled={disabled || sourceLanguage === AUTO_SOURCE_LANGUAGE}
               onClick={() => {
                 if (!disabled && sourceLanguage !== AUTO_SOURCE_LANGUAGE) {
                   const prevSource = sourceLanguage;
@@ -312,7 +298,6 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                   setTargetLanguage(prevSource);
                 }
               }}
-              aria-hidden="true"
             >
               <span className="route-connector-circle">
                 <svg
@@ -333,7 +318,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                   )}
                 </svg>
               </span>
-            </div>
+            </button>
 
             <StudioSelect
               id="target-language"
@@ -560,7 +545,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                   />
                 </svg>
                 <div>
-                  <label htmlFor="story-file">Or upload a .txt file</label>
+                  <label htmlFor="story-file">Or upload a .txt or .srt file</label>
                   <p className="upload-subtext">
                     Drag &amp; drop or browse · Supports <code>.txt</code> and <code>.srt</code>{" "}
                     subtitle scripts (UTF-8)

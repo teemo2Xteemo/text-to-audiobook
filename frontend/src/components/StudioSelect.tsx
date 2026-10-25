@@ -65,11 +65,6 @@ export function StudioSelect({
       setSearch("");
       return;
     }
-    if (options.length > 5) {
-      window.setTimeout(() => {
-        searchInputRef.current?.focus();
-      }, 10);
-    }
     function handleOutsideClick(event: MouseEvent) {
       if (
         containerRef.current &&
@@ -172,7 +167,7 @@ export function StudioSelect({
 
         {/* Floating shadcn/ui-inspired Popover Menu */}
         {open ? (
-          <div className="studio-select-popover" aria-hidden="true">
+          <div className="studio-select-popover" role="region" aria-label={`${label} selector`}>
             {options.length > 5 ? (
               <div className="studio-select-search-box">
                 <svg
@@ -202,7 +197,7 @@ export function StudioSelect({
               </div>
             )}
 
-            <div className="studio-select-viewport">
+            <div className="studio-select-viewport" role="listbox" aria-label={`${label} options`}>
               {filteredOptions.length === 0 ? (
                 <div className="studio-select-empty">No matching options</div>
               ) : (
@@ -211,6 +206,8 @@ export function StudioSelect({
                   return (
                     <div
                       key={opt.value}
+                      role="option"
+                      aria-selected={isSelected}
                       className={`studio-select-item ${
                         isSelected ? "studio-select-item-selected" : ""
                       }`}

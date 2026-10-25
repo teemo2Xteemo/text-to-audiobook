@@ -104,6 +104,27 @@ describe("jobUi", () => {
     );
   });
 
+  it("does not detect or alter text quoting timecodes without SRT document structure", () => {
+    const textWithQuote =
+      "Chapter 1\nThe detective noticed 00:00:01,000 --> 00:00:03,000 on the tape.\nCase closed.";
+    expect(isSrtContent(textWithQuote)).toBe(false);
+    expect(stripSrtToText(textWithQuote)).toBe(textWithQuote);
+  });
+
+  it("strips a two-cue SRT to the same output as backend strip_srt", () => {
+    const srt =
+      "1\n00:00:01,000 --> 00:00:03,000\nHello world.\n\n2\n00:00:04,000 --> 00:00:06,000\nSecond line.";
+    expect(isSrtContent(srt)).toBe(true);
+    expect(stripSrtToText(srt)).toBe("Hello world.\n\nSecond line.");
+  });
+
+  it("returns empty string when SRT has only timestamps and indices without dialogue", () => {
+    const metadataOnlySrt =
+      "1\n00:00:01,000 --> 00:00:03,000\n\n2\n00:00:04,000 --> 00:00:06,000\n";
+    expect(isSrtContent(metadataOnlySrt)).toBe(true);
+    expect(stripSrtToText(metadataOnlySrt)).toBe("");
+  });
+
   it("computes text metrics and pipeline progress percentage", () => {
     const metrics = estimateTextMetrics("One two three");
     expect(metrics.chars).toBe(13);

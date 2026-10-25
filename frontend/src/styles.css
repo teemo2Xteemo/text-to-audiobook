@@ -353,6 +353,16 @@ fieldset {
   justify-content: center;
   height: 3.35rem;
   color: var(--accent);
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: default;
+}
+
+.route-connector:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .route-connector-circle {
