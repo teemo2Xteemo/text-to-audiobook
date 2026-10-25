@@ -6,6 +6,11 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
+
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat, assert_legal_transition, is_terminal
@@ -191,6 +196,12 @@ class JobService:
                 continue
             if job is None or is_terminal(job.status):
                 continue
+            if self._is_job_locked(job.id):
+                logger.info(
+                    "job_recover_skipped_locked",
+                    extra={"job_id": job.id, "chunk_id": None},
+                )
+                continue
             if job.status is JobStatus.QUEUED:
                 updated = job
             else:
@@ -231,6 +242,26 @@ class JobService:
             await self._source_storage.delete_job(job_id)
         with suppress(Exception):
             await self._jobs.delete(job_id)
+
+    def _is_job_locked(self, job_id: str) -> bool:
+        if fcntl is None:
+            return False
+        jobs_root = (self._storage_path / "jobs").resolve()
+        lock_path = (jobs_root / job_id / ".lock").resolve()
+        if not lock_path.is_relative_to(jobs_root):
+            return False
+        if not lock_path.is_file():
+            return False
+        try:
+            with lock_path.open("r", encoding="utf-8") as lock_file:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    return False
+                except OSError:
+                    return True
+        except OSError:
+            return False
 
 
 class _JobStoreDiskAdapter:

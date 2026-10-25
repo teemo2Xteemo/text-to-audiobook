@@ -31,8 +31,9 @@ class RQJobQueue:
             if existing is not None:
                 if existing.get_status() == "queued":
                     return
-                # A `started` entry may be stale after a hard worker crash. The per-job
-                # workspace flock already prevents a live duplicate from running, so drop
+                # Any non-queued entry (started, deferred, scheduled, failed, finished)
+                # is replaced. In particular, a `started` entry may be stale after a hard
+                # worker crash. Workspace flock prevents live duplicate execution, so drop
                 # the old entry (and its registry membership) and enqueue a fresh one.
                 existing.delete()
         self._queue.enqueue(

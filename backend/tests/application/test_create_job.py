@@ -395,6 +395,47 @@ def test_recover_queued_job_does_not_burn_recovery_attempts_or_fail(tmp_path: Pa
     assert len(queue.job_ids) == 4
 
 
+def test_recover_skips_actively_locked_job_without_incrementing_recovery_attempts(
+    tmp_path: Path,
+) -> None:
+    import fcntl
+
+    filesystem, _cache, _store, queue, service = _fs_retry_service(
+        tmp_path, max_recovery_attempts=2
+    )
+    running = _fs_job("22222222-2222-2222-2222-222222222222", JobStatus.TRANSLATING)
+    asyncio.run(filesystem.save_job(running))
+
+    workspace = tmp_path / "jobs" / running.id
+    workspace.mkdir(parents=True, exist_ok=True)
+    lock_path = workspace / ".lock"
+
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # Worker holds lock: recover must skip, not re-enqueue, not increment recovery_attempts
+        recovered = asyncio.run(service.recover_in_progress())
+        assert recovered == []
+        assert queue.job_ids == []
+
+        fresh = asyncio.run(filesystem.get_job(running.id))
+        assert fresh is not None
+        assert fresh.recovery_attempts == 0
+        assert fresh.status is JobStatus.TRANSLATING
+
+        # Worker process finishes/exits, releasing the flock
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    # Now unlocked: recover picks up the job and increments recovery_attempts
+    recovered_after = asyncio.run(service.recover_in_progress())
+    assert recovered_after == [running.id]
+    assert queue.job_ids == [running.id]
+
+    fresh_after = asyncio.run(filesystem.get_job(running.id))
+    assert fresh_after is not None
+    assert fresh_after.recovery_attempts == 1
+
+
 def test_mark_failed_from_non_terminal_updates_filesystem_and_cache(tmp_path: Path) -> None:
     filesystem, cache, store, queue, service = _fs_retry_service(tmp_path)
     running = _fs_job("66666666-6666-6666-6666-666666666666", JobStatus.GENERATING_AUDIO)

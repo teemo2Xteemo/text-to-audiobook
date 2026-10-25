@@ -124,3 +124,33 @@ def test_enqueue_replaces_stale_started_entry_after_crash() -> None:
     assert deleted == [rq_id]
     assert queue.calls == 1
     assert queue.kwargs["job_id"] == rq_id
+
+
+def test_rq_queue_enqueue_cleans_started_job_registry_with_fakeredis() -> None:
+    import fakeredis
+    from rq import Queue
+    from rq.executions import Execution
+
+    client = fakeredis.FakeStrictRedis()
+    queue = Queue("test-recovery-queue", connection=client)
+    job_id = "11111111-1111-1111-1111-111111111111"
+    rq_job_id = f"process-{job_id}"
+
+    job = queue.enqueue(RQ_PROCESS_JOB, job_id, job_id=rq_job_id)
+    with client.pipeline() as pipe:
+        job.prepare_for_execution("worker-test", pipe)
+        Execution.create(job, ttl=300, pipeline=pipe, worker_name="worker-test")
+        pipe.execute()
+
+    job.refresh()
+    assert job.get_status() == "started"
+    assert job.id in queue.started_job_registry
+
+    rq_queue = RQJobQueue(queue, job_timeout=1800)
+    asyncio.run(rq_queue.enqueue(job_id))
+
+    assert job.id not in queue.started_job_registry
+    assert rq_job_id in queue.job_ids
+    new_job = queue.fetch_job(rq_job_id)
+    assert new_job is not None
+    assert new_job.get_status() == "queued"
