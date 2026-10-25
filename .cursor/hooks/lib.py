@@ -61,7 +61,7 @@ PROVIDER_IF_RE = re.compile(
     r"""if\s+(?:\w+\.)?provider\s*==\s*["'][^"']+["']"""
 )
 VENDOR_IMPORT_RE = re.compile(
-    r"""^\s*(?:from|import)\s+(edge_tts|elevenlabs|azure\.cognitiveservices|google\.cloud\.texttospeech|transformers|piper)""",
+    r"""^\s*(?:from|import)\s+(edge_tts|elevenlabs|azure\.cognitiveservices|google\.cloud\.texttospeech|transformers|piper|torch|lingua|ollama)\b""",
     re.MULTILINE,
 )
 

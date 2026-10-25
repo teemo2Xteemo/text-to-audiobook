@@ -35,6 +35,7 @@ class CheckpointFilesystem:
             tmp.write_text(payload, encoding="utf-8")
             tmp.replace(self._file)
         except OSError as exc:
+            tmp.unlink(missing_ok=True)
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to write checkpoint") from exc
 
     def relative(self, artifact: Path) -> str:

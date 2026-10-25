@@ -32,7 +32,7 @@ async def validation_error_handler(_request: Request, exc: Exception) -> JSONRes
     errors = exc.errors() if hasattr(exc, "errors") else []  # type: ignore[no-untyped-call]
     return JSONResponse(
         status_code=400,
-        content=envelope(ErrorType.INVALID_INPUT, _validation_message(list(errors))),
+        content=envelope(ErrorType.INVALID_INPUT, validation_message(list(errors))),
     )
 
 
@@ -47,7 +47,7 @@ async def http_exception_handler(_request: Request, exc: StarletteHTTPException)
     )
 
 
-def _validation_message(errors: list[Any]) -> str:
+def validation_message(errors: list[Any]) -> str:
     if not errors:
         return "invalid request"
     first = errors[0]

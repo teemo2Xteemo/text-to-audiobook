@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 from app.domain.audio import SPEED_DEFAULT, Voice
 from app.domain.jobs import Job, JobStatus, OutputFormat
@@ -30,6 +30,18 @@ class JobStatusResponse(BaseModel):
     speed: float
     output_format: OutputFormat
     audio_url: str | None = None
+    translation_provider: str | None = None
+    translation_model: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_pin(self, handler: object) -> dict[str, object]:
+        payload = handler(self)
+        if not isinstance(payload, dict):
+            return {}
+        if payload.get("translation_provider") is None and payload.get("translation_model") is None:
+            payload.pop("translation_provider", None)
+            payload.pop("translation_model", None)
+        return payload
 
     @classmethod
     def from_job(cls, job: Job) -> JobStatusResponse:
@@ -48,6 +60,8 @@ class JobStatusResponse(BaseModel):
             speed=job.speed,
             output_format=job.output_format,
             audio_url=audio_url,
+            translation_provider=job.translation_provider,
+            translation_model=job.translation_model,
         )
 
 

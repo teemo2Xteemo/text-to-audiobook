@@ -83,6 +83,27 @@ class OutputFormat(StrEnum):
     WAV = "wav"
 
 
+_PIN_PROVIDERS = frozenset({"fake", "nllb", "ollama"})
+
+
+def _optional_pin_value(data: Mapping[str, Any], key: str) -> str | None:
+    if key not in data or data[key] is None:
+        return None
+    text = str(data[key]).strip()
+    return text or None
+
+
+def _pin_from_mapping(data: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """Return a complete pin, or ``(None, None)`` when either half is absent."""
+    provider = _optional_pin_value(data, "translation_provider")
+    model = _optional_pin_value(data, "translation_model")
+    if provider is None or model is None:
+        return None, None
+    if provider not in _PIN_PROVIDERS:
+        raise ValueError(f"translation_provider must be one of {sorted(_PIN_PROVIDERS)}")
+    return provider, model
+
+
 @dataclass(frozen=True)
 class Job:
     id: str
@@ -97,9 +118,26 @@ class Job:
     chunk_total: int = 0
     error_type: ErrorType | None = None
     message: str | None = None
+    translation_provider: str | None = None
+    translation_model: str | None = None
+    recovery_attempts: int = 0
+
+    def __post_init__(self) -> None:
+        if self.recovery_attempts < 0:
+            raise ValueError("recovery_attempts must be >= 0")
+        provider = self.translation_provider
+        model = self.translation_model
+        if provider is None and model is None:
+            return
+        if provider is None or model is None:
+            raise ValueError("translation pin requires both provider and model")
+        if provider not in _PIN_PROVIDERS:
+            raise ValueError(f"translation_provider must be one of {sorted(_PIN_PROVIDERS)}")
+        if not model.strip():
+            raise ValueError("translation_model must be non-empty")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "chunk_current": self.chunk_current,
             "chunk_total": self.chunk_total,
             "error_type": self.error_type.value if self.error_type is not None else None,
@@ -113,12 +151,19 @@ class Job:
             "target_language": self.target_language,
             "voice": self.voice,
         }
+        if self.translation_provider is not None and self.translation_model is not None:
+            payload["translation_model"] = self.translation_model
+            payload["translation_provider"] = self.translation_provider
+        if self.recovery_attempts > 0:
+            payload["recovery_attempts"] = self.recovery_attempts
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Job:
         error_raw = data.get("error_type")
         message = data.get("message")
         voice = data.get("voice")
+        provider, model = _pin_from_mapping(data)
         return cls(
             id=str(data["id"]),
             status=JobStatus(str(data["status"])),
@@ -132,4 +177,7 @@ class Job:
             chunk_total=int(data.get("chunk_total", 0)),
             error_type=ErrorType(str(error_raw)) if error_raw else None,
             message=str(message) if message else None,
+            translation_provider=provider,
+            translation_model=model,
+            recovery_attempts=int(data.get("recovery_attempts", 0)),
         )

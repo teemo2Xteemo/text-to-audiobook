@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
 from app.domain.jobs import Job, OutputFormat
@@ -37,6 +37,16 @@ class JobStore(Protocol):
     async def delete(self, job_id: str) -> None: ...
 
     async def list_ids(self) -> Sequence[str]: ...
+
+
+class DiskJobStore(Protocol):
+    """Direct on-disk ``status.json`` access for crash recovery and retry FSM transitions."""
+
+    async def save_job(self, job: Job) -> None: ...
+
+    async def get_job(self, job_id: str) -> Job | None: ...
+
+    async def list_job_ids(self) -> Sequence[str]: ...
 
 
 class JobQueue(Protocol):
@@ -77,3 +87,15 @@ class ArtifactCache(Protocol):
     def get(self, operation: str, key: str, destination: Path) -> bool: ...
 
     def put(self, operation: str, key: str, source: Path) -> None: ...
+
+
+class CheckpointStorage(Protocol):
+    """Workspace-scoped ``checkpoint.json`` storage port."""
+
+    def load_raw(self) -> list[Any]: ...
+
+    def save_raw(self, entries: list[dict[str, str]]) -> None: ...
+
+    def relative(self, artifact: Path) -> str: ...
+
+    def resolve(self, artifact_path: str) -> Path: ...

@@ -33,3 +33,20 @@ def test_enqueue_sets_timeout_and_on_failure() -> None:
 def test_rq_on_failure_path_resolves() -> None:
     module_path, name = RQ_ON_FAILURE.rsplit(".", 1)
     assert callable(getattr(import_module(module_path), name))
+
+
+def test_enqueue_runs_in_worker_thread() -> None:
+    import threading
+
+    main_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+
+    class _ThreadQueue(_CaptureQueue):
+        def enqueue(self, *args: object, **kwargs: object) -> None:
+            seen.append(threading.current_thread())
+            super().enqueue(*args, **kwargs)
+
+    queue = _ThreadQueue()
+    asyncio.run(RQJobQueue(queue, job_timeout=1800).enqueue("11111111-1111-1111-1111-111111111111"))  # type: ignore[arg-type]
+    assert len(seen) == 1
+    assert seen[0] is not main_thread

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from rq import Queue
 from rq.job import Callback
 
@@ -17,7 +19,8 @@ class RQJobQueue:
 
     async def enqueue(self, job_id: str) -> None:
         try:
-            self._queue.enqueue(
+            await asyncio.to_thread(
+                self._queue.enqueue,
                 RQ_PROCESS_JOB,
                 job_id,
                 job_timeout=self._job_timeout,

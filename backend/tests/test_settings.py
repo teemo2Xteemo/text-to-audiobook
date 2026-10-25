@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.config.settings import Settings, get_settings, parse_tts_default_voice_by_language
+from app.config.settings import Settings, parse_tts_default_voice_by_language
 
 
 def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,8 +112,9 @@ def test_ollama_base_url_rejects_empty_and_non_http() -> None:
     assert settings.ollama_base_url == "https://ollama.example:11434"
 
 
-def test_get_settings_returns_settings() -> None:
-    get_settings.cache_clear()
-    settings = get_settings()
-    assert isinstance(settings, Settings)
-    assert isinstance(settings.storage_path, Path)
+def test_config_module_does_not_export_global_get_settings_singleton() -> None:
+    import app.config as config_pkg
+    import app.config.settings as settings_mod
+
+    assert not hasattr(settings_mod, "get_settings")
+    assert not hasattr(config_pkg, "get_settings")

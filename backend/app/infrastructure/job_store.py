@@ -47,7 +47,10 @@ class DualWriteJobStore:
                 with suppress(Exception):
                     await self._cache.save(job)
             return job
-        return cached
+        if cached is not None:
+            with suppress(Exception):
+                await self._cache.delete(job_id)
+        return None
 
     async def delete(self, job_id: str) -> None:
         with suppress(Exception):

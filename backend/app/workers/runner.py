@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from multiprocessing import Process
 
 from redis import Redis
 from rq import Queue, Worker
@@ -9,6 +10,7 @@ from rq import Queue, Worker
 from app.config.factory import (
     build_job_service,
     build_orchestrator,
+    settings_for_translation_pin,
 )
 from app.config.settings import Settings
 from app.domain.errors import DomainError
@@ -34,7 +36,6 @@ def boot() -> None:
 async def _process_job_async(job_id: str) -> None:
     settings = Settings()
     filesystem = FilesystemJobStorage(settings.storage_path)
-    orchestrator = build_orchestrator(settings)
 
     try:
         job = await filesystem.get_job(job_id)
@@ -53,6 +54,7 @@ async def _process_job_async(job_id: str) -> None:
 
     text = await filesystem.read_source(job_id)
     workspace = settings.storage_path / "jobs" / job_id
+    orchestrator = build_orchestrator(settings_for_translation_pin(settings, job))
     await orchestrator.run(job, text, workspace=workspace)
 
 
@@ -61,7 +63,7 @@ async def _recover_async(settings: Settings) -> list[str]:
     return await service.recover_in_progress()
 
 
-def _listen(settings: Settings) -> None:
+def _run_worker(settings: Settings) -> None:
     connection = Redis.from_url(str(settings.redis_url))
     timeout = settings.rq_job_timeout_seconds
     queues = [Queue(RQ_QUEUE_NAME, connection=connection, default_timeout=timeout)]
@@ -70,3 +72,18 @@ def _listen(settings: Settings) -> None:
         connection=connection,
         exception_handlers=[handle_worker_exception],
     ).work()
+
+
+def _listen(settings: Settings) -> None:
+    children: list[Process] = []
+    for _ in range(max(0, settings.worker_concurrency - 1)):
+        proc = Process(target=_run_worker, args=(settings,), daemon=True)
+        proc.start()
+        children.append(proc)
+    try:
+        _run_worker(settings)
+    finally:
+        for proc in children:
+            if proc.is_alive():
+                proc.terminate()
+            proc.join(timeout=5)

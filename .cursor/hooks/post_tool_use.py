@@ -26,7 +26,7 @@ def _tool_input(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _file_path(tool_input: dict[str, Any]) -> str | None:
-    for key in ("path", "file_path", "target_notebook"):
+    for key in ("path", "file_path", "target_notebook", "Path"):
         value = tool_input.get(key)
         if isinstance(value, str) and value:
             return value
@@ -34,10 +34,11 @@ def _file_path(tool_input: dict[str, Any]) -> str | None:
 
 
 def _contents(path: str, tool_input: dict[str, Any]) -> str:
-    contents = tool_input.get("contents")
-    if isinstance(contents, str):
-        return contents
-    new_string = tool_input.get("new_string")
+    for key in ("contents", "Content"):
+        contents = tool_input.get(key)
+        if isinstance(contents, str):
+            return contents
+    new_string = tool_input.get("new_string") or tool_input.get("Replacement")
     disk = Path(path)
     if disk.is_file():
         try:

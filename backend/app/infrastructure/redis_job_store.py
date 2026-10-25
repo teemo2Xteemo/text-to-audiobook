@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 from redis import Redis
@@ -17,13 +18,14 @@ class RedisJobCache:
         self._key_prefix = key_prefix
 
     async def save(self, job: Job) -> None:
+        payload = json.dumps(job.to_dict(), ensure_ascii=False)
         try:
-            self._client.set(self._key(job.id), json.dumps(job.to_dict(), ensure_ascii=False))
+            await asyncio.to_thread(self._client.set, self._key(job.id), payload)
         except RedisError as exc:
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to cache job status") from exc
 
     async def get(self, job_id: str) -> Job | None:
-        raw = self._client.get(self._key(job_id))
+        raw = await asyncio.to_thread(self._client.get, self._key(job_id))
         if raw is None:
             return None
         try:
@@ -34,7 +36,7 @@ class RedisJobCache:
 
     async def delete(self, job_id: str) -> None:
         try:
-            self._client.delete(self._key(job_id))
+            await asyncio.to_thread(self._client.delete, self._key(job_id))
         except RedisError as exc:
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to delete job cache") from exc
 

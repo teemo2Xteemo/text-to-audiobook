@@ -16,8 +16,10 @@ from app.config.factory import (
     build_translation_provider,
     build_tts_provider,
     cache_identity_from_settings,
+    settings_for_translation_pin,
 )
 from app.config.settings import Settings
+from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.domain.retry import RetryPolicy
 from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
 from app.infrastructure.fake_audio import FakeAudioProcessor
@@ -213,6 +215,82 @@ def test_cache_identity_from_settings_uses_provider_model(tmp_path: Path) -> Non
     )
     assert fake.translation_provider == "fake"
     assert fake.translation_model == "fake"
+
+
+def test_translation_pins_do_not_construct_the_other_heavy_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.providers.translation.nllb as nllb_mod
+    import app.providers.translation.ollama as ollama_mod
+
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    assert settings.translation_provider == "fake"
+    constructed: list[str] = []
+    nllb_init = nllb_mod.NllbTranslationProvider.__init__
+    ollama_init = ollama_mod.OllamaTranslationProvider.__init__
+
+    def _spy_nllb(self: object, *args: object, **kwargs: object) -> None:
+        constructed.append("nllb")
+        nllb_init(self, *args, **kwargs)
+
+    def _spy_ollama(self: object, *args: object, **kwargs: object) -> None:
+        constructed.append("ollama")
+        ollama_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(nllb_mod.NllbTranslationProvider, "__init__", _spy_nllb)
+    monkeypatch.setattr(ollama_mod.OllamaTranslationProvider, "__init__", _spy_ollama)
+
+    fake = build_translation_provider(settings)
+    assert isinstance(fake, FakeTranslationProvider)
+    assert constructed == []
+
+    nllb = build_translation_provider(
+        settings.model_copy(
+            update={
+                "translation_provider": "nllb",
+                "nllb_model_id": "facebook/nllb-200-distilled-600M",
+            }
+        )
+    )
+    assert type(nllb) is nllb_mod.NllbTranslationProvider
+    assert constructed == ["nllb"]
+
+    ollama = build_translation_provider(
+        settings.model_copy(
+            update={
+                "translation_provider": "ollama",
+                "ollama_translation_model": "translategemma:4b",
+            }
+        )
+    )
+    assert type(ollama) is ollama_mod.OllamaTranslationProvider
+    assert constructed == ["nllb", "ollama"]
+
+
+def test_cache_identity_follows_the_job_pin_not_live_settings(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="nllb",
+        nllb_model_id="facebook/nllb-200-distilled-600M",
+    )
+    job = Job(
+        id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="ja-JP",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        translation_provider="ollama",
+        translation_model="translategemma:12b",
+    )
+    identity = cache_identity_from_settings(settings_for_translation_pin(settings, job))
+    assert identity.translation_provider == "ollama"
+    assert identity.translation_model == "translategemma:12b"
+    live = cache_identity_from_settings(settings)
+    assert live.translation_model == "facebook/nllb-200-distilled-600M"
 
 
 def test_factory_builds_cpu_language_detector(tmp_path: Path) -> None:

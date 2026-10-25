@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.schemas import JobStatusResponse
 from app.application.jobs import JobService
 from app.config.settings import Settings
 from app.domain.errors import ErrorType
-from app.domain.jobs import Job, JobStatus
+from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.main import create_app
 from tests.fakes import InMemoryJobStore, InMemoryQueue, InMemorySourceStorage
@@ -35,6 +36,7 @@ def memory(
         queue=queue,
         output_bitrate_kbps=128,
         storage_path=tmp_path,
+        disk_jobs=FilesystemJobStorage(tmp_path),
     )
     return service, store, source, queue
 
@@ -50,6 +52,38 @@ def jobs_client(
     app.state.job_service = service
     with TestClient(app) as client:
         yield client
+
+
+def test_post_does_not_accept_a_translator_and_get_returns_lab_pin(
+    jobs_client: TestClient,
+) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={**VALID_BODY, "translation_provider": "ollama", "translation_model": "other"},
+    )
+    assert response.status_code == 202
+    assert set(response.json()) == {"job_id", "status"}
+    job_id = response.json()["job_id"]
+    status = jobs_client.get(f"/api/jobs/{job_id}")
+    assert status.status_code == 200
+    assert status.json()["translation_provider"] == "fake"
+    assert status.json()["translation_model"] == "fake"
+
+
+def test_status_omits_pin_when_the_job_has_none() -> None:
+    job = Job(
+        id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="ja-JP",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+    )
+    payload = JobStatusResponse.from_job(job).model_dump()
+    assert "translation_provider" not in payload
+    assert "translation_model" not in payload
 
 
 def test_post_json_returns_202_queued_uuid(jobs_client: TestClient) -> None:
@@ -329,3 +363,46 @@ def test_retry_rejects_non_uuid(jobs_client: TestClient) -> None:
     response = jobs_client.post("/api/jobs/not-a-uuid/retry")
     assert response.status_code == 400
     assert response.json()["error_type"] == ErrorType.INVALID_INPUT
+
+
+def test_get_job_service_caches_instance_on_app_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+) -> None:
+    service, _, _, _ = memory
+    calls = 0
+
+    def _fake_build(settings: Settings) -> JobService:
+        nonlocal calls
+        del settings
+        calls += 1
+        return service
+
+    monkeypatch.setattr("app.api.deps.build_job_service", _fake_build)
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    with TestClient(app) as client:
+        created = client.post("/api/jobs", json=VALID_BODY).json()
+        client.get(f"/api/jobs/{created['job_id']}")
+        client.get(f"/api/jobs/{created['job_id']}")
+    assert calls == 1
+    assert app.state.job_service is service
+
+
+def test_post_srt_upload_is_accepted(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+) -> None:
+    srt_bytes = (
+        b"1\n00:00:01,000 --> 00:00:03,000\nHello world.\n\n"
+        b"2\n00:00:04,000 --> 00:00:06,000\nSecond line.\n"
+    )
+    response = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "target_language": "ja-JP"},
+        files={"file": ("captions.srt", srt_bytes, "application/x-subrip")},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    _, _, source, _ = memory
+    assert "Hello world." in source.texts[job_id]

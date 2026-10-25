@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
@@ -29,6 +28,7 @@ from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, assert_legal_transition, is_at_or_past, is_terminal
 from app.domain.ports import (
     AudioProcessor,
+    CheckpointStorage,
     JobStore,
     LanguageDetector,
     NarrationProcessor,
@@ -50,6 +50,7 @@ class PipelineOrchestrator:
         detector: LanguageDetector,
         audio: AudioProcessor,
         jobs: JobStore,
+        checkpoint_storage_factory: Callable[[Path], CheckpointStorage],
         artifact_cache: PipelineArtifactCache | None = None,
         max_chars: int = CHUNK_MAX_CHARS,
         retry_policy: RetryPolicy | None = None,
@@ -62,6 +63,7 @@ class PipelineOrchestrator:
         self._audio = audio
         self._jobs = jobs
         self._artifact_cache = artifact_cache
+        self._checkpoint_storage_factory = checkpoint_storage_factory
         self._max_chars = max_chars
         # TODO: require retry_policy (no constructor fallback). These literals
         # duplicate Settings / factory defaults; Settings should be the only source.
@@ -73,7 +75,9 @@ class PipelineOrchestrator:
         if is_terminal(job.status):
             return job
         workspace.mkdir(parents=True, exist_ok=True)
-        checkpoints = CheckpointStore(workspace)
+        checkpoints = CheckpointStore(
+            workspace, storage=self._checkpoint_storage_factory(workspace)
+        )
         if job.status is not JobStatus.QUEUED:
             logger.info(
                 "pipeline_resumed",
@@ -86,7 +90,7 @@ class PipelineOrchestrator:
             job = replace(
                 job,
                 source_language=resolved,
-                chunk_current=0,
+                chunk_current=0 if job.status is JobStatus.PARSING else job.chunk_current,
                 chunk_total=len(chunks),
             )
             await self._jobs.save(job)
@@ -116,7 +120,7 @@ class PipelineOrchestrator:
         workspace: Path,
         checkpoints: CheckpointStore,
     ) -> Job:
-        job = await self._reset_chunk_progress(job)
+        job = await self._reset_chunk_progress(job, JobStatus.TRANSLATING)
         for chunk in chunks:
             self._active_chunk_id = chunk.id
             path = workspace / "chunks" / f"{chunk.id}.translated.txt"
@@ -164,7 +168,9 @@ class PipelineOrchestrator:
                             job_id=job.id,
                             chunk_id=chunk.id,
                         )
-            job = await self._touch_chunk(job, chunk, STAGE_TRANSLATED)
+            job = await self._touch_chunk(
+                job, chunk, STAGE_TRANSLATED, active_status=JobStatus.TRANSLATING
+            )
         return job
 
     async def _narrate_chunks(
@@ -174,7 +180,7 @@ class PipelineOrchestrator:
         workspace: Path,
         checkpoints: CheckpointStore,
     ) -> Job:
-        job = await self._reset_chunk_progress(job)
+        job = await self._reset_chunk_progress(job, JobStatus.PREPARING_TTS)
         for chunk in chunks:
             self._active_chunk_id = chunk.id
             source = workspace / "chunks" / f"{chunk.id}.translated.txt"
@@ -188,7 +194,9 @@ class PipelineOrchestrator:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(narrated, encoding="utf-8")
                 checkpoints.record(chunk.id, STAGE_NARRATED, path)
-            job = await self._touch_chunk(job, chunk, STAGE_NARRATED)
+            job = await self._touch_chunk(
+                job, chunk, STAGE_NARRATED, active_status=JobStatus.PREPARING_TTS
+            )
         return job
 
     async def _generate_audio(
@@ -198,7 +206,7 @@ class PipelineOrchestrator:
         workspace: Path,
         checkpoints: CheckpointStore,
     ) -> Job:
-        job = await self._reset_chunk_progress(job)
+        job = await self._reset_chunk_progress(job, JobStatus.GENERATING_AUDIO)
         ext = job.output_format.value
         settings = TTSSettings(speed=job.speed)
         for chunk in chunks:
@@ -238,6 +246,7 @@ class PipelineOrchestrator:
                         )
                         _place_artifact(artifact.path, destination)
                         if not _nonempty(destination):
+                            destination.unlink(missing_ok=True)
                             raise DomainError(ErrorType.TTS_FAILED, "tts failed")
 
                     await with_chunk_retry(
@@ -273,7 +282,9 @@ class PipelineOrchestrator:
                 if not _nonempty(normalized_path):
                     raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "audio normalize failed")
                 checkpoints.record(chunk.id, STAGE_NORMALIZED, normalized_path)
-            job = await self._touch_chunk(job, chunk, "generating_audio")
+            job = await self._touch_chunk(
+                job, chunk, "generating_audio", active_status=JobStatus.GENERATING_AUDIO
+            )
         return job
 
     async def _merge(self, job: Job, chunks: list[Chunk], workspace: Path) -> Job:
@@ -299,18 +310,37 @@ class PipelineOrchestrator:
         if is_at_or_past(job.status, status):
             return job
         assert_legal_transition(job.status, status)
-        job = replace(job, status=status)
+        reset_progress = status in {
+            JobStatus.TRANSLATING,
+            JobStatus.PREPARING_TTS,
+            JobStatus.GENERATING_AUDIO,
+        }
+        job = replace(
+            job,
+            status=status,
+            chunk_current=0 if reset_progress else job.chunk_current,
+        )
         await self._jobs.save(job)
         return job
 
-    async def _reset_chunk_progress(self, job: Job) -> Job:
+    async def _reset_chunk_progress(self, job: Job, active_status: JobStatus) -> Job:
+        if job.status is not active_status or job.chunk_current > 0:
+            return job
         job = replace(job, chunk_current=0)
         await self._jobs.save(job)
         return job
 
-    async def _touch_chunk(self, job: Job, chunk: Chunk, stage: str) -> Job:
-        job = replace(job, chunk_current=chunk.index)
-        await self._jobs.save(job)
+    async def _touch_chunk(
+        self,
+        job: Job,
+        chunk: Chunk,
+        stage: str,
+        *,
+        active_status: JobStatus,
+    ) -> Job:
+        if job.status is active_status:
+            job = replace(job, chunk_current=max(job.chunk_current, chunk.index))
+            await self._jobs.save(job)
         logger.info(
             "pipeline_chunk_done",
             extra={"job_id": job.id, "chunk_id": chunk.id, "stage": stage},
@@ -338,7 +368,7 @@ class PipelineOrchestrator:
 def _place_artifact(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.resolve() != destination.resolve():
-        shutil.copyfile(source, destination)
+        source.replace(destination)
 
 
 def _nonempty(path: Path) -> bool:

@@ -1,4 +1,3 @@
-from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -66,8 +65,3 @@ class Settings(BaseSettings):
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("OLLAMA_BASE_URL must be an http or https URL")
         return url
-
-
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()

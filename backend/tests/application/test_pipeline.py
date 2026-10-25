@@ -26,6 +26,7 @@ from app.domain.languages import AUTO_SOURCE_LANGUAGE
 from app.domain.ports import NarrationProcessor
 from app.domain.retry import RetryPolicy
 from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
+from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from tests.fakes import (
     FakeAudioProcessor,
     FakeLanguageDetector,
@@ -165,6 +166,7 @@ def _orchestrator(
         "detector": detector,
         "audio": audio,
         "jobs": jobs,
+        "checkpoint_storage_factory": CheckpointFilesystem,
         "retry_policy": retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0),
         "sleep": sleep if sleep is not None else _RecordingSleep(),
     }
@@ -187,7 +189,7 @@ def _run(
 
 def _seed_completed_chunks(workspace: Path, chunks: list, count: int, *, ext: str = "mp3") -> None:
     workspace.mkdir(parents=True, exist_ok=True)
-    store = CheckpointStore(workspace)
+    store = CheckpointStore(workspace, storage=CheckpointFilesystem(workspace))
     for chunk in chunks[:count]:
         translated = workspace / "chunks" / f"{chunk.id}.translated.txt"
         translated.parent.mkdir(parents=True, exist_ok=True)
@@ -322,7 +324,9 @@ def test_checkpoint_skips_completed_translate_chunk(tmp_path: Path) -> None:
     translated = workspace / "chunks" / f"{chunks[0].id}.translated.txt"
     translated.parent.mkdir(parents=True)
     translated.write_text("already-translated", encoding="utf-8")
-    CheckpointStore(workspace).record(chunks[0].id, STAGE_TRANSLATED, translated)
+    CheckpointStore(workspace, storage=CheckpointFilesystem(workspace)).record(
+        chunks[0].id, STAGE_TRANSLATED, translated
+    )
 
     result = _run(orchestrator, job, workspace)
     assert result.status is JobStatus.COMPLETED
@@ -343,7 +347,9 @@ def test_checkpoint_does_not_skip_empty_translate_artifact(tmp_path: Path) -> No
     translated = workspace / "chunks" / f"{chunks[0].id}.translated.txt"
     translated.parent.mkdir(parents=True)
     translated.write_bytes(b"")
-    CheckpointStore(workspace).record(chunks[0].id, STAGE_TRANSLATED, translated)
+    CheckpointStore(workspace, storage=CheckpointFilesystem(workspace)).record(
+        chunks[0].id, STAGE_TRANSLATED, translated
+    )
     assert translated.stat().st_size == 0
 
     result = _run(orchestrator, job, workspace)
@@ -664,6 +670,41 @@ def test_resume_does_not_reverse_status(tmp_path: Path) -> None:
     assert ordered[-2:] == [JobStatus.MERGING, JobStatus.COMPLETED]
 
 
+def test_resume_in_generating_audio_does_not_oscillate_chunk_progress_during_earlier_stages(
+    tmp_path: Path,
+) -> None:
+    chunks = chunk_text(FIVE_SENTENCES, max_chars=20)
+    job = _job(status=JobStatus.GENERATING_AUDIO, chunk_current=2, chunk_total=len(chunks))
+
+    class _ProgressStore(InMemoryJobStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.snapshots: list[tuple[JobStatus, int, int]] = []
+
+        async def save(self, saved_job: Job) -> None:
+            self.snapshots.append(
+                (saved_job.status, saved_job.chunk_current, saved_job.chunk_total)
+            )
+            await super().save(saved_job)
+
+    store = _ProgressStore()
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, jobs=store, max_chars=20
+    )
+    _seed_completed_chunks(workspace, chunks, 2)
+
+    result = _run(orchestrator, job, workspace, text=FIVE_SENTENCES)
+    assert result.status is JobStatus.COMPLETED
+
+    gen_indices = [
+        chunk_cur
+        for status, chunk_cur, _ in store.snapshots
+        if status is JobStatus.GENERATING_AUDIO
+    ]
+    assert 0 not in gen_indices
+    assert gen_indices == sorted(gen_indices)
+
+
 def test_run_is_noop_for_completed_and_failed(tmp_path: Path) -> None:
     completed = _job(status=JobStatus.COMPLETED)
     orchestrator, workspace, translation, _, tts, _, _, _ = _orchestrator(tmp_path, job=completed)
@@ -876,3 +917,93 @@ def test_empty_cache_blob_is_a_miss(tmp_path: Path) -> None:
     )
     _run(second_orch, second, tmp_path / "jobs" / second.id)
     assert len(translation.calls) > after_first
+
+
+def test_tts_scratch_files_are_moved_not_left_behind(tmp_path: Path) -> None:
+    job = _job()
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(tmp_path, job=job, max_chars=20)
+    result = _run(orchestrator, job, workspace)
+    assert result.status is JobStatus.COMPLETED
+    scratch_dir = tmp_path / "tts-scratch"
+    assert list(scratch_dir.glob("*")) == []
+
+
+def test_checkpoint_store_caches_entries_in_memory_and_preserves_state_on_save_failure(
+    tmp_path: Path,
+) -> None:
+    from app.application.pipeline import checkpoint as checkpoint_mod
+    from app.infrastructure.checkpoint_fs import CheckpointFilesystem
+
+    assert not hasattr(checkpoint_mod, "_WorkspaceCheckpointStorage")
+
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+    real_fs = CheckpointFilesystem(workspace)
+    load_calls = 0
+    fail_save = False
+
+    class _CountingStorage:
+        def load_raw(self) -> list[dict[str, str]]:
+            nonlocal load_calls
+            load_calls += 1
+            return real_fs.load_raw()
+
+        def save_raw(self, entries: list[dict[str, str]]) -> None:
+            if fail_save:
+                raise DomainError(ErrorType.STORAGE_FAILED, "disk full")
+            real_fs.save_raw(entries)
+
+        def relative(self, artifact: Path) -> str:
+            return real_fs.relative(artifact)
+
+        def resolve(self, artifact_path: str) -> Path:
+            return real_fs.resolve(artifact_path)
+
+    store = CheckpointStore(workspace, storage=_CountingStorage())
+    a1 = workspace / "chunks" / "chunk-001.translated.txt"
+    a1.parent.mkdir(parents=True)
+    a1.write_text("one", encoding="utf-8")
+    a2 = workspace / "chunks" / "chunk-002.translated.txt"
+    a2.write_text("two", encoding="utf-8")
+
+    assert not store.is_complete("chunk-001", STAGE_TRANSLATED)
+    store.record("chunk-001", STAGE_TRANSLATED, a1)
+    assert store.is_complete("chunk-001", STAGE_TRANSLATED)
+    assert not store.is_complete("chunk-002", STAGE_TRANSLATED)
+    assert load_calls == 1
+
+    fail_save = True
+    with pytest.raises(DomainError):
+        store.record("chunk-002", STAGE_TRANSLATED, a2)
+    assert not store.is_complete("chunk-002", STAGE_TRANSLATED)
+    assert load_calls == 1
+
+
+def test_pipeline_strips_srt_timecodes_and_tags_before_translation(tmp_path: Path) -> None:
+    srt_text = (
+        "1\n"
+        "00:01:02,000 --> 00:01:05,500\n"
+        "<i>Alpha is first.</i>\n\n"
+        "2\n"
+        "00:01:06,000 --> 00:01:09,000\n"
+        "Bravo is second.\n"
+    )
+    job = _job()
+    orchestrator, workspace, translation, _, _, _, _, _ = _orchestrator(tmp_path, job=job)
+    result = _run(orchestrator, job, workspace, text=srt_text)
+    assert result.status is JobStatus.COMPLETED
+    translated_inputs = " ".join(call[0] for call in translation.calls)
+    assert "00:01:02" not in translated_inputs
+    assert "-->" not in translated_inputs
+    assert "<i>" not in translated_inputs
+    assert "Alpha is first." in translated_inputs
+    assert "Bravo is second." in translated_inputs
+
+
+def test_pipeline_rejects_srt_with_only_timecodes_and_no_dialogue(tmp_path: Path) -> None:
+    srt_only_meta = "1\n00:00:01,000 --> 00:00:02,000\n\n2\n00:00:03,000 --> 00:00:04,000\n"
+    job = _job()
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(tmp_path, job=job)
+    result = _run(orchestrator, job, workspace, text=srt_only_meta)
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.INVALID_INPUT

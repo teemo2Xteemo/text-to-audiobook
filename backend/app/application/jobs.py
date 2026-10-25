@@ -10,8 +10,7 @@ from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat, assert_legal_transition, is_terminal
 from app.domain.languages import ensure_valid_languages
-from app.domain.ports import JobQueue, JobStore, SourceTextStorage
-from app.infrastructure.fs_storage import FilesystemJobStorage
+from app.domain.ports import DiskJobStore, JobQueue, JobStore, SourceTextStorage
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +34,22 @@ class JobService:
         queue: JobQueue,
         output_bitrate_kbps: int,
         storage_path: Path,
+        disk_jobs: DiskJobStore | None = None,
+        max_recovery_attempts: int = 3,
+        translation_provider: str = "fake",
+        translation_model: str = "fake",
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
         self._queue = queue
         self._output_bitrate_kbps = output_bitrate_kbps
         self._storage_path = storage_path
+        self._disk_jobs: DiskJobStore = (
+            disk_jobs if disk_jobs is not None else _JobStoreDiskAdapter(jobs)
+        )
+        self._max_recovery_attempts = max_recovery_attempts
+        self._translation_provider = translation_provider
+        self._translation_model = translation_model
 
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
@@ -63,6 +72,8 @@ class JobService:
             speed=command.speed,
             output_format=output_format,
             output_bitrate_kbps=self._output_bitrate_kbps,
+            translation_provider=self._translation_provider,
+            translation_model=self._translation_model,
         )
         try:
             await self._source_storage.write_source(job_id, text)
@@ -82,6 +93,8 @@ class JobService:
                 "source_language": job.source_language,
                 "status": job.status.value,
                 "target_language": job.target_language,
+                "translation_model": job.translation_model,
+                "translation_provider": job.translation_provider,
             },
         )
         return job
@@ -107,7 +120,15 @@ class JobService:
             )
             return job
         assert_legal_transition(job.status, JobStatus.FAILED)
-        job = replace(job, status=JobStatus.FAILED, error_type=error_type, message=message)
+        job = replace(
+            job,
+            status=JobStatus.FAILED,
+            error_type=error_type,
+            message=message,
+            translation_provider=job.translation_provider,
+            translation_model=job.translation_model,
+            recovery_attempts=job.recovery_attempts,
+        )
         await self._jobs.save(job)
         logger.info(
             "job_failed",
@@ -139,6 +160,9 @@ class JobService:
             message=None,
             chunk_current=0,
             chunk_total=0,
+            translation_provider=job.translation_provider,
+            translation_model=job.translation_model,
+            recovery_attempts=0,
         )
         await self._jobs.save(job)
         await self._queue.enqueue(job.id)
@@ -172,6 +196,16 @@ class JobService:
                 continue
             if job is None or is_terminal(job.status):
                 continue
+            if job.recovery_attempts >= self._max_recovery_attempts:
+                await self.mark_failed(
+                    job.id,
+                    ErrorType.WORKER_FAILED,
+                    "job exceeded max crash recovery attempts",
+                )
+                continue
+            updated = replace(job, recovery_attempts=job.recovery_attempts + 1)
+            await filesystem.save_job(updated)
+            await self._jobs.save(updated)
             await self._queue.enqueue(job.id)
             recovered.append(job.id)
             logger.info(
@@ -179,6 +213,7 @@ class JobService:
                 extra={
                     "job_id": job.id,
                     "chunk_id": None,
+                    "recovery_attempts": updated.recovery_attempts,
                     "status": job.status.value,
                 },
             )
@@ -191,18 +226,28 @@ class JobService:
             raise DomainError(ErrorType.INVALID_INPUT, "invalid job_id")
         return directory / f"output.{job.output_format.value}"
 
-    def _filesystem(self) -> FilesystemJobStorage:
-        # TODO(defer): inject a disk reader from the composition root.
-        # DualWrite.get prefers filesystem, but recover/retry still read
-        # status.json directly so FSM hops do not depend on cache refresh.
-        # Constructing FilesystemJobStorage here is a layering smell.
-        return FilesystemJobStorage(self._storage_path)
+    def _filesystem(self) -> DiskJobStore:
+        return self._disk_jobs
 
     async def _cleanup(self, job_id: str) -> None:
         with suppress(Exception):
             await self._source_storage.delete_job(job_id)
         with suppress(Exception):
             await self._jobs.delete(job_id)
+
+
+class _JobStoreDiskAdapter:
+    def __init__(self, jobs: JobStore) -> None:
+        self._jobs = jobs
+
+    async def save_job(self, job: Job) -> None:
+        await self._jobs.save(job)
+
+    async def get_job(self, job_id: str) -> Job | None:
+        return await self._jobs.get(job_id)
+
+    async def list_job_ids(self) -> list[str]:
+        return list(await self._jobs.list_ids())
 
 
 def _parse_output_format(value: str) -> OutputFormat:
