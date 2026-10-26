@@ -5,10 +5,27 @@ import { JobForm } from "./components/JobForm";
 import { JobProgress } from "./components/JobProgress";
 import { useCapabilities } from "./hooks/useCapabilities";
 import { jobFromView, useJob } from "./hooks/useJob";
+import { THEME_STORAGE_KEY } from "./lib/constants";
 import { apiBaseUrl } from "./lib/env";
 import { playerSrc } from "./lib/jobUi";
 
 type ThemeMode = "dark" | "light";
+
+function getInitialTheme(): ThemeMode {
+  if (typeof window === "undefined") {
+    return "dark";
+  }
+  try {
+    const stored =
+      localStorage.getItem(THEME_STORAGE_KEY) || localStorage.getItem("theme");
+    if (stored === "light" || stored === "dark") {
+      return stored;
+    }
+  } catch {
+    // Ignore restricted localStorage access
+  }
+  return "dark";
+}
 
 export default function App() {
   const capabilities = useCapabilities();
@@ -18,10 +35,15 @@ export default function App() {
   const audioUrl = job.status === "success" ? job.job.audio_url : null;
   const subtitlesUrl = job.status === "success" ? job.job.subtitles_url : null;
 
-  const [theme, setTheme] = useState<ThemeMode>("dark");
+  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Ignore restricted localStorage access
+    }
   }, [theme]);
 
   function toggleTheme() {

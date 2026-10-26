@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import { JOB_ID, capabilitiesFixture, jsonResponse, queuedJob } from "./test/fixtures";
-import { LAST_JOB_STORAGE_KEY } from "./lib/constants";
+import { LAST_JOB_STORAGE_KEY, THEME_STORAGE_KEY } from "./lib/constants";
 
 afterEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
+  document.documentElement.removeAttribute("data-theme");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -122,5 +124,43 @@ describe("App", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("UNSUPPORTED_LANGUAGE: language not available");
     expect(alert.textContent).not.toMatch(/Traceback|at Object\./);
+  });
+
+  it("persists theme mode in localStorage and toggles correctly", async () => {
+    const user = userEvent.setup();
+    mockFetch((url) => {
+      if (url.endsWith("/api/capabilities")) {
+        return jsonResponse(capabilitiesFixture);
+      }
+      return jsonResponse({}, 200);
+    });
+
+    render(<App />);
+    const toggleBtn = await screen.findByRole("button", { name: "Toggle color theme" });
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+
+    // Click to toggle to light theme
+    await user.click(toggleBtn);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+
+    // Click to toggle back to dark theme
+    await user.click(toggleBtn);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+  });
+
+  it("initializes with saved theme from localStorage on load", async () => {
+    localStorage.setItem(THEME_STORAGE_KEY, "light");
+    mockFetch((url) => {
+      if (url.endsWith("/api/capabilities")) {
+        return jsonResponse(capabilitiesFixture);
+      }
+      return jsonResponse({}, 200);
+    });
+
+    render(<App />);
+    await screen.findByRole("button", { name: "Toggle color theme" });
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });
 });
