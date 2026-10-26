@@ -140,3 +140,7 @@ Do not point `STORAGE_PATH` at a symlink. The entrypoint only `lchown`s a symlin
 **Timeout under load.** `OLLAMA_HTTP_TIMEOUT_SECONDS` is the per-request HTTP timeout (default 120). RQ still kills the worker function at `RQ_JOB_TIMEOUT_SECONDS`. Raise the RQ value for long chapters on CPU; raising only the HTTP timeout does not keep the job alive past RQ.
 
 **Do not co-load NLLB.** When `TRANSLATION_PROVIDER=ollama`, the factory does not construct the NLLB engine. Do not also set the worker to load NLLB weights in the same process.
+
+### Translation profiles & Worker environment
+
+When running API and worker processes in separate containers, all credentials or backends behind advertised profiles (such as `GEMINI_API_KEY` for Google Gemini or `OLLAMA_BASE_URL` for Ollama) must be configured in the **worker environment** as well. The web API discovers available profiles from its own environment, but background translation jobs execute inside the worker process. If a worker lacks the required configuration (e.g. missing `GEMINI_API_KEY`), the job immediately transitions to terminal `FAILED` status with `error_type: PROVIDER_CONFIGURATION_ERROR`.

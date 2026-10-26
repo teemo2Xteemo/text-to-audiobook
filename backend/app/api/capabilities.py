@@ -28,6 +28,7 @@ async def get_capabilities(
                 badge=p.badge,
                 description=p.description,
                 is_default=p.is_default,
+                supported_languages=list(p.supported_languages),
             )
             for p in result.translation_profiles
         ],

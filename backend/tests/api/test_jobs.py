@@ -46,6 +46,16 @@ def memory(
                 label="Gemini",
                 badge="ONLINE",
                 description="desc",
+                supported_languages=("en-US", "ja-JP"),
+            ),
+            TranslationProfile(
+                id="nllb-600m",
+                provider="nllb",
+                model="facebook/nllb-200-distilled-600M",
+                label="NLLB",
+                badge="OFFLINE",
+                description="desc",
+                supported_languages=("en-US", "vi-VN"),
             ),
         ],
     )
@@ -105,6 +115,22 @@ def test_post_with_unknown_translation_profile_id_fails(
     )
     assert response.status_code == 400
     assert response.json()["error_type"] == "INVALID_INPUT"
+
+
+def test_post_with_profile_and_unsupported_language_returns_400(
+    jobs_client: TestClient,
+) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": "Hello story",
+            "source_language": "en-US",
+            "target_language": "ja-JP",
+            "translation_profile_id": "nllb-600m",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error_type"] == "UNSUPPORTED_LANGUAGE"
 
 
 def test_post_multipart_with_translation_profile_id_resolves_profile(

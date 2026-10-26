@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat, assert_legal_transition, is_terminal
-from app.domain.languages import ensure_valid_languages
+from app.domain.languages import AUTO_SOURCE_LANGUAGE, ensure_valid_languages
 from app.domain.ports import DiskJobStore, JobQueue, JobStore, SourceTextStorage
 from app.domain.translation_profile import TranslationProfile
 
@@ -79,21 +79,48 @@ class JobService:
             if command.translation_profile_id and command.translation_profile_id.strip()
             else None
         )
+        matched = None
         if profile_id is not None:
             matched = next(
                 (p for p in self._available_profiles if p.id == profile_id),
                 None,
             )
             if matched is None:
+                trunc_id = profile_id[:64]
                 raise DomainError(
                     ErrorType.INVALID_INPUT,
-                    f"unknown translation_profile_id: {profile_id}",
+                    f"unknown translation_profile_id: {trunc_id}",
                 )
             translation_provider = matched.provider
             translation_model = matched.model
         else:
             translation_provider = self._translation_provider
             translation_model = self._translation_model
+            matched = next(
+                (p for p in self._available_profiles if p.is_default),
+                None,
+            )
+
+        if matched is not None and matched.supported_languages:
+            if (
+                source_language != AUTO_SOURCE_LANGUAGE
+                and source_language not in matched.supported_languages
+            ):
+                raise DomainError(
+                    ErrorType.UNSUPPORTED_LANGUAGE,
+                    (
+                        f"source language '{source_language}' is not supported "
+                        f"by translation profile '{matched.id}'"
+                    ),
+                )
+            if target_language not in matched.supported_languages:
+                raise DomainError(
+                    ErrorType.UNSUPPORTED_LANGUAGE,
+                    (
+                        f"target language '{target_language}' is not supported "
+                        f"by translation profile '{matched.id}'"
+                    ),
+                )
 
         job_id = str(uuid.uuid4())
         job = Job(

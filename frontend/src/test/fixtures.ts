@@ -17,6 +17,7 @@ export const capabilitiesFixture: Capabilities = {
       badge: "MOCK",
       description: "Mock translation for testing",
       is_default: true,
+      supported_languages: ["en-US", "ja-JP"],
     },
   ],
 };

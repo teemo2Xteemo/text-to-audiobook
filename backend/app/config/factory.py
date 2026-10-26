@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import replace
 from pathlib import Path
 
@@ -56,8 +57,35 @@ def build_job_service(settings: Settings) -> JobService:
     )
 
 
+def _nllb_available() -> bool:
+    try:
+        return (
+            importlib.util.find_spec("transformers") is not None
+            and importlib.util.find_spec("sentencepiece") is not None
+        )
+    except (ImportError, ValueError, AttributeError):
+        return False
+
+
+def _languages_for_provider(provider: str) -> tuple[str, ...]:
+    if provider == "gemini":
+        from app.providers.translation.gemini import _BCP47_TO_GEMINI
+
+        return tuple(sorted(_BCP47_TO_GEMINI))
+    if provider == "nllb":
+        from app.providers.translation.nllb import _BCP47_TO_FLORES
+
+        return tuple(sorted(_BCP47_TO_FLORES))
+    if provider == "ollama":
+        from app.providers.translation.ollama import _BCP47_TO_TRANSLATEGEMMA
+
+        return tuple(sorted(_BCP47_TO_TRANSLATEGEMMA))
+    return ("en-US", "ja-JP", "ko-KR", "vi-VN")
+
+
 def build_available_translation_profiles(settings: Settings) -> list[TranslationProfile]:
     name = settings.translation_provider.strip().lower()
+    default_provider, default_model = translation_pin_from_settings(settings)
     if name == "fake":
         return [
             TranslationProfile(
@@ -68,6 +96,7 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
                 badge="MOCK",
                 description="Mock translation for tests",
                 is_default=True,
+                supported_languages=("en-US", "ja-JP", "ko-KR", "vi-VN"),
             )
         ]
 
@@ -79,6 +108,7 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
         else ""
     )
     if gemini_key:
+        gemini_langs = _languages_for_provider("gemini")
         profiles.append(
             TranslationProfile(
                 id="gemini-3.5-flash",
@@ -86,7 +116,8 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
                 model="gemini-3.5-flash",
                 label="Google Gemini 3.5 Flash",
                 badge="ONLINE",
-                description="Văn phong tự nhiên · Khuyên dùng",
+                description="Natural tone · Recommended",
+                supported_languages=gemini_langs,
             )
         )
         profiles.append(
@@ -96,22 +127,29 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
                 model="gemini-2.0-flash",
                 label="Google Gemini 2.0 Flash",
                 badge="ONLINE",
-                description="Tốc độ cao · Tiết kiệm quota",
+                description="High speed · Saves quota",
+                supported_languages=gemini_langs,
             )
         )
 
-    profiles.append(
-        TranslationProfile(
-            id="nllb-600m",
-            provider="nllb",
-            model=settings.nllb_model_id,
-            label="NLLB-200 (CPU Offline)",
-            badge="OFFLINE",
-            description="Chạy hoàn toàn trên máy · Riêng tư",
+    if _nllb_available():
+        model_id = settings.nllb_model_id
+        is_distilled_600m = "600M" in model_id or "600m" in model_id
+        profile_id = "nllb-600m" if is_distilled_600m else f"nllb-{model_id.split('/')[-1]}"
+        label = "NLLB-200 (CPU Offline)" if is_distilled_600m else f"NLLB-200 ({model_id})"
+        profiles.append(
+            TranslationProfile(
+                id=profile_id,
+                provider="nllb",
+                model=model_id,
+                label=label,
+                badge="OFFLINE",
+                description="Runs locally on CPU · Private",
+                supported_languages=_languages_for_provider("nllb"),
+            )
         )
-    )
 
-    if name == "ollama":
+    if name == "ollama" or default_provider == "ollama":
         profiles.append(
             TranslationProfile(
                 id="ollama-gemma",
@@ -119,22 +157,36 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
                 model=settings.ollama_translation_model,
                 label="Ollama TranslateGemma",
                 badge="LOCAL",
-                description="Mô hình mã nguồn mở cục bộ",
+                description="Local open source model",
+                supported_languages=_languages_for_provider("ollama"),
             )
         )
 
-    default_provider, default_model = translation_pin_from_settings(settings)
+    # Ensure configured default model is always present in profiles
     matched_idx: int | None = None
     for idx, p in enumerate(profiles):
         if p.provider == default_provider and p.model == default_model:
             matched_idx = idx
             break
-    if matched_idx is None:
-        for idx, p in enumerate(profiles):
-            if p.provider == default_provider:
-                matched_idx = idx
-                break
-    if matched_idx is None and profiles:
+
+    if matched_idx is None and (default_provider != "nllb" or _nllb_available()):
+        slug = default_model.split("/")[-1].replace(":", "-")
+        default_id = slug if slug.startswith(default_provider) else f"{default_provider}-{slug}"
+        badge = (
+            "ONLINE"
+            if default_provider == "gemini"
+            else ("OFFLINE" if default_provider == "nllb" else "LOCAL")
+        )
+        configured_profile = TranslationProfile(
+            id=default_id,
+            provider=default_provider,
+            model=default_model,
+            label=f"{default_provider.capitalize()} ({default_model})",
+            badge=badge,
+            description="Configured server default model",
+            supported_languages=_languages_for_provider(default_provider),
+        )
+        profiles.insert(0, configured_profile)
         matched_idx = 0
 
     return [replace(p, is_default=(i == matched_idx)) for i, p in enumerate(profiles)]

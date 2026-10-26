@@ -95,6 +95,7 @@ class TranslationProfileResponse(BaseModel):
     badge: str
     description: str
     is_default: bool
+    supported_languages: list[str] = Field(default_factory=list)
 
 
 class CapabilitiesResponse(BaseModel):

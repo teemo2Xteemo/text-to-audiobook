@@ -60,6 +60,10 @@ def _domain_job_id(job: Any) -> str | None:
 def _map_error(exc_type: Any, exc_value: Any, timeout_seconds: int) -> tuple[ErrorType, str]:
     if exc_type is JobTimeoutException or isinstance(exc_value, JobTimeoutException):
         return ErrorType.TIMEOUT, f"job exceeded the worker timeout ({timeout_seconds}s)"
+    if exc_type is ValueError or isinstance(exc_value, ValueError):
+        msg = str(exc_value)
+        if "API_KEY" in msg or "TRANSLATION_PROVIDER" in msg:
+            return ErrorType.PROVIDER_CONFIGURATION_ERROR, msg
     name = getattr(exc_type, "__name__", None)
     if not name and exc_value is not None:
         name = type(exc_value).__name__

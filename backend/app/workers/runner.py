@@ -3,19 +3,21 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import logging
+from dataclasses import replace
 from multiprocessing import Process
 
 from redis import Redis
 from rq import Queue, Worker
 
 from app.config.factory import (
+    UnknownProviderError,
     build_job_service,
     build_orchestrator,
     settings_for_translation_pin,
 )
 from app.config.settings import Settings
-from app.domain.errors import DomainError
-from app.domain.jobs import is_terminal
+from app.domain.errors import DomainError, ErrorType
+from app.domain.jobs import JobStatus, is_terminal
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.rq_queue import RQ_QUEUE_NAME
 from app.workers.rq_failure import handle_worker_exception
@@ -77,7 +79,22 @@ async def _process_job_async(job_id: str) -> None:
                 )
                 return
             text = await filesystem.read_source(job_id)
-            orchestrator = build_orchestrator(settings_for_translation_pin(settings, fresh))
+            try:
+                orchestrator = build_orchestrator(settings_for_translation_pin(settings, fresh))
+            except (ValueError, UnknownProviderError) as exc:
+                logger.error(
+                    "worker_provider_configuration_error",
+                    extra={"job_id": job_id, "error": str(exc)},
+                )
+                await filesystem.save_job(
+                    replace(
+                        fresh,
+                        status=JobStatus.FAILED,
+                        error_type=ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                        message=str(exc),
+                    )
+                )
+                return
             await orchestrator.run(fresh, text, workspace=workspace)
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

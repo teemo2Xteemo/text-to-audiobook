@@ -451,9 +451,12 @@ def test_build_available_translation_profiles_fake_mode() -> None:
     assert profiles[0].is_default is True
 
 
-def test_build_available_translation_profiles_with_gemini_and_nllb() -> None:
+def test_build_available_translation_profiles_with_gemini_and_nllb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.config.factory import build_available_translation_profiles
 
+    monkeypatch.setattr("app.config.factory._nllb_available", lambda: True)
     settings = Settings(
         _env_file=None,
         translation_provider="nllb",
@@ -470,9 +473,12 @@ def test_build_available_translation_profiles_with_gemini_and_nllb() -> None:
     assert nllb_profile.is_default is True
 
 
-def test_build_available_translation_profiles_omits_gemini_when_key_missing() -> None:
+def test_build_available_translation_profiles_omits_gemini_when_key_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.config.factory import build_available_translation_profiles
 
+    monkeypatch.setattr("app.config.factory._nllb_available", lambda: True)
     settings = Settings(_env_file=None, translation_provider="nllb", gemini_api_key=None)
     profiles = build_available_translation_profiles(settings)
     ids = [p.id for p in profiles]
@@ -493,3 +499,49 @@ def test_build_available_translation_profiles_with_ollama() -> None:
     assert "ollama-gemma" in ids
     ollama_profile = next(p for p in profiles if p.id == "ollama-gemma")
     assert ollama_profile.is_default is True
+
+
+def test_build_available_translation_profiles_configured_custom_model_becomes_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config.factory import build_available_translation_profiles
+
+    # Custom gemini model
+    settings = Settings(
+        _env_file=None,
+        translation_provider="gemini",
+        gemini_api_key="valid-key",
+        gemini_translation_model="gemini-1.5-flash",
+    )
+    profiles = build_available_translation_profiles(settings)
+    default_p = next(p for p in profiles if p.is_default)
+    assert default_p.provider == "gemini"
+    assert default_p.model == "gemini-1.5-flash"
+
+    # Custom nllb model
+    monkeypatch.setattr("app.config.factory._nllb_available", lambda: True)
+    settings_nllb = Settings(
+        _env_file=None,
+        translation_provider="nllb",
+        nllb_model_id="facebook/nllb-200-3.3B",
+    )
+    profiles_nllb = build_available_translation_profiles(settings_nllb)
+    default_nllb = next(p for p in profiles_nllb if p.is_default)
+    assert default_nllb.provider == "nllb"
+    assert default_nllb.model == "facebook/nllb-200-3.3B"
+
+
+def test_build_available_translation_profiles_omits_nllb_when_packages_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config.factory import build_available_translation_profiles
+
+    settings = Settings(
+        _env_file=None,
+        translation_provider="gemini",
+        gemini_api_key="valid-key",
+    )
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    profiles = build_available_translation_profiles(settings)
+    ids = [p.id for p in profiles]
+    assert not any("nllb" in pid for pid in ids)

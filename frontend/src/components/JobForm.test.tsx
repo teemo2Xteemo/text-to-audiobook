@@ -166,4 +166,85 @@ describe("JobForm", () => {
       }),
     );
   });
+
+  it("allows changing translation profile selection and submits chosen profile", async () => {
+    const user = userEvent.setup();
+    const handleSubmit = vi.fn();
+    const capabilitiesWithProfiles = {
+      ...capabilitiesFixture,
+      translation_profiles: [
+        {
+          id: "gemini-3.5-flash",
+          provider: "gemini",
+          model: "gemini-3.5-flash",
+          label: "Google Gemini 3.5 Flash",
+          badge: "ONLINE",
+          description: "Natural tone · Recommended",
+          is_default: true,
+        },
+        {
+          id: "nllb-600m",
+          provider: "nllb",
+          model: "nllb-200-distilled-600M",
+          label: "NLLB-200 (CPU Offline)",
+          badge: "OFFLINE",
+          description: "Runs locally on CPU · Private",
+          is_default: false,
+        },
+      ],
+    };
+
+    render(
+      <JobForm
+        capabilities={capabilitiesWithProfiles}
+        disabled={false}
+        onSubmit={handleSubmit}
+      />,
+    );
+
+    const profileSelect = screen.getByLabelText("Translation engine");
+    await user.selectOptions(profileSelect, "nllb-600m");
+    expect(profileSelect).toHaveValue("nllb-600m");
+
+    const textarea = screen.getByLabelText("Paste story");
+    await user.type(textarea, "Changing translation engine story.");
+    const submitBtn = screen.getByRole("button", { name: "Generate" });
+    await user.click(submitBtn);
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        translation_profile_id: "nllb-600m",
+      }),
+    );
+  });
+
+  it("hides translation profile select when capabilities have empty profiles", async () => {
+    const user = userEvent.setup();
+    const handleSubmit = vi.fn();
+    const capabilitiesWithoutProfiles = {
+      ...capabilitiesFixture,
+      translation_profiles: [],
+    };
+
+    render(
+      <JobForm
+        capabilities={capabilitiesWithoutProfiles}
+        disabled={false}
+        onSubmit={handleSubmit}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Translation engine")).toBeNull();
+
+    const textarea = screen.getByLabelText("Paste story");
+    await user.type(textarea, "No profiles available.");
+    const submitBtn = screen.getByRole("button", { name: "Generate" });
+    await user.click(submitBtn);
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        translation_profile_id: undefined,
+      }),
+    );
+  });
 });

@@ -508,3 +508,27 @@ def test_process_job_rereads_job_after_acquiring_lock(
 
     process_job(job.id)
     assert built == []
+
+
+def test_process_job_fails_with_provider_configuration_error_when_worker_missing_gemini_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.errors import ErrorType
+
+    job = _queued_job(
+        "99999999-9999-9999-9999-999999999999",
+        provider="gemini",
+        model="gemini-3.5-flash",
+    )
+    _persist_job(tmp_path, job, "Story text")
+    settings = Settings(_env_file=None, storage_path=tmp_path, gemini_api_key=None)
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+
+    process_job(job.id)
+
+    filesystem = FilesystemJobStorage(tmp_path)
+    updated = asyncio.run(filesystem.get_job(job.id))
+    assert updated is not None
+    assert updated.status == JobStatus.FAILED
+    assert updated.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert "GEMINI_API_KEY" in (updated.message or "")

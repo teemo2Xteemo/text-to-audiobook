@@ -111,6 +111,135 @@ def test_create_rejects_unknown_translation_profile() -> None:
     assert exc_info.value.error_type == ErrorType.INVALID_INPUT
 
 
+def test_create_with_default_profile_id_matches_omitted_profile_id() -> None:
+    profiles = [
+        TranslationProfile(
+            id="gemini-default",
+            provider="gemini",
+            model="gemini-1.5-flash",
+            label="Gemini",
+            badge="ONLINE",
+            description="desc",
+            is_default=True,
+        ),
+    ]
+    service, _, _, _ = _service(
+        translation_provider="gemini",
+        translation_model="gemini-1.5-flash",
+        available_profiles=profiles,
+    )
+    with_default = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello story",
+                translation_profile_id="gemini-default",
+            )
+        )
+    )
+    with_none = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello story",
+                translation_profile_id=None,
+            )
+        )
+    )
+    assert with_default.translation_provider == with_none.translation_provider == "gemini"
+    assert with_default.translation_model == with_none.translation_model == "gemini-1.5-flash"
+
+
+def test_create_with_whitespace_profile_id_falls_back_to_default() -> None:
+    profiles = [
+        TranslationProfile(
+            id="default-prof",
+            provider="nllb",
+            model="nllb-default",
+            label="NLLB",
+            badge="OFFLINE",
+            description="desc",
+            is_default=True,
+        ),
+    ]
+    service, _, _, _ = _service(
+        translation_provider="nllb",
+        translation_model="nllb-default",
+        available_profiles=profiles,
+    )
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello story",
+                translation_profile_id="   ",
+            )
+        )
+    )
+    assert job.translation_provider == "nllb"
+    assert job.translation_model == "nllb-default"
+
+
+def test_create_rejects_unsupported_language_for_profile() -> None:
+    profiles = [
+        TranslationProfile(
+            id="nllb-600m",
+            provider="nllb",
+            model="nllb-600m",
+            label="NLLB",
+            badge="OFFLINE",
+            description="desc",
+            is_default=True,
+            supported_languages=("en-US", "vi-VN"),
+        ),
+    ]
+    service, _, _, _ = _service(
+        translation_provider="nllb",
+        translation_model="nllb-600m",
+        available_profiles=profiles,
+    )
+    # Target unsupported
+    cmd = CreateJobCommand(
+        source_language="en-US",
+        target_language="ja-JP",
+        text="Hello story",
+        translation_profile_id="nllb-600m",
+    )
+    with pytest.raises(DomainError) as exc_info:
+        asyncio.run(service.create(cmd))
+    assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+    # Source unsupported (when not "auto")
+    cmd_src = CreateJobCommand(
+        source_language="ja-JP",
+        target_language="vi-VN",
+        text="Hello story",
+        translation_profile_id="nllb-600m",
+    )
+    with pytest.raises(DomainError) as exc_src:
+        asyncio.run(service.create(cmd_src))
+    assert exc_src.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+
+def test_create_truncates_long_unknown_profile_id_in_error() -> None:
+    service, _, _, _ = _service()
+    long_id = "a" * 200
+    cmd = CreateJobCommand(
+        source_language="en-US",
+        target_language="vi-VN",
+        text="Hello story",
+        translation_profile_id=long_id,
+    )
+    with pytest.raises(DomainError) as exc_info:
+        asyncio.run(service.create(cmd))
+    assert exc_info.value.error_type == ErrorType.INVALID_INPUT
+    assert len(exc_info.value.message) < 100
+    assert "..." not in exc_info.value.message or len(exc_info.value.message) < 100
+
+
 def test_create_with_fake_lab_stores_fake_pin() -> None:
     service, _, _, _ = _service()
     job = asyncio.run(

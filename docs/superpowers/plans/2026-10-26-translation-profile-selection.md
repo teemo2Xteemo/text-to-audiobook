@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI, Pydantic v2, Python 3.12+ dataclasses, React 19, TypeScript, Vitest, Testing Library.
 
-**Spec:** [docs/superpowers/specs/2026-10-26-translation-profile-selection-design.md](file:///home/teemo/documents/projects/text-to-audiobook/docs/superpowers/specs/2026-10-26-translation-profile-selection-design.md)
+**Spec:** [docs/superpowers/specs/2026-10-26-translation-profile-selection-design.md](docs/superpowers/specs/2026-10-26-translation-profile-selection-design.md)
 
 ## Global Constraints
 

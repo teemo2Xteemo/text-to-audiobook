@@ -24,6 +24,7 @@ export type TranslationProfile = {
   badge: string;
   description: string;
   is_default: boolean;
+  supported_languages?: string[];
 };
 
 export type Capabilities = {
