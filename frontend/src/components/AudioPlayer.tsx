@@ -12,12 +12,7 @@ export function AudioPlayer({ src, subtitlesSrc }: AudioPlayerProps) {
     setFailed(false);
   }, [src]);
 
-  const resolvedSubtitlesSrc =
-    subtitlesSrc !== undefined
-      ? subtitlesSrc
-      : src.endsWith("/audio")
-        ? src.replace(/\/audio$/, "/subtitles")
-        : null;
+  const resolvedSubtitlesSrc = subtitlesSrc ?? null;
 
   return (
     <section className="panel audio-deck">

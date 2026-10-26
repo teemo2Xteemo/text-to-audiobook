@@ -113,3 +113,27 @@ def test_get_job_subtitles_invalid_uuid_returns_400(jobs_client: TestClient) -> 
     response = jobs_client.get("/api/jobs/not-a-uuid/subtitles")
     assert response.status_code == 400
     assert response.json()["error_type"] == ErrorType.INVALID_INPUT
+
+
+def test_job_status_includes_subtitles_url_when_available(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    created = jobs_client.post("/api/jobs", json=VALID_BODY).json()
+    job_id = created["job_id"]
+    _, store, _, _ = memory
+
+    status_queued = jobs_client.get(f"/api/jobs/{job_id}").json()
+    assert status_queued["subtitles_url"] is None
+
+    job = store.jobs[job_id]
+    store.jobs[job_id] = replace(job, status=JobStatus.COMPLETED)
+    status_no_srt = jobs_client.get(f"/api/jobs/{job_id}").json()
+    assert status_no_srt["subtitles_url"] is None
+
+    srt_path = tmp_path / "jobs" / job_id / "output.srt"
+    srt_path.parent.mkdir(parents=True, exist_ok=True)
+    srt_path.write_text(SAMPLE_SRT, encoding="utf-8")
+    status_with_srt = jobs_client.get(f"/api/jobs/{job_id}").json()
+    assert status_with_srt["subtitles_url"] == f"/api/jobs/{job_id}/subtitles"

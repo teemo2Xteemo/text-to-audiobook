@@ -12,15 +12,14 @@ describe("AudioPlayer", () => {
     );
   });
 
-  it("renders subtitle download link when inferred from audio endpoint", () => {
+  it("omits subtitle download link when subtitlesSrc is omitted", () => {
     render(<AudioPlayer src="/api/jobs/example/audio" />);
-    const link = screen.getByRole("link", { name: "Download Subtitles (.srt)" });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/api/jobs/example/subtitles");
-    expect(link).toHaveAttribute("download");
+    expect(
+      screen.queryByRole("link", { name: "Download Subtitles (.srt)" }),
+    ).not.toBeInTheDocument();
   });
 
-  it("renders custom subtitle download link when provided", () => {
+  it("renders subtitle download link when subtitlesSrc is provided", () => {
     render(
       <AudioPlayer
         src="/api/jobs/example/audio"
@@ -29,6 +28,7 @@ describe("AudioPlayer", () => {
     );
     const link = screen.getByRole("link", { name: "Download Subtitles (.srt)" });
     expect(link).toHaveAttribute("href", "/api/jobs/custom/subtitles");
+    expect(link).toHaveAttribute("download");
   });
 
   it("omits subtitle download link when subtitlesSrc is null", () => {

@@ -40,6 +40,7 @@ export type JobStatusResponse = {
   speed: number;
   output_format: OutputFormat;
   audio_url: string | null;
+  subtitles_url?: string | null;
   translation_provider?: string | null;
   translation_model?: string | null;
 };

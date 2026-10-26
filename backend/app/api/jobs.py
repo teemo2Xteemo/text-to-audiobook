@@ -45,7 +45,12 @@ async def get_job(
             status_code=404,
             detail=envelope(ErrorType.INVALID_INPUT, "job not found"),
         )
-    return JobStatusResponse.from_job(job)
+    subtitles_url: str | None = None
+    if job.status is JobStatus.COMPLETED:
+        subtitles_path = service.output_subtitles_path(job)
+        if subtitles_path.is_file() and subtitles_path.stat().st_size > 0:
+            subtitles_url = f"/api/jobs/{job.id}/subtitles"
+    return JobStatusResponse.from_job(job, subtitles_url=subtitles_url)
 
 
 @router.get("/api/jobs/{job_id}/audio")
