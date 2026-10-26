@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from redis import Redis
@@ -20,6 +21,7 @@ from app.domain.ports import (
     TTSProvider,
 )
 from app.domain.retry import RetryPolicy
+from app.domain.translation_profile import TranslationProfile
 from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
 from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from app.infrastructure.fake_audio import FakeAudioProcessor
@@ -52,10 +54,102 @@ def build_job_service(settings: Settings) -> JobService:
     )
 
 
+def build_available_translation_profiles(settings: Settings) -> list[TranslationProfile]:
+    name = settings.translation_provider.strip().lower()
+    if name == "fake":
+        return [
+            TranslationProfile(
+                id="fake",
+                provider="fake",
+                model="fake",
+                label="Fake Translation (Mock)",
+                badge="MOCK",
+                description="Mock translation for tests",
+                is_default=True,
+            )
+        ]
+
+    profiles: list[TranslationProfile] = []
+
+    gemini_key = (
+        settings.gemini_api_key.get_secret_value().strip()
+        if settings.gemini_api_key is not None
+        else ""
+    )
+    if gemini_key:
+        profiles.append(
+            TranslationProfile(
+                id="gemini-3.5-flash",
+                provider="gemini",
+                model="gemini-3.5-flash",
+                label="Google Gemini 3.5 Flash",
+                badge="ONLINE",
+                description="Văn phong tự nhiên · Khuyên dùng",
+            )
+        )
+        profiles.append(
+            TranslationProfile(
+                id="gemini-2.0-flash",
+                provider="gemini",
+                model="gemini-2.0-flash",
+                label="Google Gemini 2.0 Flash",
+                badge="ONLINE",
+                description="Tốc độ cao · Tiết kiệm quota",
+            )
+        )
+
+    profiles.append(
+        TranslationProfile(
+            id="nllb-600m",
+            provider="nllb",
+            model=settings.nllb_model_id,
+            label="NLLB-200 (CPU Offline)",
+            badge="OFFLINE",
+            description="Chạy hoàn toàn trên máy · Riêng tư",
+        )
+    )
+
+    if name == "ollama":
+        profiles.append(
+            TranslationProfile(
+                id="ollama-gemma",
+                provider="ollama",
+                model=settings.ollama_translation_model,
+                label="Ollama TranslateGemma",
+                badge="LOCAL",
+                description="Mô hình mã nguồn mở cục bộ",
+            )
+        )
+
+    default_provider, default_model = translation_pin_from_settings(settings)
+    matched_idx: int | None = None
+    for idx, p in enumerate(profiles):
+        if p.provider == default_provider and p.model == default_model:
+            matched_idx = idx
+            break
+    if matched_idx is None:
+        for idx, p in enumerate(profiles):
+            if p.provider == default_provider:
+                matched_idx = idx
+                break
+    if matched_idx is None and profiles:
+        matched_idx = 0
+
+    return [
+        replace(p, is_default=(i == matched_idx))
+        for i, p in enumerate(profiles)
+    ]
+
+
 def build_capabilities_service(settings: Settings) -> CapabilitiesService:
     translation = build_translation_provider(settings)
     tts = build_tts_provider(settings)
-    return CapabilitiesService(translation=translation, tts=tts)
+    profiles = build_available_translation_profiles(settings)
+    return CapabilitiesService(
+        translation=translation,
+        tts=tts,
+        translation_profiles=profiles,
+    )
 
 
 def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
