@@ -16,6 +16,7 @@ export default function App() {
   const busy = job.status === "loading";
   const currentJob = jobFromView(job);
   const audioUrl = job.status === "success" ? job.job.audio_url : null;
+  const subtitlesUrl = job.status === "success" ? job.job.subtitles_url : null;
 
   const [theme, setTheme] = useState<ThemeMode>("dark");
 
@@ -145,7 +146,12 @@ export default function App() {
             </p>
           ) : null}
 
-          {audioUrl ? <AudioPlayer src={playerSrc(apiBaseUrl(), audioUrl)} /> : null}
+          {audioUrl ? (
+            <AudioPlayer
+              src={playerSrc(apiBaseUrl(), audioUrl)}
+              subtitlesSrc={subtitlesUrl ? playerSrc(apiBaseUrl(), subtitlesUrl) : null}
+            />
+          ) : null}
 
           <section className="panel workflow-card" aria-label="Studio pipeline overview">
             <span className="section-eyebrow">Studio Architecture</span>

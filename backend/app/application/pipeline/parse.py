@@ -4,8 +4,10 @@ from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import resolve_source_language
 from app.domain.ports import LanguageDetector
 
+__all__ = ["is_srt_document", "parse_source", "strip_srt"]
+
 _SRT_TIMECODE_RE = re.compile(
-    r"^\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}.*$",
+    r"^\s*(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3}.*$",
     re.MULTILINE,
 )
 _SRT_INDEX_RE = re.compile(r"^\s*\d+\s*$")
@@ -37,8 +39,18 @@ def _is_srt_document(blocks: list[str]) -> bool:
     return _is_srt_cue_block(first)
 
 
+def is_srt_document(text_or_blocks: str | list[str]) -> bool:
+    if isinstance(text_or_blocks, str):
+        normalized = text_or_blocks.replace("\r\n", "\n").replace("\r", "\n").strip()
+        blocks = re.split(r"\n{2,}", normalized)
+    else:
+        blocks = text_or_blocks
+    return _is_srt_document(blocks)
+
+
 def strip_srt(text: str) -> str:
-    blocks = re.split(r"\n{2,}", text)
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    blocks = re.split(r"\n{2,}", normalized)
     if not _is_srt_document(blocks):
         return text
     cleaned_blocks: list[str] = []

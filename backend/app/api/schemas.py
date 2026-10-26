@@ -30,6 +30,7 @@ class JobStatusResponse(BaseModel):
     speed: float
     output_format: OutputFormat
     audio_url: str | None = None
+    subtitles_url: str | None = None
     translation_provider: str | None = None
     translation_model: str | None = None
 
@@ -44,7 +45,7 @@ class JobStatusResponse(BaseModel):
         return payload
 
     @classmethod
-    def from_job(cls, job: Job) -> JobStatusResponse:
+    def from_job(cls, job: Job, *, subtitles_url: str | None = None) -> JobStatusResponse:
         audio_url = f"/api/jobs/{job.id}/audio" if job.status is JobStatus.COMPLETED else None
         return cls(
             job_id=job.id,
@@ -60,6 +61,7 @@ class JobStatusResponse(BaseModel):
             speed=job.speed,
             output_format=job.output_format,
             audio_url=audio_url,
+            subtitles_url=subtitles_url,
             translation_provider=job.translation_provider,
             translation_model=job.translation_model,
         )

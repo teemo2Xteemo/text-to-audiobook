@@ -2,8 +2,12 @@ from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
 from app.infrastructure.checkpoint_fs import CHECKPOINT_FILENAME, CheckpointFilesystem
 from app.infrastructure.ffmpeg import (
     concat_argv,
+    ffprobe_duration_argv,
     normalize_argv,
     resolve_ffmpeg_executable,
+    resolve_ffprobe_executable,
+    silence_argv,
+    tempo_argv,
     write_concat_list,
 )
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
@@ -23,7 +27,11 @@ __all__ = [
     "RQJobQueue",
     "RedisJobCache",
     "concat_argv",
+    "ffprobe_duration_argv",
     "normalize_argv",
     "resolve_ffmpeg_executable",
+    "resolve_ffprobe_executable",
+    "silence_argv",
+    "tempo_argv",
     "write_concat_list",
 ]

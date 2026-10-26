@@ -492,6 +492,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                     type="button"
                     className="btn-ghost btn-xs"
                     onClick={handleCleanSrt}
+                    title="Removes timing; output won't be synchronized"
                   >
                     Strip SRT timestamps
                   </button>
@@ -567,7 +568,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
               ref={fileInputRef}
               id="story-file"
               type="file"
-              accept=".txt,.srt,text/plain"
+              accept=".txt,.srt,.vtt,text/plain,text/vtt"
               onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
             />
 

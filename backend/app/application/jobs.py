@@ -234,6 +234,13 @@ class JobService:
             raise DomainError(ErrorType.INVALID_INPUT, "invalid job_id")
         return directory / f"output.{job.output_format.value}"
 
+    def output_subtitles_path(self, job: Job) -> Path:
+        jobs_root = (self._storage_path / "jobs").resolve()
+        directory = (jobs_root / job.id).resolve()
+        if not directory.is_relative_to(jobs_root):
+            raise DomainError(ErrorType.INVALID_INPUT, "invalid job_id")
+        return directory / "output.srt"
+
     def _filesystem(self) -> DiskJobStore:
         return self._disk_jobs
 

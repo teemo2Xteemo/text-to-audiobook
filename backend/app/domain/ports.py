@@ -80,6 +80,27 @@ class AudioProcessor(Protocol):
         bitrate_kbps: int,
     ) -> AudioArtifact: ...
 
+    async def get_duration_ms(self, path: Path) -> int: ...
+
+    async def generate_silence(
+        self,
+        duration_ms: int,
+        destination: Path,
+        *,
+        output_format: OutputFormat,
+        bitrate_kbps: int,
+    ) -> AudioArtifact: ...
+
+    async def adjust_tempo(
+        self,
+        source: Path,
+        destination: Path,
+        factor: float,
+        *,
+        output_format: OutputFormat,
+        bitrate_kbps: int,
+    ) -> AudioArtifact: ...
+
 
 class ArtifactCache(Protocol):
     """Content-addressed translation/TTS blobs. Not a job-status GET cache."""

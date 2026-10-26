@@ -2,14 +2,17 @@ import { useEffect, useState } from "react";
 
 type AudioPlayerProps = {
   src: string;
+  subtitlesSrc?: string | null;
 };
 
-export function AudioPlayer({ src }: AudioPlayerProps) {
+export function AudioPlayer({ src, subtitlesSrc }: AudioPlayerProps) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     setFailed(false);
   }, [src]);
+
+  const resolvedSubtitlesSrc = subtitlesSrc ?? null;
 
   return (
     <section className="panel audio-deck">
@@ -56,6 +59,25 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
           </svg>
           Download Audio File
         </a>
+        {resolvedSubtitlesSrc ? (
+          <a className="btn-download" href={resolvedSubtitlesSrc} download>
+            <svg
+              className="btn-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"
+              />
+            </svg>
+            Download Subtitles (.srt)
+          </a>
+        ) : null}
       </div>
 
       {failed ? (

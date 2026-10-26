@@ -45,7 +45,12 @@ async def get_job(
             status_code=404,
             detail=envelope(ErrorType.INVALID_INPUT, "job not found"),
         )
-    return JobStatusResponse.from_job(job)
+    subtitles_url: str | None = None
+    if job.status is JobStatus.COMPLETED:
+        subtitles_path = service.output_subtitles_path(job)
+        if subtitles_path.is_file() and subtitles_path.stat().st_size > 0:
+            subtitles_url = f"/api/jobs/{job.id}/subtitles"
+    return JobStatusResponse.from_job(job, subtitles_url=subtitles_url)
 
 
 @router.get("/api/jobs/{job_id}/audio")
@@ -76,6 +81,37 @@ async def download_job_audio(
         media_type=_MEDIA_TYPES[job.output_format],
         filename=f"{job.id}.{job.output_format.value}",
         content_disposition_type="inline",
+    )
+
+
+@router.get("/api/jobs/{job_id}/subtitles")
+async def download_job_subtitles(
+    job_id: str,
+    service: JobService = Depends(get_job_service),
+) -> FileResponse:
+    _require_uuid(job_id)
+    job = await service.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.INVALID_INPUT, "job not found"),
+        )
+    if job.status is not JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail=envelope(ErrorType.INVALID_INPUT, "subtitles not ready"),
+        )
+    path = service.output_subtitles_path(job)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.STORAGE_FAILED, "subtitles artifact missing"),
+        )
+    return FileResponse(
+        path,
+        media_type="application/x-subrip",
+        filename=f"{job.id}.srt",
+        content_disposition_type="attachment",
     )
 
 

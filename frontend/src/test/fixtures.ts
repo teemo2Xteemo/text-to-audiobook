@@ -25,6 +25,7 @@ export function queuedJob(overrides: Partial<JobStatusResponse> = {}): JobStatus
     speed: 1.0,
     output_format: "mp3",
     audio_url: null,
+    subtitles_url: null,
     ...overrides,
   };
 }
