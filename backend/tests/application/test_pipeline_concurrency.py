@@ -261,3 +261,107 @@ async def test_concurrent_resume_skips_completed_chunks(tmp_path: Path) -> None:
     # Only chunk 3 and chunk 4 should have been synthesized by TTS
     assert len(tts.calls) == 2
     assert (workspace / "output.mp3").is_file()
+
+
+@pytest.mark.anyio
+async def test_concurrent_translation_failure_records_root_failing_chunk_id(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    job = _job(
+        id="job-conc-root-fail",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="vi-VN",
+        output_format=OutputFormat.MP3,
+    )
+
+    class RootFailTranslation(FakeTranslationProvider):
+        async def translate(self, text: str, source_language: str, target_language: str) -> str:
+            if "fail" in text:
+                raise DomainError(ErrorType.TRANSLATION_FAILED, "simulated failure on chunk-002")
+            await asyncio.sleep(0.05)
+            return await super().translate(text, source_language, target_language)
+
+    story = "First ok text. Second fail text. Third ok text. Fourth ok text."
+    orchestrator, workspace, _ = _concurrency_orchestrator(
+        tmp_path,
+        job=job,
+        translation=RootFailTranslation(["en-US", "vi-VN"]),
+        translation_concurrency=3,
+        max_chars=18,
+    )
+
+    with caplog.at_level("INFO"):
+        result = await orchestrator.run(job, story, workspace=workspace)
+
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.TRANSLATION_FAILED
+    failed_logs = [rec for rec in caplog.records if rec.msg == "pipeline_failed"]
+    assert len(failed_logs) == 1
+    assert getattr(failed_logs[0], "chunk_id", None) == "chunk-002"
+
+
+@pytest.mark.anyio
+async def test_orchestrator_caps_concurrency_at_provider_max_concurrency(tmp_path: Path) -> None:
+    job = _job(
+        id="job-conc-cap",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="vi-VN",
+        output_format=OutputFormat.MP3,
+    )
+
+    class LimitedTranslation(ConcurrencyTrackingTranslation):
+        max_concurrency: int = 1
+
+    translation = LimitedTranslation(["en-US", "vi-VN"], delay=0.03)
+    story = "Sentence one. Sentence two. Sentence three. Sentence four."
+    orchestrator, workspace, _ = _concurrency_orchestrator(
+        tmp_path,
+        job=job,
+        translation=translation,
+        translation_concurrency=4,
+        tts_concurrency=1,
+        max_chars=15,
+    )
+
+    result = await orchestrator.run(job, story, workspace=workspace)
+    assert result.status is JobStatus.COMPLETED
+    assert translation.peak_concurrency == 1
+
+
+@pytest.mark.anyio
+async def test_recovery_attempts_preserved_when_intermediate_chunk_fails(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    job = replace(
+        _job(
+            id="job-recovery-preserve",
+            status=JobStatus.TRANSLATING,
+            source_language="en-US",
+            target_language="vi-VN",
+            output_format=OutputFormat.MP3,
+        ),
+        recovery_attempts=2,
+    )
+
+    class FailOnSecondChunkTranslation(FakeTranslationProvider):
+        async def translate(self, text: str, source_language: str, target_language: str) -> str:
+            if "fail" in text:
+                raise DomainError(ErrorType.TRANSLATION_FAILED, "chunk failure")
+            return await super().translate(text, source_language, target_language)
+
+    story = "Chunk one ok. Chunk two fail."
+    orchestrator, workspace, store = _concurrency_orchestrator(
+        tmp_path,
+        job=job,
+        translation=FailOnSecondChunkTranslation(["en-US", "vi-VN"]),
+        translation_concurrency=1,
+        max_chars=18,
+    )
+
+    result = await orchestrator.run(job, story, workspace=workspace)
+    assert result.status is JobStatus.FAILED
+    assert result.recovery_attempts == 2
+    saved = await store.get(job.id)
+    assert saved is not None and saved.recovery_attempts == 2

@@ -90,7 +90,9 @@ def _map_gemini_error(exc: Exception) -> DomainError:
     if isinstance(exc, urllib.error.HTTPError):
         if exc.code == 429:
             return DomainError(ErrorType.PROVIDER_RATE_LIMIT, "gemini rate limit exceeded")
-        if exc.code in (400, 401, 403, 404, 500, 502, 503, 504):
+        if exc.code in (400, 401, 403, 404):
+            return DomainError(ErrorType.PROVIDER_CONFIGURATION_ERROR, f"gemini HTTP {exc.code}")
+        if exc.code in (500, 502, 503, 504):
             return DomainError(ErrorType.TRANSLATION_FAILED, f"gemini HTTP {exc.code}")
     if isinstance(exc, (urllib.error.URLError, TimeoutError)):
         return DomainError(ErrorType.TIMEOUT, "gemini request timed out")
@@ -162,7 +164,7 @@ class GeminiTranslationProvider:
     async def translate(self, text: str, source_language: str, target_language: str) -> str:
         if not self._api_key:
             raise DomainError(
-                ErrorType.TRANSLATION_FAILED,
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
                 "GEMINI_API_KEY is not configured or empty",
             )
         if source_language == AUTO_SOURCE_LANGUAGE:
@@ -217,12 +219,25 @@ class GeminiTranslationProvider:
         except Exception as exc:
             raise _map_gemini_error(exc) from exc
 
+        prompt_feedback = data.get("promptFeedback") or {}
+        block_reason = prompt_feedback.get("blockReason")
+        if block_reason:
+            raise DomainError(
+                ErrorType.INVALID_INPUT,
+                f"gemini prompt blocked: {block_reason}",
+            )
+
         candidates = data.get("candidates") or []
         if not candidates:
             raise DomainError(ErrorType.TRANSLATION_FAILED, "gemini returned no candidates")
 
         candidate = candidates[0]
         finish_reason = candidate.get("finishReason")
+        if finish_reason in ("SAFETY", "RECITATION", "PROHIBITED_CONTENT", "SPII"):
+            raise DomainError(
+                ErrorType.INVALID_INPUT,
+                f"gemini candidate blocked by policy: {finish_reason}",
+            )
         if finish_reason not in (None, "STOP"):
             raise DomainError(
                 ErrorType.TRANSLATION_FAILED,
@@ -234,7 +249,13 @@ class GeminiTranslationProvider:
         if not parts:
             raise DomainError(ErrorType.TRANSLATION_FAILED, "gemini returned empty parts")
 
-        raw_text = parts[0].get("text", "")
+        text_parts = [
+            p["text"] for p in parts if isinstance(p, dict) and "text" in p and not p.get("thought")
+        ]
+        if not text_parts:
+            raise DomainError(ErrorType.TRANSLATION_FAILED, "gemini returned no text parts")
+
+        raw_text = "".join(text_parts)
         cleaned = _strip_markdown_fences(raw_text)
         if not cleaned:
             raise DomainError(ErrorType.TRANSLATION_FAILED, "translation output is empty")

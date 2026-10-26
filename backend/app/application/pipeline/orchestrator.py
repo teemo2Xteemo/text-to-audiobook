@@ -367,7 +367,6 @@ class PipelineOrchestrator:
 
         async def _process_chunk(chunk: Chunk) -> None:
             nonlocal job, completed_count
-            self._active_chunk_id = chunk.id
             try:
                 path = workspace / "chunks" / f"{chunk.id}.translated.txt"
                 if not checkpoints.is_complete(chunk.id, STAGE_TRANSLATED):
@@ -424,7 +423,6 @@ class PipelineOrchestrator:
                         job = replace(
                             job,
                             chunk_current=completed_count,
-                            recovery_attempts=0,
                         )
                         await self._jobs.save(job)
                     logger.info(
@@ -435,8 +433,11 @@ class PipelineOrchestrator:
                             "stage": STAGE_TRANSLATED,
                         },
                     )
-            except BaseException:
-                self._active_chunk_id = chunk.id
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._active_chunk_id is None:
+                    self._active_chunk_id = chunk.id
                 raise
 
         queue: asyncio.Queue[Chunk] = asyncio.Queue()
@@ -447,7 +448,12 @@ class PipelineOrchestrator:
         if queue.empty():
             return job
 
-        worker_count = min(self._translation_concurrency, queue.qsize())
+        self._active_chunk_id = None
+        effective_concurrency = min(
+            self._translation_concurrency,
+            getattr(self._translation, "max_concurrency", self._translation_concurrency),
+        )
+        worker_count = min(effective_concurrency, queue.qsize())
 
         async def _worker() -> None:
             while not queue.empty():
@@ -505,7 +511,6 @@ class PipelineOrchestrator:
                 job = replace(
                     job,
                     chunk_current=completed_count,
-                    recovery_attempts=0,
                 )
                 await self._jobs.save(job)
             logger.info(
@@ -538,7 +543,6 @@ class PipelineOrchestrator:
 
         async def _process_chunk(chunk: Chunk) -> None:
             nonlocal job, completed_count
-            self._active_chunk_id = chunk.id
             try:
                 narrated_path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
                 narrated = narrated_path.read_text(encoding="utf-8")
@@ -624,7 +628,6 @@ class PipelineOrchestrator:
                         job = replace(
                             job,
                             chunk_current=completed_count,
-                            recovery_attempts=0,
                         )
                         await self._jobs.save(job)
                     logger.info(
@@ -635,8 +638,11 @@ class PipelineOrchestrator:
                             "stage": "generating_audio",
                         },
                     )
-            except BaseException:
-                self._active_chunk_id = chunk.id
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._active_chunk_id is None:
+                    self._active_chunk_id = chunk.id
                 raise
 
         queue: asyncio.Queue[Chunk] = asyncio.Queue()
@@ -647,7 +653,12 @@ class PipelineOrchestrator:
         if queue.empty():
             return job
 
-        worker_count = min(self._tts_concurrency, queue.qsize())
+        self._active_chunk_id = None
+        effective_concurrency = min(
+            self._tts_concurrency,
+            getattr(self._tts, "max_concurrency", self._tts_concurrency),
+        )
+        worker_count = min(effective_concurrency, queue.qsize())
 
         async def _worker() -> None:
             while not queue.empty():
@@ -701,6 +712,7 @@ class PipelineOrchestrator:
             job,
             status=status,
             chunk_current=0 if reset_progress else job.chunk_current,
+            recovery_attempts=0,
         )
         await self._jobs.save(job)
         return job
@@ -721,11 +733,9 @@ class PipelineOrchestrator:
         active_status: JobStatus,
     ) -> Job:
         if job.status is active_status:
-            advanced = chunk.index > job.chunk_current
             job = replace(
                 job,
                 chunk_current=max(job.chunk_current, chunk.index),
-                recovery_attempts=0 if advanced else job.recovery_attempts,
             )
             await self._jobs.save(job)
         logger.info(

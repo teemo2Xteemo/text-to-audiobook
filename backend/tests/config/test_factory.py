@@ -381,6 +381,26 @@ def test_factory_builds_gemini_provider(tmp_path: Path) -> None:
     assert provider._api_key == "test-key"
 
 
+def test_factory_gemini_without_api_key_raises_value_error(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="gemini",
+        gemini_api_key=None,
+    )
+    with pytest.raises(ValueError, match="GEMINI_API_KEY is required"):
+        build_translation_provider(settings)
+
+    empty_settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="gemini",
+        gemini_api_key="   ",
+    )
+    with pytest.raises(ValueError, match="GEMINI_API_KEY is required"):
+        build_translation_provider(empty_settings)
+
+
 def test_gemini_translation_pin_and_cache_identity(tmp_path: Path) -> None:
     settings = Settings(
         _env_file=None,

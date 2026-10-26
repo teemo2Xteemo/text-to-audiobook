@@ -135,3 +135,10 @@ def test_config_module_does_not_export_global_get_settings_singleton() -> None:
 def test_gemini_base_url_validation() -> None:
     with pytest.raises(ValidationError, match="GEMINI_BASE_URL"):
         Settings(_env_file=None, gemini_base_url="ftp://invalid.com")
+
+
+def test_gemini_api_key_secret_str() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="super-secret-key")
+    assert settings.gemini_api_key is not None
+    assert settings.gemini_api_key.get_secret_value() == "super-secret-key"
+    assert "super-secret-key" not in str(settings.gemini_api_key)

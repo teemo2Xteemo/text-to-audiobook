@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -78,9 +79,12 @@ def bcp47_to_flores(language: str) -> str:
 class NllbTranslationProvider:
     """CPU NLLB adapter registered as ``TRANSLATION_PROVIDER=nllb``."""
 
+    max_concurrency: int = 1
+
     def __init__(self, model_id: str, *, engine: NllbEngine | None = None) -> None:
         self._model_id = model_id
         self._engine = engine
+        self._lock = threading.Lock()
 
     def supported_languages(self) -> Sequence[str]:
         return list(_BCP47_TO_FLORES)
@@ -89,33 +93,34 @@ class NllbTranslationProvider:
         return await asyncio.to_thread(self._translate_sync, text, source_language, target_language)
 
     def _translate_sync(self, text: str, source_language: str, target_language: str) -> str:
-        if source_language == AUTO_SOURCE_LANGUAGE:
-            raise DomainError(
-                ErrorType.UNSUPPORTED_LANGUAGE,
-                "auto is not a translation source; resolve it first",
+        with self._lock:
+            if source_language == AUTO_SOURCE_LANGUAGE:
+                raise DomainError(
+                    ErrorType.UNSUPPORTED_LANGUAGE,
+                    "auto is not a translation source; resolve it first",
+                )
+            source_flores = bcp47_to_flores(source_language)
+            target_flores = bcp47_to_flores(target_language)
+            engine = self._get_engine()
+            token_count = engine.count_tokens(text, source_flores)
+            if token_count > engine.max_input_tokens():
+                raise DomainError(ErrorType.TRANSLATION_FAILED, "text exceeds model token limit")
+            logger.info(
+                "nllb_translate",
+                extra={
+                    "provider": "nllb",
+                    "model": self._model_id,
+                    "source_language": source_language,
+                    "target_language": target_language,
+                    "character_count": len(text),
+                },
             )
-        source_flores = bcp47_to_flores(source_language)
-        target_flores = bcp47_to_flores(target_language)
-        engine = self._get_engine()
-        token_count = engine.count_tokens(text, source_flores)
-        if token_count > engine.max_input_tokens():
-            raise DomainError(ErrorType.TRANSLATION_FAILED, "text exceeds model token limit")
-        logger.info(
-            "nllb_translate",
-            extra={
-                "provider": "nllb",
-                "model": self._model_id,
-                "source_language": source_language,
-                "target_language": target_language,
-                "character_count": len(text),
-            },
-        )
-        try:
-            return engine.generate(text, source_flores, target_flores)
-        except DomainError:
-            raise
-        except Exception as exc:
-            raise DomainError(ErrorType.TRANSLATION_FAILED, "translation failed") from exc
+            try:
+                return engine.generate(text, source_flores, target_flores)
+            except DomainError:
+                raise
+            except Exception as exc:
+                raise DomainError(ErrorType.TRANSLATION_FAILED, "translation failed") from exc
 
     def _get_engine(self) -> NllbEngine:
         if self._engine is None:

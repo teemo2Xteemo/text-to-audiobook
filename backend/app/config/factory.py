@@ -106,10 +106,17 @@ def build_translation_provider(settings: Settings) -> TranslationProvider:
             timeout_seconds=settings.ollama_http_timeout_seconds,
         )
     if name == "gemini":
+        api_key = (
+            settings.gemini_api_key.get_secret_value().strip()
+            if settings.gemini_api_key is not None
+            else ""
+        )
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY is required when TRANSLATION_PROVIDER=gemini")
         from app.providers.translation.gemini import GeminiTranslationProvider
 
         return GeminiTranslationProvider(
-            api_key=settings.gemini_api_key,
+            api_key=api_key,
             model=settings.gemini_translation_model,
             base_url=settings.gemini_base_url,
             timeout_seconds=settings.gemini_http_timeout_seconds,

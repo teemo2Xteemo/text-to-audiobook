@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = Field(default="http://127.0.0.1:11434")
     ollama_translation_model: str = Field(default="translategemma:4b", min_length=1)
     ollama_http_timeout_seconds: float = Field(default=120.0, gt=0)
-    gemini_api_key: str | None = Field(default=None)
+    gemini_api_key: SecretStr | None = Field(default=None)
     gemini_translation_model: str = Field(default="gemini-3.5-flash", min_length=1)
     gemini_base_url: str = Field(default="https://generativelanguage.googleapis.com")
     gemini_http_timeout_seconds: float = Field(default=60.0, gt=0)

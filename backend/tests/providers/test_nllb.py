@@ -242,6 +242,40 @@ def test_translate_runs_engine_in_worker_thread() -> None:
     assert seen[0] is not main_thread
 
 
+def test_nllb_declares_max_concurrency_one() -> None:
+    provider = NllbTranslationProvider(model_id="test-model", engine=FakeNllbEngine())
+    assert getattr(provider, "max_concurrency", None) == 1
+
+
+def test_translate_serializes_concurrent_calls_via_lock() -> None:
+    import time
+
+    concurrent_count = 0
+    max_concurrent = 0
+
+    class _SlowEngine(FakeNllbEngine):
+        def generate(self, text: str, source_flores: str, target_flores: str) -> str:
+            nonlocal concurrent_count, max_concurrent
+            concurrent_count += 1
+            max_concurrent = max(max_concurrent, concurrent_count)
+            time.sleep(0.05)
+            concurrent_count -= 1
+            return super().generate(text, source_flores, target_flores)
+
+    provider = NllbTranslationProvider(model_id="test-model", engine=_SlowEngine())
+
+    async def _run() -> list[str]:
+        return await asyncio.gather(
+            provider.translate("one", "en-US", "vi-VN"),
+            provider.translate("two", "en-US", "vi-VN"),
+            provider.translate("three", "en-US", "vi-VN"),
+        )
+
+    results = asyncio.run(_run())
+    assert len(results) == 3
+    assert max_concurrent == 1
+
+
 @pytest.mark.integration
 def test_nllb_live_translate_opt_in() -> None:
     if os.environ.get("NLLB_INTEGRATION") != "1":
