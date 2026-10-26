@@ -16,9 +16,20 @@ export type Voice = {
   label: string;
 };
 
+export type TranslationProfile = {
+  id: string;
+  provider: string;
+  model: string;
+  label: string;
+  badge: string;
+  description: string;
+  is_default: boolean;
+};
+
 export type Capabilities = {
   languages: string[];
   voices: Voice[];
+  translation_profiles?: TranslationProfile[];
 };
 
 export type JobCreated = {
@@ -58,6 +69,7 @@ export type CreateJobInput = {
   output_format: OutputFormat;
   text?: string;
   file?: File;
+  translation_profile_id?: string;
 };
 
 export class ApiError extends Error {

@@ -116,4 +116,54 @@ describe("JobForm", () => {
     await user.keyboard("{ArrowDown}");
     expect(voiceSelect).toHaveValue("fake-en");
   });
+
+  it("renders translation profile select when capabilities include profiles", async () => {
+    const user = userEvent.setup();
+    const handleSubmit = vi.fn();
+    const capabilitiesWithProfiles = {
+      ...capabilitiesFixture,
+      translation_profiles: [
+        {
+          id: "gemini-3.5-flash",
+          provider: "gemini",
+          model: "gemini-3.5-flash",
+          label: "Google Gemini 3.5 Flash",
+          badge: "ONLINE",
+          description: "Văn phong tự nhiên · Khuyên dùng",
+          is_default: true,
+        },
+        {
+          id: "nllb-600m",
+          provider: "nllb",
+          model: "nllb-200-distilled-600M",
+          label: "NLLB-200 (CPU Offline)",
+          badge: "OFFLINE",
+          description: "Chạy hoàn toàn trên máy · Riêng tư",
+          is_default: false,
+        },
+      ],
+    };
+
+    render(
+      <JobForm
+        capabilities={capabilitiesWithProfiles}
+        disabled={false}
+        onSubmit={handleSubmit}
+      />,
+    );
+
+    const profileSelect = screen.getByLabelText("Translation engine");
+    expect(profileSelect).toHaveValue("gemini-3.5-flash");
+
+    const textarea = screen.getByLabelText("Paste story");
+    await user.type(textarea, "A tale of stars.");
+    const submitBtn = screen.getByRole("button", { name: "Generate" });
+    await user.click(submitBtn);
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        translation_profile_id: "gemini-3.5-flash",
+      }),
+    );
+  });
 });
