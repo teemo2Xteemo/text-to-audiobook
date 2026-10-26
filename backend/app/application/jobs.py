@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat, assert_legal_transition, is_terminal
 from app.domain.languages import ensure_valid_languages
 from app.domain.ports import DiskJobStore, JobQueue, JobStore, SourceTextStorage
+from app.domain.translation_profile import TranslationProfile
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ class CreateJobCommand:
     voice: str | None = None
     speed: float = SPEED_DEFAULT
     output_format: str = OutputFormat.MP3.value
+    translation_profile_id: str | None = None
 
 
 class JobService:
@@ -43,6 +46,7 @@ class JobService:
         max_recovery_attempts: int = 3,
         translation_provider: str = "fake",
         translation_model: str = "fake",
+        available_profiles: Sequence[TranslationProfile] | None = None,
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
@@ -55,6 +59,9 @@ class JobService:
         self._max_recovery_attempts = max_recovery_attempts
         self._translation_provider = translation_provider
         self._translation_model = translation_model
+        self._available_profiles = (
+            list(available_profiles) if available_profiles is not None else []
+        )
 
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
@@ -67,6 +74,27 @@ class JobService:
         output_format = _parse_output_format(command.output_format)
         voice = command.voice.strip() if command.voice and command.voice.strip() else None
 
+        profile_id = (
+            command.translation_profile_id.strip()
+            if command.translation_profile_id and command.translation_profile_id.strip()
+            else None
+        )
+        if profile_id is not None:
+            matched = next(
+                (p for p in self._available_profiles if p.id == profile_id),
+                None,
+            )
+            if matched is None:
+                raise DomainError(
+                    ErrorType.INVALID_INPUT,
+                    f"unknown translation_profile_id: {profile_id}",
+                )
+            translation_provider = matched.provider
+            translation_model = matched.model
+        else:
+            translation_provider = self._translation_provider
+            translation_model = self._translation_model
+
         job_id = str(uuid.uuid4())
         job = Job(
             id=job_id,
@@ -77,8 +105,8 @@ class JobService:
             speed=command.speed,
             output_format=output_format,
             output_bitrate_kbps=self._output_bitrate_kbps,
-            translation_provider=self._translation_provider,
-            translation_model=self._translation_model,
+            translation_provider=translation_provider,
+            translation_model=translation_model,
         )
         try:
             await self._source_storage.write_source(job_id, text)

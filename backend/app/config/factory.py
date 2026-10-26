@@ -41,6 +41,7 @@ class UnknownProviderError(ValueError):
 def build_job_service(settings: Settings) -> JobService:
     filesystem, store, queue = _infrastructure(settings)
     provider, model = translation_pin_from_settings(settings)
+    profiles = build_available_translation_profiles(settings)
     return JobService(
         jobs=store,
         source_storage=filesystem,
@@ -51,6 +52,7 @@ def build_job_service(settings: Settings) -> JobService:
         max_recovery_attempts=settings.max_recovery_attempts,
         translation_provider=provider,
         translation_model=model,
+        available_profiles=profiles,
     )
 
 
@@ -135,10 +137,7 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
     if matched_idx is None and profiles:
         matched_idx = 0
 
-    return [
-        replace(p, is_default=(i == matched_idx))
-        for i, p in enumerate(profiles)
-    ]
+    return [replace(p, is_default=(i == matched_idx)) for i, p in enumerate(profiles)]
 
 
 def build_capabilities_service(settings: Settings) -> CapabilitiesService:

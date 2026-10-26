@@ -27,7 +27,9 @@ class CapabilitiesService:
     ) -> None:
         self._translation = translation
         self._tts = tts
-        self._translation_profiles = list(translation_profiles) if translation_profiles is not None else []
+        self._translation_profiles = (
+            list(translation_profiles) if translation_profiles is not None else []
+        )
 
     def get(self, language: str | None = None) -> Capabilities:
         languages = _intersection_languages(self._translation, self._tts)

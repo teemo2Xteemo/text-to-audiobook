@@ -39,6 +39,19 @@ def test_capabilities_intersection_and_all_voices(capabilities_client: TestClien
     assert all("Neural" not in voice["id"] for voice in body["voices"])
 
 
+def test_capabilities_returns_translation_profiles(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    app = create_app(settings)
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/capabilities")
+        assert response.status_code == 200
+        data = response.json()
+        assert "translation_profiles" in data
+        assert isinstance(data["translation_profiles"], list)
+        assert len(data["translation_profiles"]) >= 1
+        assert data["translation_profiles"][0]["id"] == "fake"
+
+
 def test_capabilities_filters_voices_by_language(capabilities_client: TestClient) -> None:
     response = capabilities_client.get("/api/capabilities", params={"language": "ja-JP"})
     assert response.status_code == 200

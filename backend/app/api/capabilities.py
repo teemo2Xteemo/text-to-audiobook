@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_capabilities_service
-from app.api.schemas import CapabilitiesResponse, VoiceResponse
+from app.api.schemas import CapabilitiesResponse, TranslationProfileResponse, VoiceResponse
 from app.application.capabilities import CapabilitiesService
 
 router = APIRouter()
@@ -19,4 +19,16 @@ async def get_capabilities(
     return CapabilitiesResponse(
         languages=result.languages,
         voices=[VoiceResponse.from_voice(voice) for voice in result.voices],
+        translation_profiles=[
+            TranslationProfileResponse(
+                id=p.id,
+                provider=p.provider,
+                model=p.model,
+                label=p.label,
+                badge=p.badge,
+                description=p.description,
+                is_default=p.is_default,
+            )
+            for p in result.translation_profiles
+        ],
     )

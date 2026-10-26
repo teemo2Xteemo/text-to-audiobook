@@ -74,6 +74,7 @@ class CreateJobJsonBody(BaseModel):
     voice: str | None = None
     speed: float = SPEED_DEFAULT
     output_format: str = Field(default=OutputFormat.MP3.value)
+    translation_profile_id: str | None = None
 
 
 class VoiceResponse(BaseModel):
@@ -86,6 +87,17 @@ class VoiceResponse(BaseModel):
         return cls(id=voice.id, language=voice.language, label=voice.label)
 
 
+class TranslationProfileResponse(BaseModel):
+    id: str
+    provider: str
+    model: str
+    label: str
+    badge: str
+    description: str
+    is_default: bool
+
+
 class CapabilitiesResponse(BaseModel):
     languages: list[str]
     voices: list[VoiceResponse]
+    translation_profiles: list[TranslationProfileResponse] = Field(default_factory=list)
