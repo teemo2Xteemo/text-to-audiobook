@@ -9,6 +9,7 @@ import pytest
 from app.application.jobs import CreateJobCommand, JobService
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.translation_profile import TranslationProfile
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.job_store import DualWriteJobStore
 from tests.fakes import FailingQueue, InMemoryJobStore, InMemoryQueue, InMemorySourceStorage
@@ -21,6 +22,7 @@ def _service(
     *,
     translation_provider: str = "fake",
     translation_model: str = "fake",
+    available_profiles: list[TranslationProfile] | None = None,
 ) -> tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue | FailingQueue]:
     store = jobs or InMemoryJobStore()
     storage = source or InMemorySourceStorage()
@@ -33,6 +35,7 @@ def _service(
         storage_path=Path("storage"),
         translation_provider=translation_provider,
         translation_model=translation_model,
+        available_profiles=available_profiles,
     )
     return service, store, storage, queued
 
@@ -56,6 +59,185 @@ def test_create_stamps_lab_pin_not_the_request() -> None:
     assert second.translation_provider == "ollama"
     assert second.translation_model == "translategemma:4b"
     assert store.jobs[first.id].translation_model == "translategemma:4b"
+
+
+def test_create_resolves_specified_translation_profile() -> None:
+    profiles = [
+        TranslationProfile(
+            id="gemini-flash",
+            provider="gemini",
+            model="gemini-3.5-flash",
+            label="Gemini",
+            badge="ONLINE",
+            description="desc",
+            is_default=False,
+        ),
+        TranslationProfile(
+            id="nllb-600m",
+            provider="nllb",
+            model="facebook/nllb-200-distilled-600M",
+            label="NLLB",
+            badge="OFFLINE",
+            description="desc",
+            is_default=True,
+        ),
+    ]
+    service, store, _, _ = _service(
+        translation_provider="nllb",
+        translation_model="facebook/nllb-200-distilled-600M",
+        available_profiles=profiles,
+    )
+    cmd = CreateJobCommand(
+        source_language="en-US",
+        target_language="vi-VN",
+        text="Hello story",
+        translation_profile_id="gemini-flash",
+    )
+    job = asyncio.run(service.create(cmd))
+    assert job.translation_provider == "gemini"
+    assert job.translation_model == "gemini-3.5-flash"
+
+
+def test_create_rejects_unknown_translation_profile() -> None:
+    service, _, _, _ = _service()
+    cmd = CreateJobCommand(
+        source_language="en-US",
+        target_language="vi-VN",
+        text="Hello story",
+        translation_profile_id="non-existent-profile",
+    )
+    with pytest.raises(DomainError) as exc_info:
+        asyncio.run(service.create(cmd))
+    assert exc_info.value.error_type == ErrorType.INVALID_INPUT
+
+
+def test_create_with_default_profile_id_matches_omitted_profile_id() -> None:
+    profiles = [
+        TranslationProfile(
+            id="gemini-default",
+            provider="gemini",
+            model="gemini-1.5-flash",
+            label="Gemini",
+            badge="ONLINE",
+            description="desc",
+            is_default=True,
+        ),
+    ]
+    service, _, _, _ = _service(
+        translation_provider="gemini",
+        translation_model="gemini-1.5-flash",
+        available_profiles=profiles,
+    )
+    with_default = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello story",
+                translation_profile_id="gemini-default",
+            )
+        )
+    )
+    with_none = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello story",
+                translation_profile_id=None,
+            )
+        )
+    )
+    assert with_default.translation_provider == with_none.translation_provider == "gemini"
+    assert with_default.translation_model == with_none.translation_model == "gemini-1.5-flash"
+
+
+def test_create_with_whitespace_profile_id_falls_back_to_default() -> None:
+    profiles = [
+        TranslationProfile(
+            id="default-prof",
+            provider="nllb",
+            model="nllb-default",
+            label="NLLB",
+            badge="OFFLINE",
+            description="desc",
+            is_default=True,
+        ),
+    ]
+    service, _, _, _ = _service(
+        translation_provider="nllb",
+        translation_model="nllb-default",
+        available_profiles=profiles,
+    )
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello story",
+                translation_profile_id="   ",
+            )
+        )
+    )
+    assert job.translation_provider == "nllb"
+    assert job.translation_model == "nllb-default"
+
+
+def test_create_rejects_unsupported_language_for_profile() -> None:
+    profiles = [
+        TranslationProfile(
+            id="nllb-600m",
+            provider="nllb",
+            model="nllb-600m",
+            label="NLLB",
+            badge="OFFLINE",
+            description="desc",
+            is_default=True,
+            supported_languages=("en-US", "vi-VN"),
+        ),
+    ]
+    service, _, _, _ = _service(
+        translation_provider="nllb",
+        translation_model="nllb-600m",
+        available_profiles=profiles,
+    )
+    # Target unsupported
+    cmd = CreateJobCommand(
+        source_language="en-US",
+        target_language="ja-JP",
+        text="Hello story",
+        translation_profile_id="nllb-600m",
+    )
+    with pytest.raises(DomainError) as exc_info:
+        asyncio.run(service.create(cmd))
+    assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+    # Source unsupported (when not "auto")
+    cmd_src = CreateJobCommand(
+        source_language="ja-JP",
+        target_language="vi-VN",
+        text="Hello story",
+        translation_profile_id="nllb-600m",
+    )
+    with pytest.raises(DomainError) as exc_src:
+        asyncio.run(service.create(cmd_src))
+    assert exc_src.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+
+def test_create_truncates_long_unknown_profile_id_in_error() -> None:
+    service, _, _, _ = _service()
+    long_id = "a" * 200
+    cmd = CreateJobCommand(
+        source_language="en-US",
+        target_language="vi-VN",
+        text="Hello story",
+        translation_profile_id=long_id,
+    )
+    with pytest.raises(DomainError) as exc_info:
+        asyncio.run(service.create(cmd))
+    assert exc_info.value.error_type == ErrorType.INVALID_INPUT
+    assert "a" * 64 in exc_info.value.message
+    assert "a" * 65 not in exc_info.value.message
 
 
 def test_create_with_fake_lab_stores_fake_pin() -> None:

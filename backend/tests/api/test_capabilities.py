@@ -39,6 +39,42 @@ def test_capabilities_intersection_and_all_voices(capabilities_client: TestClien
     assert all("Neural" not in voice["id"] for voice in body["voices"])
 
 
+def test_capabilities_returns_translation_profiles(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    app = create_app(settings)
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/capabilities")
+        assert response.status_code == 200
+        data = response.json()
+        assert "translation_profiles" in data
+        assert isinstance(data["translation_profiles"], list)
+        assert len(data["translation_profiles"]) >= 1
+        assert data["translation_profiles"][0]["id"] == "fake"
+        assert len(data["translation_profiles"][0]["supported_languages"]) >= 1
+
+
+def test_capabilities_returns_multiple_profiles_when_configured(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="gemini",
+        gemini_api_key="valid-key",
+        tts_provider="fake",
+    )
+    app = create_app(settings)
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/capabilities")
+        assert response.status_code == 200
+        data = response.json()
+        profiles = data["translation_profiles"]
+        ids = [p["id"] for p in profiles]
+        assert "gemini-3.5-flash" in ids
+        assert "gemini-2.0-flash" in ids
+        default_p = next(p for p in profiles if p["is_default"])
+        assert default_p["id"] == "gemini-3.5-flash"
+        assert len(default_p["supported_languages"]) > 0
+
+
 def test_capabilities_filters_voices_by_language(capabilities_client: TestClient) -> None:
     response = capabilities_client.get("/api/capabilities", params={"language": "ja-JP"})
     assert response.status_code == 200

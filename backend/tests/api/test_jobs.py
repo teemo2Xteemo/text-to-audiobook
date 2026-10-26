@@ -12,6 +12,7 @@ from app.application.jobs import JobService
 from app.config.settings import Settings
 from app.domain.errors import ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.translation_profile import TranslationProfile
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.main import create_app
 from tests.fakes import InMemoryJobStore, InMemoryQueue, InMemorySourceStorage
@@ -37,6 +38,26 @@ def memory(
         output_bitrate_kbps=128,
         storage_path=tmp_path,
         disk_jobs=FilesystemJobStorage(tmp_path),
+        available_profiles=[
+            TranslationProfile(
+                id="gemini-flash",
+                provider="gemini",
+                model="gemini-3.5-flash",
+                label="Gemini",
+                badge="ONLINE",
+                description="desc",
+                supported_languages=("en-US", "ja-JP"),
+            ),
+            TranslationProfile(
+                id="nllb-600m",
+                provider="nllb",
+                model="facebook/nllb-200-distilled-600M",
+                label="NLLB",
+                badge="OFFLINE",
+                description="desc",
+                supported_languages=("en-US", "vi-VN"),
+            ),
+        ],
     )
     return service, store, source, queue
 
@@ -68,6 +89,68 @@ def test_post_does_not_accept_a_translator_and_get_returns_lab_pin(
     assert status.status_code == 200
     assert status.json()["translation_provider"] == "fake"
     assert status.json()["translation_model"] == "fake"
+
+
+def test_post_with_translation_profile_id_resolves_profile(
+    jobs_client: TestClient,
+) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={**VALID_BODY, "translation_profile_id": "gemini-flash"},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    status = jobs_client.get(f"/api/jobs/{job_id}")
+    assert status.status_code == 200
+    assert status.json()["translation_provider"] == "gemini"
+    assert status.json()["translation_model"] == "gemini-3.5-flash"
+
+
+def test_post_with_unknown_translation_profile_id_fails(
+    jobs_client: TestClient,
+) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={**VALID_BODY, "translation_profile_id": "non-existent"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error_type"] == "INVALID_INPUT"
+
+
+def test_post_with_profile_and_unsupported_language_returns_400(
+    jobs_client: TestClient,
+) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": "Hello story",
+            "source_language": "en-US",
+            "target_language": "ja-JP",
+            "translation_profile_id": "nllb-600m",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error_type"] == "UNSUPPORTED_LANGUAGE"
+
+
+def test_post_multipart_with_translation_profile_id_resolves_profile(
+    jobs_client: TestClient,
+) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        data={
+            "source_language": "en-US",
+            "target_language": "ja-JP",
+            "translation_profile_id": "gemini-flash",
+        },
+        files={"file": ("story.txt", b"Once upon a time", "text/plain")},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    status = jobs_client.get(f"/api/jobs/{job_id}")
+    assert status.status_code == 200
+    assert status.json()["translation_provider"] == "gemini"
+    assert status.json()["translation_model"] == "gemini-3.5-flash"
 
 
 def test_status_omits_pin_when_the_job_has_none() -> None:

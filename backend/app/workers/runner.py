@@ -9,12 +9,13 @@ from redis import Redis
 from rq import Queue, Worker
 
 from app.config.factory import (
+    ProviderConfigurationError,
     build_job_service,
     build_orchestrator,
     settings_for_translation_pin,
 )
 from app.config.settings import Settings
-from app.domain.errors import DomainError
+from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import is_terminal
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.rq_queue import RQ_QUEUE_NAME
@@ -77,7 +78,20 @@ async def _process_job_async(job_id: str) -> None:
                 )
                 return
             text = await filesystem.read_source(job_id)
-            orchestrator = build_orchestrator(settings_for_translation_pin(settings, fresh))
+            try:
+                orchestrator = build_orchestrator(settings_for_translation_pin(settings, fresh))
+            except ProviderConfigurationError as exc:
+                logger.error(
+                    "worker_provider_configuration_error",
+                    extra={"job_id": job_id, "error": str(exc)},
+                )
+                service = build_job_service(settings)
+                await service.mark_failed(
+                    job_id,
+                    ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                    str(exc),
+                )
+                return
             await orchestrator.run(fresh, text, workspace=workspace)
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

@@ -103,3 +103,32 @@ def test_handle_worker_exception_marks_unexpected_failure(
     assert failed.status is JobStatus.FAILED
     assert failed.error_type is ErrorType.WORKER_FAILED
     assert failed.message == "worker task failed (RuntimeError)"
+
+
+def test_handle_rq_failure_provider_configuration_error_maps_correctly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.config.factory import ProviderConfigurationError
+
+    job_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    asyncio.run(FilesystemJobStorage(tmp_path).save_job(_job(job_id, JobStatus.QUEUED)))
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        "app.workers.rq_failure.Settings",
+        lambda **_: Settings(_env_file=None, storage_path=tmp_path),
+    )
+    monkeypatch.setattr("app.workers.rq_failure.build_job_service", lambda settings: service)
+
+    handle_rq_failure(
+        SimpleNamespace(args=(job_id,)),
+        None,
+        ProviderConfigurationError,
+        ProviderConfigurationError("GEMINI_API_KEY is required when TRANSLATION_PROVIDER=gemini"),
+        None,
+    )
+
+    failed = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job_id))
+    assert failed is not None
+    assert failed.status is JobStatus.FAILED
+    assert failed.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert "GEMINI_API_KEY" in (failed.message or "")

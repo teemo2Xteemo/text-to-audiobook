@@ -65,6 +65,38 @@ describe("api client", () => {
     expect(form.get("output_format")).toBe("wav");
   });
 
+  it("forwards translation_profile_id in JSON and multipart requests", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(jsonResponse({ job_id: JOB_ID, status: "queued" }, 202)),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // JSON
+    await createJob({
+      text: "hello",
+      source_language: "en-US",
+      target_language: "vi-VN",
+      speed: 1,
+      output_format: "mp3",
+      translation_profile_id: "gemini-3.5-flash",
+    });
+    const jsonBody = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(jsonBody.translation_profile_id).toBe("gemini-3.5-flash");
+
+    // Multipart
+    const file = new File(["content"], "doc.txt", { type: "text/plain" });
+    await createJob({
+      file,
+      source_language: "en-US",
+      target_language: "vi-VN",
+      speed: 1,
+      output_format: "mp3",
+      translation_profile_id: "nllb-600m",
+    });
+    const form = (fetchMock.mock.calls[1]?.[1] as RequestInit).body as FormData;
+    expect(form.get("translation_profile_id")).toBe("nllb-600m");
+  });
+
   it("rejects sending both text and file", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

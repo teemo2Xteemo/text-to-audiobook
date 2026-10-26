@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
+import logging
+from dataclasses import replace
 from pathlib import Path
 
 from redis import Redis
@@ -20,6 +23,7 @@ from app.domain.ports import (
     TTSProvider,
 )
 from app.domain.retry import RetryPolicy
+from app.domain.translation_profile import TranslationProfile
 from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
 from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from app.infrastructure.fake_audio import FakeAudioProcessor
@@ -31,14 +35,21 @@ from app.infrastructure.rq_queue import RQ_QUEUE_NAME, RQJobQueue
 from app.providers.translation.fake import FakeTranslationProvider
 from app.providers.tts.fake import FakeTTSProvider
 
+logger = logging.getLogger(__name__)
 
-class UnknownProviderError(ValueError):
+
+class ProviderConfigurationError(ValueError):
+    """Raised when provider configuration or required credentials are missing."""
+
+
+class UnknownProviderError(ProviderConfigurationError):
     """Raised when ``TRANSLATION_PROVIDER`` or ``TTS_PROVIDER`` is not registered."""
 
 
 def build_job_service(settings: Settings) -> JobService:
     filesystem, store, queue = _infrastructure(settings)
     provider, model = translation_pin_from_settings(settings)
+    profiles = build_available_translation_profiles(settings)
     return JobService(
         jobs=store,
         source_storage=filesystem,
@@ -49,13 +60,165 @@ def build_job_service(settings: Settings) -> JobService:
         max_recovery_attempts=settings.max_recovery_attempts,
         translation_provider=provider,
         translation_model=model,
+        available_profiles=profiles,
     )
+
+
+def _nllb_available() -> bool:
+    try:
+        return (
+            importlib.util.find_spec("transformers") is not None
+            and importlib.util.find_spec("sentencepiece") is not None
+        )
+    except (ImportError, ValueError, AttributeError):
+        return False
+
+
+def _languages_for_provider(provider: str) -> tuple[str, ...]:
+    if provider == "gemini":
+        from app.providers.translation.gemini import SUPPORTED_LANGUAGES
+
+        return SUPPORTED_LANGUAGES
+    if provider == "nllb":
+        from app.providers.translation.nllb import SUPPORTED_LANGUAGES
+
+        return SUPPORTED_LANGUAGES
+    if provider == "ollama":
+        from app.providers.translation.ollama import SUPPORTED_LANGUAGES
+
+        return SUPPORTED_LANGUAGES
+    return ("en-US", "ja-JP", "ko-KR", "vi-VN")
+
+
+def build_available_translation_profiles(settings: Settings) -> list[TranslationProfile]:
+    name = settings.translation_provider.strip().lower()
+    default_provider, default_model = translation_pin_from_settings(settings)
+    if name == "fake":
+        return [
+            TranslationProfile(
+                id="fake",
+                provider="fake",
+                model="fake",
+                label="Fake Translation (Mock)",
+                badge="MOCK",
+                description="Mock translation for tests",
+                is_default=True,
+                supported_languages=("en-US", "ja-JP", "ko-KR", "vi-VN"),
+            )
+        ]
+
+    profiles: list[TranslationProfile] = []
+
+    gemini_key = (
+        settings.gemini_api_key.get_secret_value().strip()
+        if settings.gemini_api_key is not None
+        else ""
+    )
+    if gemini_key:
+        gemini_langs = _languages_for_provider("gemini")
+        profiles.append(
+            TranslationProfile(
+                id="gemini-3.5-flash",
+                provider="gemini",
+                model="gemini-3.5-flash",
+                label="Google Gemini 3.5 Flash",
+                badge="ONLINE",
+                description="Natural tone · Recommended",
+                supported_languages=gemini_langs,
+            )
+        )
+        profiles.append(
+            TranslationProfile(
+                id="gemini-2.0-flash",
+                provider="gemini",
+                model="gemini-2.0-flash",
+                label="Google Gemini 2.0 Flash",
+                badge="ONLINE",
+                description="High speed · Saves quota",
+                supported_languages=gemini_langs,
+            )
+        )
+
+    if _nllb_available():
+        model_id = settings.nllb_model_id
+        is_distilled_600m = "600M" in model_id or "600m" in model_id
+        profile_id = "nllb-600m" if is_distilled_600m else f"nllb-{model_id.split('/')[-1]}"
+        label = "NLLB-200 (CPU Offline)" if is_distilled_600m else f"NLLB-200 ({model_id})"
+        profiles.append(
+            TranslationProfile(
+                id=profile_id,
+                provider="nllb",
+                model=model_id,
+                label=label,
+                badge="OFFLINE",
+                description="Runs locally on CPU · Private",
+                supported_languages=_languages_for_provider("nllb"),
+            )
+        )
+
+    if name == "ollama" or default_provider == "ollama":
+        profiles.append(
+            TranslationProfile(
+                id="ollama-gemma",
+                provider="ollama",
+                model=settings.ollama_translation_model,
+                label="Ollama TranslateGemma",
+                badge="LOCAL",
+                description="Local open source model",
+                supported_languages=_languages_for_provider("ollama"),
+            )
+        )
+
+    # Ensure configured default model is always present in profiles
+    matched_idx: int | None = None
+    for idx, p in enumerate(profiles):
+        if p.provider == default_provider and p.model == default_model:
+            matched_idx = idx
+            break
+
+    if matched_idx is None and (default_provider != "nllb" or _nllb_available()):
+        slug = default_model.split("/")[-1].replace(":", "-")
+        default_id = slug if slug.startswith(default_provider) else f"{default_provider}-{slug}"
+        badge = (
+            "ONLINE"
+            if default_provider == "gemini"
+            else ("OFFLINE" if default_provider == "nllb" else "LOCAL")
+        )
+        configured_profile = TranslationProfile(
+            id=default_id,
+            provider=default_provider,
+            model=default_model,
+            label=f"{default_provider.capitalize()} ({default_model})",
+            badge=badge,
+            description="Configured server default model",
+            supported_languages=_languages_for_provider(default_provider),
+        )
+        profiles.insert(0, configured_profile)
+        matched_idx = 0
+
+    if default_provider == "gemini" and not gemini_key:
+        logger.warning(
+            "configured_default_provider_gemini_missing_api_key",
+            extra={"provider": "gemini", "model": default_model},
+        )
+    elif default_provider == "nllb" and not _nllb_available():
+        logger.warning(
+            "configured_default_provider_nllb_missing_dependencies",
+            extra={"provider": "nllb", "model": default_model},
+        )
+
+    return [replace(p, is_default=(i == matched_idx)) for i, p in enumerate(profiles)]
 
 
 def build_capabilities_service(settings: Settings) -> CapabilitiesService:
     translation = build_translation_provider(settings)
     tts = build_tts_provider(settings)
-    return CapabilitiesService(translation=translation, tts=tts)
+    profiles = build_available_translation_profiles(settings)
+    return CapabilitiesService(
+        translation=translation,
+        tts=tts,
+        translation_profiles=profiles,
+    )
 
 
 def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
@@ -112,7 +275,9 @@ def build_translation_provider(settings: Settings) -> TranslationProvider:
             else ""
         )
         if not api_key:
-            raise ValueError("GEMINI_API_KEY is required when TRANSLATION_PROVIDER=gemini")
+            raise ProviderConfigurationError(
+                "GEMINI_API_KEY is required when TRANSLATION_PROVIDER=gemini"
+            )
         from app.providers.translation.gemini import GeminiTranslationProvider
 
         return GeminiTranslationProvider(

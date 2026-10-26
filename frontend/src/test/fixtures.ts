@@ -8,6 +8,18 @@ export const capabilitiesFixture: Capabilities = {
     { id: "fake-en", language: "en-US", label: "English A" },
     { id: "fake-ja", language: "ja-JP", label: "Japanese A" },
   ],
+  translation_profiles: [
+    {
+      id: "fake",
+      provider: "fake",
+      model: "fake",
+      label: "Fake Translation (Mock)",
+      badge: "MOCK",
+      description: "Mock translation for testing",
+      is_default: true,
+      supported_languages: ["en-US", "ja-JP"],
+    },
+  ],
 };
 
 export function queuedJob(overrides: Partial<JobStatusResponse> = {}): JobStatusResponse {

@@ -57,6 +57,8 @@ _BCP47_TO_FLORES: dict[str, str] = {
     "zh-TW": "zho_Hant",
 }
 
+SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(sorted(_BCP47_TO_FLORES))
+
 _PLACEHOLDER_MAX_LENGTH = 100_000
 _DEFAULT_MAX_INPUT_TOKENS = 1024
 

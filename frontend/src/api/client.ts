@@ -70,6 +70,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
     if (input.voice) {
       form.set("voice", input.voice);
     }
+    if (input.translation_profile_id) {
+      form.set("translation_profile_id", input.translation_profile_id);
+    }
     form.set("file", input.file);
     const response = await fetch(requestUrl("/api/jobs"), {
       method: "POST",
@@ -87,6 +90,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
   };
   if (input.voice) {
     body.voice = input.voice;
+  }
+  if (input.translation_profile_id) {
+    body.translation_profile_id = input.translation_profile_id;
   }
   const response = await fetch(requestUrl("/api/jobs"), {
     method: "POST",

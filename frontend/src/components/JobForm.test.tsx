@@ -116,4 +116,135 @@ describe("JobForm", () => {
     await user.keyboard("{ArrowDown}");
     expect(voiceSelect).toHaveValue("fake-en");
   });
+
+  it("renders translation profile select when capabilities include profiles", async () => {
+    const user = userEvent.setup();
+    const handleSubmit = vi.fn();
+    const capabilitiesWithProfiles = {
+      ...capabilitiesFixture,
+      translation_profiles: [
+        {
+          id: "gemini-3.5-flash",
+          provider: "gemini",
+          model: "gemini-3.5-flash",
+          label: "Google Gemini 3.5 Flash",
+          badge: "ONLINE",
+          description: "Văn phong tự nhiên · Khuyên dùng",
+          is_default: true,
+        },
+        {
+          id: "nllb-600m",
+          provider: "nllb",
+          model: "nllb-200-distilled-600M",
+          label: "NLLB-200 (CPU Offline)",
+          badge: "OFFLINE",
+          description: "Chạy hoàn toàn trên máy · Riêng tư",
+          is_default: false,
+        },
+      ],
+    };
+
+    render(
+      <JobForm
+        capabilities={capabilitiesWithProfiles}
+        disabled={false}
+        onSubmit={handleSubmit}
+      />,
+    );
+
+    const profileSelect = screen.getByLabelText("Translation engine");
+    expect(profileSelect).toHaveValue("gemini-3.5-flash");
+
+    const textarea = screen.getByLabelText("Paste story");
+    await user.type(textarea, "A tale of stars.");
+    const submitBtn = screen.getByRole("button", { name: "Generate" });
+    await user.click(submitBtn);
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        translation_profile_id: "gemini-3.5-flash",
+      }),
+    );
+  });
+
+  it("allows changing translation profile selection and submits chosen profile", async () => {
+    const user = userEvent.setup();
+    const handleSubmit = vi.fn();
+    const capabilitiesWithProfiles = {
+      ...capabilitiesFixture,
+      translation_profiles: [
+        {
+          id: "gemini-3.5-flash",
+          provider: "gemini",
+          model: "gemini-3.5-flash",
+          label: "Google Gemini 3.5 Flash",
+          badge: "ONLINE",
+          description: "Natural tone · Recommended",
+          is_default: true,
+        },
+        {
+          id: "nllb-600m",
+          provider: "nllb",
+          model: "nllb-200-distilled-600M",
+          label: "NLLB-200 (CPU Offline)",
+          badge: "OFFLINE",
+          description: "Runs locally on CPU · Private",
+          is_default: false,
+        },
+      ],
+    };
+
+    render(
+      <JobForm
+        capabilities={capabilitiesWithProfiles}
+        disabled={false}
+        onSubmit={handleSubmit}
+      />,
+    );
+
+    const profileSelect = screen.getByLabelText("Translation engine");
+    await user.selectOptions(profileSelect, "nllb-600m");
+    expect(profileSelect).toHaveValue("nllb-600m");
+
+    const textarea = screen.getByLabelText("Paste story");
+    await user.type(textarea, "Changing translation engine story.");
+    const submitBtn = screen.getByRole("button", { name: "Generate" });
+    await user.click(submitBtn);
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        translation_profile_id: "nllb-600m",
+      }),
+    );
+  });
+
+  it("hides translation profile select when capabilities have empty profiles", async () => {
+    const user = userEvent.setup();
+    const handleSubmit = vi.fn();
+    const capabilitiesWithoutProfiles = {
+      ...capabilitiesFixture,
+      translation_profiles: [],
+    };
+
+    render(
+      <JobForm
+        capabilities={capabilitiesWithoutProfiles}
+        disabled={false}
+        onSubmit={handleSubmit}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Translation engine")).toBeNull();
+
+    const textarea = screen.getByLabelText("Paste story");
+    await user.type(textarea, "No profiles available.");
+    const submitBtn = screen.getByRole("button", { name: "Generate" });
+    await user.click(submitBtn);
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        translation_profile_id: undefined,
+      }),
+    );
+  });
 });

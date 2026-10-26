@@ -60,6 +60,8 @@ _BCP47_TO_GEMINI: dict[str, tuple[str, str]] = {
     "zh-TW": ("zh-Hant", "Chinese"),
 }
 
+SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(sorted(_BCP47_TO_GEMINI))
+
 _MAX_INPUT_CHARS = 10000
 
 

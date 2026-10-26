@@ -347,6 +347,10 @@ fieldset {
   align-items: end;
 }
 
+.translation-profile-row {
+  margin-top: 0.75rem;
+}
+
 .route-connector {
   display: none;
   align-items: center;

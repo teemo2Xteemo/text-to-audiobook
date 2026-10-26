@@ -73,6 +73,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
         voice=parsed.voice,
         speed=parsed.speed,
         output_format=parsed.output_format,
+        translation_profile_id=parsed.translation_profile_id,
     )
 
 
@@ -101,6 +102,7 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         voice=_optional_form_string(form.get("voice")),
         speed=_parse_speed(speed_raw),
         output_format=_optional_form_string(output_raw) or OutputFormat.MP3.value,
+        translation_profile_id=_optional_form_string(form.get("translation_profile_id")),
     )
 
 
