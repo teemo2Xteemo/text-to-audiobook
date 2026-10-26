@@ -101,6 +101,9 @@ def test_adjust_tempo(tmp_path: Path) -> None:
         )
         assert artifact.path.is_file()
         assert destination_file.is_file()
+        if resolve_ffmpeg_executable() is not None and resolve_ffprobe_executable() is not None:
+            dur = await processor.get_duration_ms(destination_file)
+            assert 800 - 60 <= dur <= 800 + 60
 
     asyncio.run(_run())
 
@@ -206,7 +209,12 @@ def test_tempo_invalid_factor_raises(tmp_path: Path) -> None:
     async def _run() -> None:
         processor = FFmpegAudioProcessor(executable="ffmpeg")
         src = tmp_path / "audio.mp3"
-        src.write_bytes(b"audio")
+        await processor.generate_silence(
+            duration_ms=500,
+            destination=src,
+            output_format=OutputFormat.MP3,
+            bitrate_kbps=128,
+        )
         with pytest.raises(DomainError) as exc_info:
             await processor.adjust_tempo(
                 source=src,
