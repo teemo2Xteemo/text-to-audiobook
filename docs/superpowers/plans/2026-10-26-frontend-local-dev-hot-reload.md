@@ -36,7 +36,7 @@
 - Consumes: `defineConfig` from `vitest/config`, `@vitejs/plugin-react`
 - Produces: Hardened Vite dev server proxy configuration supporting streaming and header preservation
 
-- [ ] **Step 1: Inspect `frontend/vite.config.ts` and ensure proxy configuration handles `changeOrigin: true` for clean header handling**
+- [x] **Step 1: Inspect `frontend/vite.config.ts` and ensure proxy configuration handles `changeOrigin: true` for clean header handling**
 
 ```typescript
 server: {
@@ -54,12 +54,12 @@ server: {
 },
 ```
 
-- [ ] **Step 2: Run frontend test suite to ensure all unit tests and type checks pass**
+- [x] **Step 2: Run frontend test suite to ensure all unit tests and type checks pass**
 
 Run: `cd frontend && npm test && npm run typecheck`  
 Expected: All tests PASS with zero type errors.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add frontend/vite.config.ts
@@ -77,7 +77,7 @@ git commit -m "chore(frontend): configure vite dev proxy with changeOrigin for a
 - Consumes: Hybrid workflow instructions from spec
 - Produces: Updated `README.md` with a dedicated "Local UI Development with Hot Reload" section
 
-- [ ] **Step 1: Add a dedicated subsection in `README.md` under development instructions explaining the hybrid workflow**
+- [x] **Step 1: Add a dedicated subsection in `README.md` under development instructions explaining the hybrid workflow**
 
 Include:
 1. Starting backend services only: `docker compose up -d redis api worker`
@@ -86,11 +86,11 @@ Include:
 4. Note contrasting this with full production Compose (`docker compose up --build` on port 8080) and explaining that Vite connects directly to `127.0.0.1:8000`, preventing Nginx 502 stale DNS cache issues.
 5. Teardown command: `docker compose down`.
 
-- [ ] **Step 2: Verify markdown formatting and links in `README.md`**
+- [x] **Step 2: Verify markdown formatting and links in `README.md`**
 
 Ensure all commands, ports, and file links are accurate and properly formatted.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md
@@ -105,17 +105,17 @@ git commit -m "docs: add hybrid local frontend development workflow with hot rel
 - Verify: `docker-compose.yml`
 - Verify: `frontend/`
 
-- [ ] **Step 1: Verify Docker Compose configuration syntax**
+- [x] **Step 1: Verify Docker Compose configuration syntax**
 
 Run: `docker compose config --quiet`  
 Expected: Exit code 0 (valid configuration).
 
-- [ ] **Step 2: Verify repository policy scans and hooks**
+- [x] **Step 2: Verify repository policy scans and hooks**
 
 Run: `python3 .github/scripts/scan_repo.py && python3 .cursor/hooks/selftest.py`  
 Expected: PASS with 0 violations.
 
-- [ ] **Step 3: Verify frontend tests and type checks**
+- [x] **Step 3: Verify frontend tests and type checks**
 
 Run: `cd frontend && npm test && npm run typecheck`  
 Expected: PASS.
