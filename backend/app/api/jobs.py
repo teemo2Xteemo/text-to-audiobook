@@ -79,6 +79,37 @@ async def download_job_audio(
     )
 
 
+@router.get("/api/jobs/{job_id}/subtitles")
+async def download_job_subtitles(
+    job_id: str,
+    service: JobService = Depends(get_job_service),
+) -> FileResponse:
+    _require_uuid(job_id)
+    job = await service.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.INVALID_INPUT, "job not found"),
+        )
+    if job.status is not JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail=envelope(ErrorType.INVALID_INPUT, "subtitles not ready"),
+        )
+    path = service.output_subtitles_path(job)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.STORAGE_FAILED, "subtitles artifact missing"),
+        )
+    return FileResponse(
+        path,
+        media_type="application/x-subrip",
+        filename=f"{job.id}.srt",
+        content_disposition_type="attachment",
+    )
+
+
 @router.post("/api/jobs/{job_id}/retry", status_code=202, response_model=JobCreatedResponse)
 async def retry_job(
     job_id: str,
