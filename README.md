@@ -11,8 +11,14 @@ Chinese → Vietnamese is a common example, not the only supported pair. Languag
 - Agent docs: [`docs/ai/`](docs/ai/)
 - Implementation plan: [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md)
 - Architecture decisions: [`docs/adr/`](docs/adr/)
+- Feature specifications & plans: [`docs/superpowers/`](docs/superpowers/)
 
-**M1**–**M13** are in place (API + Redis Compose, domain contracts, job HTTP/enqueue, pipeline orchestrator, RQ worker + DI + capabilities, Vite job UI, conservative narration, NLLB CPU adapter, Edge TTS + FFmpeg normalize, chunk retry, checkpoint resume, translation/TTS cache, Compose completeness / MVP acceptance). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
+**MVP & Extended Capabilities in place:**
+- **Core Pipeline (M1–M13):** FastAPI async jobs, Redis/RQ queue, domain ports, chunking with retry & checkpoint resume, translation/TTS caching, conservative narration, NLLB CPU adapter, Edge TTS + FFmpeg audio normalization, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
+- **Translation Adapters:** NLLB (CPU distilled), Ollama/TranslateGemma ([ADR 0011](docs/adr/0011-ollama-translategemma-optional-translation.md)), Google Gemini API (`TRANSLATION_PROVIDER=gemini`), and offline fakes.
+- **High-Throughput Parallel Chunks:** Asynchronous parallel chunk processing with configurable concurrency limits for rapid translation and audio generation.
+- **Audio & Subtitle Sync:** Timed SRT subtitle generation, automatic timestamp alignment, and synchronized timeline merging.
+- **Studio UI & Hot Reload:** Modernized React Studio UI, translation profile selector, SRT timestamp cleaner, and hybrid host-Vite HMR dev mode.
 
 ## For coding agents
 

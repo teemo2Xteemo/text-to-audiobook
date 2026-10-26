@@ -28,7 +28,8 @@ Required layout. Create **missing** folders from this tree; do not invent a para
 ├── storage/                  # gitignored: jobs/{id}/ artifacts + cache/ translation/TTS blobs (M12)
 ├── docker-compose.yml
 ├── docs/ai/                  # this folder
-├── docs/adr/
+├── docs/adr/                 # Architecture Decision Records
+├── docs/superpowers/         # Active feature designs and implementation plans
 ├── .github/                  # CI workflow + secret/policy scan script
 ├── .cursor/rules/
 └── text-story-to-audiobook-requirements.md
