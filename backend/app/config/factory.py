@@ -74,6 +74,8 @@ def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
             max_attempts=settings.retry_max_attempts,
             backoff_seconds=settings.retry_backoff_seconds,
         ),
+        translation_concurrency=settings.chunk_translation_concurrency,
+        tts_concurrency=settings.chunk_tts_concurrency,
     )
 
 
@@ -102,6 +104,15 @@ def build_translation_provider(settings: Settings) -> TranslationProvider:
             base_url=settings.ollama_base_url,
             model=settings.ollama_translation_model,
             timeout_seconds=settings.ollama_http_timeout_seconds,
+        )
+    if name == "gemini":
+        from app.providers.translation.gemini import GeminiTranslationProvider
+
+        return GeminiTranslationProvider(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_translation_model,
+            base_url=settings.gemini_base_url,
+            timeout_seconds=settings.gemini_http_timeout_seconds,
         )
     raise UnknownProviderError(f"unknown TRANSLATION_PROVIDER: {settings.translation_provider}")
 
@@ -153,6 +164,8 @@ def translation_pin_from_settings(settings: Settings) -> tuple[str, str]:
         return name, settings.nllb_model_id
     if name == "ollama":
         return name, settings.ollama_translation_model
+    if name == "gemini":
+        return name, settings.gemini_translation_model
     if name == "fake":
         return "fake", "fake"
     raise UnknownProviderError(f"unknown TRANSLATION_PROVIDER: {settings.translation_provider}")
@@ -170,6 +183,10 @@ def settings_for_translation_pin(settings: Settings, job: Job) -> Settings:
         return settings.model_copy(
             update={"translation_provider": "ollama", "ollama_translation_model": model}
         )
+    if provider == "gemini":
+        return settings.model_copy(
+            update={"translation_provider": "gemini", "gemini_translation_model": model}
+        )
     if provider == "fake":
         return settings.model_copy(update={"translation_provider": "fake"})
     raise UnknownProviderError(f"unknown translation pin: {provider}")
@@ -182,6 +199,8 @@ def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
         translation_model = settings.nllb_model_id
     elif translation == "ollama":
         translation_model = settings.ollama_translation_model
+    elif translation == "gemini":
+        translation_model = settings.gemini_translation_model
     else:
         translation_model = "fake"
     return CacheIdentity(

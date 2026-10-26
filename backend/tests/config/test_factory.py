@@ -17,6 +17,7 @@ from app.config.factory import (
     build_tts_provider,
     cache_identity_from_settings,
     settings_for_translation_pin,
+    translation_pin_from_settings,
 )
 from app.config.settings import Settings
 from app.domain.jobs import Job, JobStatus, OutputFormat
@@ -26,6 +27,7 @@ from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
 from app.providers.language_detection.cpu import CpuLanguageDetector
 from app.providers.translation.fake import FakeTranslationProvider
+from app.providers.translation.gemini import GeminiTranslationProvider
 from app.providers.translation.nllb import NllbTranslationProvider
 from app.providers.translation.ollama import OllamaTranslationProvider
 from app.providers.tts.edge import EdgeTTSProvider
@@ -114,6 +116,8 @@ def test_build_orchestrator_injects_conservative_narration(
     assert isinstance(seen["artifact_cache"], PipelineArtifactCache)
     assert isinstance(seen["detector"], CpuLanguageDetector)
     assert seen["retry_policy"] == RetryPolicy(max_attempts=3, backoff_seconds=1.0)
+    assert seen["translation_concurrency"] == 2
+    assert seen["tts_concurrency"] == 2
 
 
 def test_build_orchestrator_injects_retry_policy_from_env(
@@ -149,6 +153,40 @@ def test_build_orchestrator_injects_retry_policy_from_env(
     assert settings.retry_backoff_seconds == 2.0
     build_orchestrator(settings)
     assert seen["retry_policy"] == RetryPolicy(max_attempts=5, backoff_seconds=2.0)
+
+
+def test_build_orchestrator_injects_concurrency_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Capture:
+        def __init__(self, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr("app.config.factory.PipelineOrchestrator", Capture)
+    monkeypatch.setattr(
+        "app.config.factory._infrastructure",
+        lambda settings: (object(), object(), object()),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_translation_provider",
+        lambda settings: FakeTranslationProvider(),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_tts_provider",
+        lambda settings: FakeTTSProvider(output_dir=tmp_path),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_audio_processor",
+        lambda settings: FakeAudioProcessor(),
+    )
+    monkeypatch.setenv("CHUNK_TRANSLATION_CONCURRENCY", "4")
+    monkeypatch.setenv("CHUNK_TTS_CONCURRENCY", "3")
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    build_orchestrator(settings)
+    assert seen["translation_concurrency"] == 4
+    assert seen["tts_concurrency"] == 3
 
 
 def test_factory_builds_nllb_provider_without_loading_weights(tmp_path: Path) -> None:
@@ -327,3 +365,56 @@ def test_factory_module_has_no_top_level_vendor_imports() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert imported.isdisjoint({"torch", "transformers", "edge_tts", "langdetect"})
+
+
+def test_factory_builds_gemini_provider(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="gemini",
+        gemini_api_key="test-key",
+        gemini_translation_model="gemini-3.5-flash",
+    )
+    provider = build_translation_provider(settings)
+    assert isinstance(provider, GeminiTranslationProvider)
+    assert provider._model == "gemini-3.5-flash"
+    assert provider._api_key == "test-key"
+
+
+def test_gemini_translation_pin_and_cache_identity(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="gemini",
+        gemini_api_key="test-key",
+        gemini_translation_model="gemini-3.5-flash",
+    )
+    pin_name, pin_model = translation_pin_from_settings(settings)
+    assert pin_name == "gemini"
+    assert pin_model == "gemini-3.5-flash"
+    cache_id = cache_identity_from_settings(settings)
+    assert cache_id.translation_provider == "gemini"
+    assert cache_id.translation_model == "gemini-3.5-flash"
+
+
+def test_gemini_settings_for_translation_pin(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="fake",
+    )
+    job = Job(
+        id="11111111-2222-3333-4444-555555555555",
+        status=JobStatus.QUEUED,
+        source_language="zh-CN",
+        target_language="vi-VN",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        translation_provider="gemini",
+        translation_model="gemini-1.5-flash",
+    )
+    pinned = settings_for_translation_pin(settings, job)
+    assert pinned.translation_provider == "gemini"
+    assert pinned.gemini_translation_model == "gemini-1.5-flash"

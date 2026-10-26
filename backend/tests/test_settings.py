@@ -23,6 +23,8 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RETRY_MAX_ATTEMPTS", raising=False)
     monkeypatch.delenv("RETRY_BACKOFF_SECONDS", raising=False)
     monkeypatch.delenv("RQ_JOB_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("CHUNK_TRANSLATION_CONCURRENCY", raising=False)
+    monkeypatch.delenv("CHUNK_TTS_CONCURRENCY", raising=False)
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://localhost:6379/0"
     assert settings.storage_path == Path("storage")
@@ -40,6 +42,12 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.retry_max_attempts == 3
     assert settings.retry_backoff_seconds == 1.0
     assert settings.rq_job_timeout_seconds == 1800
+    assert settings.gemini_api_key is None
+    assert settings.gemini_translation_model == "gemini-3.5-flash"
+    assert settings.gemini_base_url == "https://generativelanguage.googleapis.com"
+    assert settings.gemini_http_timeout_seconds == 60.0
+    assert settings.chunk_translation_concurrency == 2
+    assert settings.chunk_tts_concurrency == 2
 
 
 def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -62,6 +70,8 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "5")
     monkeypatch.setenv("RETRY_BACKOFF_SECONDS", "0.5")
     monkeypatch.setenv("RQ_JOB_TIMEOUT_SECONDS", "3600")
+    monkeypatch.setenv("CHUNK_TRANSLATION_CONCURRENCY", "4")
+    monkeypatch.setenv("CHUNK_TTS_CONCURRENCY", "3")
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://example:6379/1"
     assert settings.storage_path == tmp_path
@@ -85,6 +95,8 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.retry_max_attempts == 5
     assert settings.retry_backoff_seconds == 0.5
     assert settings.rq_job_timeout_seconds == 3600
+    assert settings.chunk_translation_concurrency == 4
+    assert settings.chunk_tts_concurrency == 3
 
 
 def test_parse_tts_default_voice_by_language_skips_malformed() -> None:
@@ -118,3 +130,8 @@ def test_config_module_does_not_export_global_get_settings_singleton() -> None:
 
     assert not hasattr(settings_mod, "get_settings")
     assert not hasattr(config_pkg, "get_settings")
+
+
+def test_gemini_base_url_validation() -> None:
+    with pytest.raises(ValidationError, match="GEMINI_BASE_URL"):
+        Settings(_env_file=None, gemini_base_url="ftp://invalid.com")
