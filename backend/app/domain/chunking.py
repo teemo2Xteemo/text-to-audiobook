@@ -50,7 +50,7 @@ def _pack_paragraphs(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def _atomic_units(paragraph: str, max_chars: int) -> list[str]:
+def atomic_units(paragraph: str, max_chars: int) -> list[str]:
     if len(paragraph) <= max_chars:
         return [paragraph]
     units: list[str] = []
@@ -62,6 +62,9 @@ def _atomic_units(paragraph: str, max_chars: int) -> list[str]:
         else:
             units.extend(_hard_split(sentence, max_chars))
     return units
+
+
+_atomic_units = atomic_units
 
 
 def _split_sentences(text: str) -> list[str]:

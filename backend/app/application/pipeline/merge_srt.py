@@ -1,4 +1,4 @@
-from app.domain.chunking import CHUNK_MAX_CHARS, _atomic_units
+from app.domain.chunking import CHUNK_MAX_CHARS, atomic_units
 from app.domain.srt import SRTCue, TimedChunk
 
 SENTENCE_TERMINALS = frozenset(".?!。！？．｡…")
@@ -33,7 +33,7 @@ def _split_oversized_cue(cue: SRTCue, max_chars: int) -> list[SRTCue]:
     if len(cue.text) <= max_chars:
         return [cue]
 
-    units = _atomic_units(cue.text, max_chars)
+    units = atomic_units(cue.text, max_chars)
     parts: list[str] = []
     current = ""
     for u in units:

@@ -371,65 +371,78 @@ def test_missing_ffprobe_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 def test_real_ffmpeg_timeline_concat_mp3_timing_accuracy(tmp_path: Path) -> None:
     """Acceptance test for H1: verify 50 alternating speech/silence segments
 
-    stitched via PCM WAV intermediates maintain timeline accuracy within +-50ms
-    when encoded to the final MP3.
+    where speech is sourced from MP3 (mirroring real TTS output), decoded to
+    PCM WAV intermediates, and concatenated before a single final MP3 encode.
+    Asserts total duration and onset timing stay within +-50ms.
     """
+    import re
+    import subprocess
+    from shutil import copyfile
+
     processor = FFmpegAudioProcessor()
     ffmpeg_bin = resolve_ffmpeg_executable() or "ffmpeg"
 
-    # Create 25 tone (speech) segments and 25 silence segments (50 total)
-    tone_wav = tmp_path / "tone.wav"
-    # 200ms tone at 1000Hz, 44100Hz mono PCM
-    subprocess_argv = [
-        ffmpeg_bin,
-        "-hide_banner",
-        "-nostdin",
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        "sine=frequency=1000:sample_rate=44100",
-        "-t",
-        "0.200",
-        "-ar",
-        "44100",
-        "-ac",
-        "1",
-        "-c:a",
-        "pcm_s16le",
-        str(tone_wav),
-    ]
-    import subprocess
+    # 1. Synthesize 200ms tone at 1000Hz encoded to MP3 first (like TTS)
+    tone_mp3 = tmp_path / "tone.mp3"
+    subprocess.run(
+        [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-nostdin",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:sample_rate=44100",
+            "-t",
+            "0.200",
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            str(tone_mp3),
+        ],
+        check=True,
+        capture_output=True,
+    )
 
-    subprocess.run(subprocess_argv, check=True, capture_output=True)
+    # 2. Decode MP3 to PCM WAV (as _merge_srt does before scheduling)
+    tone_wav = tmp_path / "tone.wav"
+    asyncio.run(
+        processor.normalize(
+            tone_mp3,
+            tone_wav,
+            output_format=OutputFormat.WAV,
+            bitrate_kbps=128,
+        )
+    )
+    tone_dur_ms = asyncio.run(processor.get_duration_ms(tone_wav))
 
     sources: list[Path] = []
-    # 25 pairs of (silence 300ms, tone 200ms) = 25 * 500ms = 12500ms total
-    expected_last_onset_ms = 0
+    # 25 pairs of (silence 300ms, tone ~200ms) = 50 segments
+    silence_dur_ms = 300
     for i in range(25):
         s_path = tmp_path / f"silence_{i}.wav"
         asyncio.run(
             processor.generate_silence(
-                300,
+                silence_dur_ms,
                 s_path,
                 output_format=OutputFormat.WAV,
                 bitrate_kbps=128,
             )
         )
         sources.append(s_path)
-        if i == 24:
-            expected_last_onset_ms = len(sources) * 0  # calculated below
-        t_path = tmp_path / f"speech_{i}.wav"
-        from shutil import copyfile
 
+        t_path = tmp_path / f"speech_{i}.wav"
         copyfile(tone_wav, t_path)
         sources.append(t_path)
 
-    # Expected schedule:
-    # 25 silences (300ms each) + 25 tones (200ms each) = 12500ms total
-    # Last tone (speech_24) starts at 25 * 300 + 24 * 200 = 7500 + 4800 = 12300ms
-    expected_total_ms = 12500
-    expected_last_onset_ms = 12300
+    expected_total_ms = 25 * silence_dur_ms + 25 * tone_dur_ms
+    expected_last_onset_ms = 25 * silence_dur_ms + 24 * tone_dur_ms
 
     timeline_wav = tmp_path / "timeline.wav"
     asyncio.run(
@@ -473,10 +486,8 @@ def test_real_ffmpeg_timeline_concat_mp3_timing_accuracy(tmp_path: Path) -> None
         capture_output=True,
         text=True,
     )
-    import re
 
-    # Find last silence_end: \d+\.\d+
     ends = re.findall(r"silence_end:\s*(\d+\.?\d*)", detect_res.stderr)
-    if ends:
-        last_silence_end_ms = int(round(float(ends[-1]) * 1000))
-        assert abs(last_silence_end_ms - expected_last_onset_ms) <= 50
+    assert ends, f"No silence_end found in silencedetect output: {detect_res.stderr}"
+    last_silence_end_ms = int(round(float(ends[-1]) * 1000))
+    assert abs(last_silence_end_ms - expected_last_onset_ms) <= 50

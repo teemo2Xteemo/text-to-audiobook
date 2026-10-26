@@ -5,7 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
-from shutil import copyfile
+from shutil import copyfile, rmtree
 
 from app.application.pipeline.artifact_cache import PipelineArtifactCache
 from app.application.pipeline.checkpoint import (
@@ -126,8 +126,6 @@ class PipelineOrchestrator:
             return await self._fail(job, exc.error_type, exc.message)
         except OSError:
             return await self._fail(job, ErrorType.STORAGE_FAILED, "failed to write artifacts")
-        except ValueError as exc:
-            return await self._fail(job, ErrorType.AUDIO_PROCESSING_FAILED, str(exc))
 
     async def _run_srt(
         self,
@@ -138,7 +136,10 @@ class PipelineOrchestrator:
         checkpoints: CheckpointStore,
     ) -> Job:
         cues = parse_srt_cues(text)
-        timed_chunks = merge_srt_cues(cues, max_chars=self._max_chars)
+        try:
+            timed_chunks = merge_srt_cues(cues, max_chars=self._max_chars)
+        except ValueError as exc:
+            raise DomainError(ErrorType.INVALID_INPUT, f"invalid subtitle cues: {exc}") from exc
         if not timed_chunks:
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
 
@@ -228,12 +229,27 @@ class PipelineOrchestrator:
             translated_timed_chunks.append(replace(tc, text=chunk_text))
 
         durations_ms: list[int] = []
+        speech_wav_paths: list[Path] = []
         for chunk in chunks:
-            speech_path = workspace / "audio" / f"{chunk.id}.normalized.{ext}"
-            dur = await self._audio.get_duration_ms(speech_path)
+            speech_norm_path = workspace / "audio" / f"{chunk.id}.normalized.{ext}"
+            speech_wav = workspace / "audio" / f"{chunk.id}.wav"
+            if not _nonempty(speech_wav):
+                await self._audio.normalize(
+                    speech_norm_path,
+                    speech_wav,
+                    output_format=OutputFormat.WAV,
+                    bitrate_kbps=job.output_bitrate_kbps,
+                )
+            dur = await self._audio.get_duration_ms(speech_wav)
             durations_ms.append(dur)
+            speech_wav_paths.append(speech_wav)
 
-        schedule = schedule_srt_timeline(translated_timed_chunks, durations_ms)
+        try:
+            schedule = schedule_srt_timeline(translated_timed_chunks, durations_ms)
+        except ValueError as exc:
+            raise DomainError(
+                ErrorType.AUDIO_PROCESSING_FAILED, f"timeline scheduling failed: {exc}"
+            ) from exc
 
         silence_dir = workspace / "silence"
         silence_dir.mkdir(parents=True, exist_ok=True)
@@ -253,15 +269,7 @@ class PipelineOrchestrator:
             else:
                 assert item.chunk_index is not None
                 chunk_id = chunks[item.chunk_index].id
-                speech_norm_path = workspace / "audio" / f"{chunk_id}.normalized.{ext}"
-                speech_wav = workspace / "audio" / f"{chunk_id}.wav"
-                if not speech_wav.is_file():
-                    await self._audio.normalize(
-                        speech_norm_path,
-                        speech_wav,
-                        output_format=OutputFormat.WAV,
-                        bitrate_kbps=job.output_bitrate_kbps,
-                    )
+                speech_wav = speech_wav_paths[item.chunk_index]
                 if item.tempo_factor != 1.0:
                     tempo_path = workspace / "audio" / f"{chunk_id}.tempo.wav"
                     await self._audio.adjust_tempo(
@@ -306,6 +314,9 @@ class PipelineOrchestrator:
 
         if not _nonempty(destination):
             raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "audio merge failed")
+
+        timeline_wav.unlink(missing_ok=True)
+        rmtree(silence_dir, ignore_errors=True)
 
         speech_items = [item for item in schedule.items if not item.is_silence]
         output_cues = [
