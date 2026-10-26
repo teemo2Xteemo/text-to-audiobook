@@ -84,13 +84,35 @@ npm test
 npm run typecheck
 ```
 
-Local Vite against a running API (`npm run dev` on `http://127.0.0.1:5173`, proxies `/api` and `/health`):
+### Local UI development with Hot Reload (Hybrid Mode)
 
-```bash
-cd frontend
-npm ci
-npm run dev
-```
+When actively developing UI components and styling, running the frontend inside the standard Docker Compose stack (`docker compose up`) serves pre-built static assets via Nginx on port 8080, which requires rebuilding the Docker image on every change.
+
+To get instant **Hot Module Replacement (HMR)** with sub-second feedback, run the backend services in Docker and Vite dev server directly on the host:
+
+1. **Start backend services in Docker:**
+   ```bash
+   docker compose up -d redis api worker
+   ```
+   This boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker without building or starting the frontend container.
+
+2. **Start Vite development server on the host:**
+   ```bash
+   cd frontend
+   npm ci
+   npm run dev
+   ```
+   Open **http://127.0.0.1:5173** in your browser.
+
+3. **Instant HMR & Proxying Benefits:**
+   - Any code changes in `frontend/src/` trigger instant HMR in the browser without full page refreshes.
+   - Vite proxies `/api` and `/health` directly to `http://127.0.0.1:8000` with `changeOrigin: true`.
+   - Connecting directly to `127.0.0.1:8000` on the host completely avoids the Docker Nginx stale DNS cache 502 errors when `api` or `worker` containers restart.
+
+4. **Teardown backend services when done:**
+   ```bash
+   docker compose down
+   ```
 
 Backend unit tests (Redis not required). From the **repo root**, `pytest.ini` registers the `integration` marker:
 
