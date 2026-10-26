@@ -5,6 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
+from shutil import copyfile
 
 from app.application.pipeline.artifact_cache import PipelineArtifactCache
 from app.application.pipeline.checkpoint import (
@@ -28,7 +29,14 @@ from app.application.pipeline.tts import select_voice, synthesize_chunk
 from app.domain.audio import TTSSettings
 from app.domain.chunking import CHUNK_MAX_CHARS, Chunk
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import Job, JobStatus, assert_legal_transition, is_at_or_past, is_terminal
+from app.domain.jobs import (
+    Job,
+    JobStatus,
+    OutputFormat,
+    assert_legal_transition,
+    is_at_or_past,
+    is_terminal,
+)
 from app.domain.languages import resolve_source_language
 from app.domain.ports import (
     AudioProcessor,
@@ -118,6 +126,8 @@ class PipelineOrchestrator:
             return await self._fail(job, exc.error_type, exc.message)
         except OSError:
             return await self._fail(job, ErrorType.STORAGE_FAILED, "failed to write artifacts")
+        except ValueError as exc:
+            return await self._fail(job, ErrorType.AUDIO_PROCESSING_FAILED, str(exc))
 
     async def _run_srt(
         self,
@@ -128,7 +138,7 @@ class PipelineOrchestrator:
         checkpoints: CheckpointStore,
     ) -> Job:
         cues = parse_srt_cues(text)
-        timed_chunks = merge_srt_cues(cues)
+        timed_chunks = merge_srt_cues(cues, max_chars=self._max_chars)
         if not timed_chunks:
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
 
@@ -228,45 +238,72 @@ class PipelineOrchestrator:
         silence_dir = workspace / "silence"
         silence_dir.mkdir(parents=True, exist_ok=True)
         merge_sources: list[Path] = []
+        speech_durations: dict[int, int] = {}
 
         for idx, item in enumerate(schedule.items):
             if item.is_silence:
-                silence_path = silence_dir / f"silence_{idx}.{ext}"
+                silence_path = silence_dir / f"silence_{idx}.wav"
                 await self._audio.generate_silence(
                     item.duration_ms,
                     silence_path,
-                    output_format=job.output_format,
+                    output_format=OutputFormat.WAV,
                     bitrate_kbps=job.output_bitrate_kbps,
                 )
                 merge_sources.append(silence_path)
             else:
                 assert item.chunk_index is not None
                 chunk_id = chunks[item.chunk_index].id
-                speech_path = workspace / "audio" / f"{chunk_id}.normalized.{ext}"
-                if item.tempo_factor != 1.0:
-                    tempo_path = workspace / "audio" / f"{chunk_id}.tempo.{ext}"
-                    await self._audio.adjust_tempo(
-                        speech_path,
-                        tempo_path,
-                        item.tempo_factor,
-                        output_format=job.output_format,
+                speech_norm_path = workspace / "audio" / f"{chunk_id}.normalized.{ext}"
+                speech_wav = workspace / "audio" / f"{chunk_id}.wav"
+                if not speech_wav.is_file():
+                    await self._audio.normalize(
+                        speech_norm_path,
+                        speech_wav,
+                        output_format=OutputFormat.WAV,
                         bitrate_kbps=job.output_bitrate_kbps,
                     )
+                if item.tempo_factor != 1.0:
+                    tempo_path = workspace / "audio" / f"{chunk_id}.tempo.wav"
+                    await self._audio.adjust_tempo(
+                        speech_wav,
+                        tempo_path,
+                        item.tempo_factor,
+                        output_format=OutputFormat.WAV,
+                        bitrate_kbps=job.output_bitrate_kbps,
+                    )
+                    actual_dur = await self._audio.get_duration_ms(tempo_path)
+                    speech_durations[item.chunk_index] = actual_dur
                     merge_sources.append(tempo_path)
                 else:
-                    merge_sources.append(speech_path)
+                    speech_durations[item.chunk_index] = item.duration_ms
+                    merge_sources.append(speech_wav)
 
         if not merge_sources:
             raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "audio merge failed")
 
-        destination = workspace / f"output.{ext}"
+        timeline_wav = workspace / "timeline.wav"
         await merge_artifacts(
             self._audio,
             merge_sources,
-            destination,
-            output_format=job.output_format,
+            timeline_wav,
+            output_format=OutputFormat.WAV,
             bitrate_kbps=job.output_bitrate_kbps,
         )
+        if not _nonempty(timeline_wav):
+            raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "audio merge failed")
+
+        destination = workspace / f"output.{ext}"
+        if job.output_format is OutputFormat.MP3:
+            await self._audio.normalize(
+                timeline_wav,
+                destination,
+                output_format=OutputFormat.MP3,
+                bitrate_kbps=job.output_bitrate_kbps,
+            )
+        else:
+            if destination != timeline_wav:
+                copyfile(timeline_wav, destination)
+
         if not _nonempty(destination):
             raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "audio merge failed")
 
@@ -275,7 +312,8 @@ class PipelineOrchestrator:
             SRTCue(
                 index=idx,
                 start_ms=item.scheduled_start_ms,
-                end_ms=item.scheduled_start_ms + item.duration_ms,
+                end_ms=item.scheduled_start_ms
+                + speech_durations.get(item.chunk_index, item.duration_ms),
                 text=item.subtitle_text or "",
             )
             for idx, item in enumerate(speech_items, start=1)
@@ -285,7 +323,13 @@ class PipelineOrchestrator:
 
         logger.info(
             "pipeline_merged",
-            extra={"job_id": job.id, "chunk_id": None, "stage": "merging"},
+            extra={
+                "job_id": job.id,
+                "chunk_id": None,
+                "stage": "merging",
+                "max_drift_ms": schedule.max_drift_ms,
+                "final_drift_ms": schedule.final_drift_ms,
+            },
         )
         return job
 

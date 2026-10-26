@@ -362,3 +362,121 @@ def test_missing_ffprobe_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         asyncio.run(processor.get_duration_ms(audio_file))
     assert exc_info.value.error_type == ErrorType.AUDIO_PROCESSING_FAILED
     assert "ffprobe is not available" in exc_info.value.message
+
+
+@pytest.mark.skipif(
+    resolve_ffmpeg_executable() is None or resolve_ffprobe_executable() is None,
+    reason="real ffmpeg/ffprobe not installed on host",
+)
+def test_real_ffmpeg_timeline_concat_mp3_timing_accuracy(tmp_path: Path) -> None:
+    """Acceptance test for H1: verify 50 alternating speech/silence segments
+
+    stitched via PCM WAV intermediates maintain timeline accuracy within +-50ms
+    when encoded to the final MP3.
+    """
+    processor = FFmpegAudioProcessor()
+    ffmpeg_bin = resolve_ffmpeg_executable() or "ffmpeg"
+
+    # Create 25 tone (speech) segments and 25 silence segments (50 total)
+    tone_wav = tmp_path / "tone.wav"
+    # 200ms tone at 1000Hz, 44100Hz mono PCM
+    subprocess_argv = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=1000:sample_rate=44100",
+        "-t",
+        "0.200",
+        "-ar",
+        "44100",
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s16le",
+        str(tone_wav),
+    ]
+    import subprocess
+
+    subprocess.run(subprocess_argv, check=True, capture_output=True)
+
+    sources: list[Path] = []
+    # 25 pairs of (silence 300ms, tone 200ms) = 25 * 500ms = 12500ms total
+    expected_last_onset_ms = 0
+    for i in range(25):
+        s_path = tmp_path / f"silence_{i}.wav"
+        asyncio.run(
+            processor.generate_silence(
+                300,
+                s_path,
+                output_format=OutputFormat.WAV,
+                bitrate_kbps=128,
+            )
+        )
+        sources.append(s_path)
+        if i == 24:
+            expected_last_onset_ms = len(sources) * 0  # calculated below
+        t_path = tmp_path / f"speech_{i}.wav"
+        from shutil import copyfile
+
+        copyfile(tone_wav, t_path)
+        sources.append(t_path)
+
+    # Expected schedule:
+    # 25 silences (300ms each) + 25 tones (200ms each) = 12500ms total
+    # Last tone (speech_24) starts at 25 * 300 + 24 * 200 = 7500 + 4800 = 12300ms
+    expected_total_ms = 12500
+    expected_last_onset_ms = 12300
+
+    timeline_wav = tmp_path / "timeline.wav"
+    asyncio.run(
+        processor.merge(
+            sources,
+            timeline_wav,
+            output_format=OutputFormat.WAV,
+            bitrate_kbps=128,
+        )
+    )
+
+    final_mp3 = tmp_path / "output.mp3"
+    asyncio.run(
+        processor.normalize(
+            timeline_wav,
+            final_mp3,
+            output_format=OutputFormat.MP3,
+            bitrate_kbps=128,
+        )
+    )
+
+    actual_duration_ms = asyncio.run(processor.get_duration_ms(final_mp3))
+    # Duration within +-50ms
+    assert abs(actual_duration_ms - expected_total_ms) <= 50
+
+    # Verify last tone onset with silencedetect
+    detect_res = subprocess.run(
+        [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-nostdin",
+            "-i",
+            str(final_mp3),
+            "-af",
+            "silencedetect=noise=-30dB:d=0.20",
+            "-f",
+            "null",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    import re
+
+    # Find last silence_end: \d+\.\d+
+    ends = re.findall(r"silence_end:\s*(\d+\.?\d*)", detect_res.stderr)
+    if ends:
+        last_silence_end_ms = int(round(float(ends[-1]) * 1000))
+        assert abs(last_silence_end_ms - expected_last_onset_ms) <= 50

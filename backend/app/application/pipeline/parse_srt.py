@@ -8,6 +8,7 @@ _TIMECODE_LINE_RE = re.compile(
     r"^\s*(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{1,3})"
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_ASS_TAG_RE = re.compile(r"\{[^}]*\}")
 
 
 def _timecode_to_ms(hours: str | None, minutes: str, seconds: str, millis: str) -> int:
@@ -67,7 +68,8 @@ def parse_srt_cues(text: str) -> list[SRTCue]:
 
         text_lines: list[str] = []
         for line in lines[tc_index + 1 :]:
-            cleaned = _HTML_TAG_RE.sub("", line).strip()
+            cleaned = _HTML_TAG_RE.sub("", line)
+            cleaned = _ASS_TAG_RE.sub("", cleaned).strip()
             cleaned = html.unescape(cleaned).strip()
             if cleaned:
                 text_lines.append(cleaned)
@@ -90,5 +92,8 @@ def serialize_srt_cues(cues: Sequence[SRTCue]) -> str:
     for idx, cue in enumerate(cues, start=1):
         start_tc = format_srt_timecode(cue.start_ms)
         end_tc = format_srt_timecode(cue.end_ms)
-        blocks.append(f"{idx}\n{start_tc} --> {end_tc}\n{cue.text}")
+        raw_text = cue.text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
+        clean_text = "\n".join(lines)
+        blocks.append(f"{idx}\n{start_tc} --> {end_tc}\n{clean_text}")
     return "\n\n".join(blocks) + ("\n" if blocks else "")

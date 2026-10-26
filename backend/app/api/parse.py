@@ -19,7 +19,9 @@ _JSON_CONTENT = "application/json"
 _MULTIPART_CONTENT = "multipart/form-data"
 _MULTIPART_OVERHEAD = 4096
 _READ_CHUNK = 64 * 1024
-_ALLOWED_FILE_MIME = frozenset({"application/octet-stream", "application/x-subrip", "text/plain"})
+_ALLOWED_FILE_MIME = frozenset(
+    {"application/octet-stream", "application/x-subrip", "text/plain", "text/vtt"}
+)
 
 
 async def parse_create_job(request: Request, settings: Settings) -> CreateJobCommand:
@@ -137,8 +139,8 @@ def _assert_safe_txt_filename(filename: str | None) -> None:
     if ".." in normalized.split("/"):
         raise DomainError(ErrorType.INVALID_INPUT, "filename must not contain path traversal")
     name = Path(filename).name
-    if name in {".", ".."} or not name.lower().endswith((".txt", ".srt")):
-        raise DomainError(ErrorType.INVALID_INPUT, "file must be a .txt or .srt document")
+    if name in {".", ".."} or not name.lower().endswith((".txt", ".srt", ".vtt")):
+        raise DomainError(ErrorType.INVALID_INPUT, "file must be a .txt, .srt, or .vtt document")
 
 
 def _assert_text_mime(content_type: str | None) -> None:

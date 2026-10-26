@@ -144,7 +144,11 @@ class FFmpegAudioProcessor:
         if found is None:
             if self._executable is not None:
                 candidate = Path(self._executable).with_name("ffprobe")
-                return str(candidate)
+                if candidate.is_file():
+                    return str(candidate)
+                candidate_exe = Path(self._executable).with_name("ffprobe.exe")
+                if candidate_exe.is_file():
+                    return str(candidate_exe)
             raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffprobe is not available")
         return found
 

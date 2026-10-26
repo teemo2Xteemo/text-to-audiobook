@@ -20,6 +20,8 @@ class ScheduledItem:
 class TimelineSchedule:
     items: list[ScheduledItem]
     total_duration_ms: int
+    max_drift_ms: int = 0
+    final_drift_ms: int = 0
 
 
 def schedule_srt_timeline(
@@ -50,6 +52,7 @@ def schedule_srt_timeline(
 
     items: list[ScheduledItem] = []
     accumulated_drift_ms = 0
+    peak_drift_ms = 0
     tempo_active = False
 
     # 1. Initial silence before first chunk if it starts after t=0
@@ -106,6 +109,7 @@ def schedule_srt_timeline(
             if actual_end > nominal_next_start_with_drift:
                 # Speech overruns past scheduled boundary into next cue
                 accumulated_drift_ms = actual_end - next_chunk.start_ms
+                peak_drift_ms = max(peak_drift_ms, accumulated_drift_ms)
                 # Silence gap before next chunk is 0ms (no silence item)
             else:
                 # Speech finished before next cue starts with drift
@@ -128,6 +132,15 @@ def schedule_srt_timeline(
                             subtitle_text=None,
                         )
                     )
+        else:
+            end_drift = max(0, actual_end - chunk.end_ms)
+            peak_drift_ms = max(peak_drift_ms, end_drift)
+            accumulated_drift_ms = end_drift
 
     total_duration_ms = items[-1].scheduled_start_ms + items[-1].duration_ms if items else 0
-    return TimelineSchedule(items=items, total_duration_ms=total_duration_ms)
+    return TimelineSchedule(
+        items=items,
+        total_duration_ms=total_duration_ms,
+        max_drift_ms=peak_drift_ms,
+        final_drift_ms=accumulated_drift_ms,
+    )

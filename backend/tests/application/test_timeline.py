@@ -45,6 +45,19 @@ def test_schedule_timeline_with_drift_absorption():
     assert schedule.items[4].chunk_index == 2 and schedule.items[4].scheduled_start_ms == 8000
     assert schedule.items[4].duration_ms == 2000
     assert schedule.total_duration_ms == 10000
+    assert schedule.max_drift_ms == 500
+    assert schedule.final_drift_ms == 0
+
+
+def test_schedule_timeline_reports_unabsorbed_drift():
+    chunks = [
+        TimedChunk(chunk_index=0, start_ms=0, end_ms=2000, text="One", cue_indices=[1]),
+        TimedChunk(chunk_index=1, start_ms=2000, end_ms=4000, text="Two", cue_indices=[2]),
+    ]
+    # Chunk 0 takes 2500ms, Chunk 1 takes 2500ms (both overrun by 500ms, no pause)
+    schedule = schedule_srt_timeline(chunks, [2500, 2500])
+    assert schedule.max_drift_ms == 1000
+    assert schedule.final_drift_ms == 1000
 
 
 def test_schedule_timeline_starts_at_zero():

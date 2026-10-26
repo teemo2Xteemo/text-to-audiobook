@@ -406,3 +406,23 @@ def test_post_srt_upload_is_accepted(
     job_id = response.json()["job_id"]
     _, _, source, _ = memory
     assert "Hello world." in source.texts[job_id]
+
+
+def test_post_vtt_upload_is_accepted(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+) -> None:
+    vtt_bytes = (
+        b"WEBVTT\n\n"
+        b"00:00:01.000 --> 00:00:03.000\nHello WebVTT.\n\n"
+        b"00:00:04.000 --> 00:00:06.000\nSecond cue.\n"
+    )
+    response = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "target_language": "ja-JP"},
+        files={"file": ("captions.vtt", vtt_bytes, "text/vtt")},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    _, _, source, _ = memory
+    assert "Hello WebVTT." in source.texts[job_id]

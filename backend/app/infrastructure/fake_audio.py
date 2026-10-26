@@ -77,7 +77,13 @@ class FakeAudioProcessor:
         del output_format, bitrate_kbps
         self.normalize_calls.append((source, destination))
         destination.parent.mkdir(parents=True, exist_ok=True)
-        copyfile(source, destination)
+        if source.is_file():
+            copyfile(source, destination)
+        else:
+            destination.write_bytes(f"FAKE_NORMALIZED_{destination.name}".encode())
+        if str(destination) not in self.durations and destination.name not in self.durations:
+            source_dur = await self.get_duration_ms(source)
+            self.set_duration(destination, source_dur)
         return AudioArtifact(path=destination)
 
     async def merge(

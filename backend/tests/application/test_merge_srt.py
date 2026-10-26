@@ -120,3 +120,32 @@ def test_timed_chunk_duration_property():
         cue_indices=[1],
     )
     assert chunk.duration_ms == 3000
+
+
+def test_merge_srt_cues_splits_when_max_chars_exceeded():
+    cues = [
+        SRTCue(index=1, start_ms=1000, end_ms=2000, text="First segment without sentence terminal"),
+        SRTCue(index=2, start_ms=2100, end_ms=3000, text="second segment also without terminal"),
+    ]
+    # Joined text length is ~75 chars; with max_chars=45 it must split
+    chunks = merge_srt_cues(cues, max_chars=45)
+    assert len(chunks) == 2
+    assert all(len(c.text) <= 45 for c in chunks)
+    assert chunks[0].cue_indices == [1]
+    assert chunks[1].cue_indices == [2]
+
+
+def test_merge_srt_cues_single_cue_exceeding_max_chars():
+    long_text = (
+        "This is a single very long cue sentence that will exceed the configured "
+        "maximum character boundary."
+    )
+    cue = SRTCue(index=1, start_ms=1000, end_ms=6000, text=long_text)
+    chunks = merge_srt_cues([cue], max_chars=40)
+    assert len(chunks) > 1
+    assert all(len(c.text) <= 40 for c in chunks)
+    assert chunks[0].start_ms == 1000
+    assert chunks[-1].end_ms == 6000
+    # Reconstructed text covers all words
+    reconstructed = " ".join(c.text for c in chunks)
+    assert reconstructed == long_text

@@ -77,3 +77,22 @@ def test_serialize_srt_cues_roundtrip():
 
 def test_serialize_srt_cues_empty():
     assert serialize_srt_cues([]) == ""
+
+
+def test_parse_srt_cues_strips_ass_override_tags():
+    raw = "1\n00:00:00,000 --> 00:00:02,000\n{\\an8}Top subtitle {\\i1}italic{\\i0}\n\n"
+    cues = parse_srt_cues(raw)
+    assert len(cues) == 1
+    assert cues[0].text == "Top subtitle italic"
+
+
+def test_serialize_srt_cues_collapses_blank_lines_within_cue():
+    cues = [
+        SRTCue(index=1, start_ms=1000, end_ms=3000, text="Line A\n\nLine B\n   \nLine C"),
+        SRTCue(index=2, start_ms=4000, end_ms=6000, text="Second cue"),
+    ]
+    serialized = serialize_srt_cues(cues)
+    parsed = parse_srt_cues(serialized)
+    assert len(parsed) == 2
+    assert parsed[0].text == "Line A Line B Line C"
+    assert parsed[1].text == "Second cue"
