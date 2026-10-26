@@ -11,12 +11,38 @@ Chinese → Vietnamese is a common example, not the only supported pair. Languag
 - Agent docs: [`docs/ai/`](docs/ai/)
 - Implementation plan: [`docs/ai/implementation-plan.md`](docs/ai/implementation-plan.md)
 - Architecture decisions: [`docs/adr/`](docs/adr/)
+- Feature specifications & plans: [`docs/superpowers/`](docs/superpowers/)
 
-**M1**–**M13** are in place (API + Redis Compose, domain contracts, job HTTP/enqueue, pipeline orchestrator, RQ worker + DI + capabilities, Vite job UI, conservative narration, NLLB CPU adapter, Edge TTS + FFmpeg normalize, chunk retry, checkpoint resume, translation/TTS cache, Compose completeness / MVP acceptance). Stack: React + TypeScript, FastAPI, Redis/RQ, NLLB (CPU), Edge TTS, FFmpeg, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
+**MVP & Extended Capabilities in place:**
+- **Core Pipeline (M1–M13):** FastAPI async jobs, Redis/RQ queue, domain ports, chunking with retry & checkpoint resume, translation/TTS caching, conservative narration, NLLB CPU adapter, Edge TTS + FFmpeg audio normalization, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
+- **Translation Adapters:** NLLB (CPU distilled), Ollama/TranslateGemma ([ADR 0011](docs/adr/0011-ollama-translategemma-optional-translation.md)), Google Gemini API (`TRANSLATION_PROVIDER=gemini`), and offline fakes.
+- **High-Throughput Parallel Chunks:** Asynchronous parallel chunk processing with configurable concurrency limits for rapid translation and audio generation.
+- **Audio & Subtitle Sync:** Timed SRT subtitle generation, automatic timestamp alignment, and synchronized timeline merging.
+- **Studio UI & Hot Reload:** Modernized React Studio UI, translation profile selector, SRT timestamp cleaner, and hybrid host-Vite HMR dev mode.
 
 ## For coding agents
 
 Start at [`AGENTS.md`](AGENTS.md) and [`docs/ai/README.md`](docs/ai/README.md). Do not hard-code languages or vendor SDKs into domain logic.
+
+## Quick commands with Make
+
+A `Makefile` at the repository root wraps setup, Compose, tests, and lint. GNU Make is a prerequisite. Install it with apt — there is no Make target for this, because that target could not run until Make is already installed:
+
+```bash
+sudo apt update && sudo apt install -y make
+```
+
+```bash
+make help          # Show all available make targets
+make setup         # Create .env and install backend/frontend deps into backend/.venv
+make up            # Start all Docker services in background
+make dev-hybrid    # Rebuild backend images, then run the Vite dev server on the host
+make test          # Run all unit tests (backend pytest + frontend vitest)
+make lint          # Run ruff check/format and TypeScript typecheck
+make check         # Run full pre-commit verification (lint + test + security/policy scans)
+make down          # Stop all containers
+make clean         # Remove host-owned caches; prints a Docker command if root owns them
+```
 
 ## Run
 
@@ -100,7 +126,7 @@ To get instant **Hot Module Replacement (HMR)** with sub-second feedback, run th
    ```bash
    docker compose up -d --build redis api worker
    ```
-   This rebuilds updated backend code and boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker without building or running the frontend container.
+   This rebuilds updated backend code and boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker without building or running the frontend container. `make dev-hybrid` runs this same Compose command, then `npm run dev` in `frontend/`.
 
 2. **Start Vite development server on the host:**
    ```bash
@@ -168,6 +194,16 @@ Do not point `STORAGE_PATH` at a symlink. The entrypoint only `lchown`s a symlin
 **Timeout under load.** `OLLAMA_HTTP_TIMEOUT_SECONDS` is the per-request HTTP timeout (default 120). RQ still kills the worker function at `RQ_JOB_TIMEOUT_SECONDS`. Raise the RQ value for long chapters on CPU; raising only the HTTP timeout does not keep the job alive past RQ.
 
 **Do not co-load NLLB.** When `TRANSLATION_PROVIDER=ollama`, the factory does not construct the NLLB engine. Do not also set the worker to load NLLB weights in the same process.
+
+### `make clean` and root-owned caches
+
+`make clean` deletes host-owned `__pycache__`, pytest, and Ruff caches. Docker can leave `.pytest_cache` and `.ruff_cache` owned by root or `nobody`. When `rm` cannot delete those paths, `make clean` exits non-zero and prints:
+
+```bash
+docker run --rm -v "$PWD:/work" -w /work alpine rm -rf .pytest_cache backend/.pytest_cache .ruff_cache backend/.ruff_cache .coverage htmlcov
+```
+
+Host `make lint-backend` already keeps the Ruff cache under `/tmp` (`RUFF_CACHE_DIR`). Root-owned `__pycache__` directories are skipped rather than failing the target; remove them with the same `docker run` command if they remain.
 
 ### Translation profiles & Worker environment
 
