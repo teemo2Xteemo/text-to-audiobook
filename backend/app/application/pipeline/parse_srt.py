@@ -1,5 +1,6 @@
 import html
 import re
+from collections.abc import Sequence
 
 from app.domain.srt import SRTCue
 
@@ -82,3 +83,12 @@ def parse_srt_cues(text: str) -> list[SRTCue]:
         )
 
     return cues
+
+
+def serialize_srt_cues(cues: Sequence[SRTCue]) -> str:
+    blocks: list[str] = []
+    for idx, cue in enumerate(cues, start=1):
+        start_tc = format_srt_timecode(cue.start_ms)
+        end_tc = format_srt_timecode(cue.end_ms)
+        blocks.append(f"{idx}\n{start_tc} --> {end_tc}\n{cue.text}")
+    return "\n\n".join(blocks) + ("\n" if blocks else "")

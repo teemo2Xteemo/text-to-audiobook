@@ -1,4 +1,8 @@
-from app.application.pipeline.parse_srt import format_srt_timecode, parse_srt_cues
+from app.application.pipeline.parse_srt import (
+    format_srt_timecode,
+    parse_srt_cues,
+    serialize_srt_cues,
+)
 from app.domain.srt import SRTCue
 
 
@@ -55,3 +59,21 @@ def test_format_srt_timecode():
 def test_srt_cue_duration_ms():
     cue = SRTCue(index=1, start_ms=1200, end_ms=4500, text="test")
     assert cue.duration_ms == 3300
+
+
+def test_serialize_srt_cues_roundtrip():
+    cues = [
+        SRTCue(index=1, start_ms=1000, end_ms=3000, text="Hello world!"),
+        SRTCue(index=2, start_ms=5000, end_ms=7500, text="Second line."),
+    ]
+    serialized = serialize_srt_cues(cues)
+    assert serialized == (
+        "1\n00:00:01,000 --> 00:00:03,000\nHello world!\n\n"
+        "2\n00:00:05,000 --> 00:00:07,500\nSecond line.\n"
+    )
+    parsed = parse_srt_cues(serialized)
+    assert parsed == cues
+
+
+def test_serialize_srt_cues_empty():
+    assert serialize_srt_cues([]) == ""
