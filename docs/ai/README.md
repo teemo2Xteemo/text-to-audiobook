@@ -25,6 +25,8 @@ The product is a **multilingual story → audiobook** pipeline. Requirements: [`
 
 ## Plans
 
+Milestone plans that extend [`implementation-plan.md`](implementation-plan.md) live in `plans/`. Feature specs and their execution plans live in [`../superpowers/`](../superpowers/) and stay there.
+
 - [M14 Ollama TranslateGemma translation adapter](plans/m14-ollama-translation-adapter.md) — optional post-M13 provider (ADR 0011 / issue #12)
 
 ## What this repo is today

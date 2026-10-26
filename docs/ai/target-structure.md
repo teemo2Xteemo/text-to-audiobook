@@ -27,13 +27,25 @@ Required layout. Create **missing** folders from this tree; do not invent a para
 │   └── Dockerfile
 ├── storage/                  # gitignored: jobs/{id}/ artifacts + cache/ translation/TTS blobs (M12)
 ├── docker-compose.yml
-├── docs/ai/                  # this folder
+├── docs/ai/                  # Agent governance (this folder)
+│   └── plans/                # Milestone plans for implementation-plan.md
 ├── docs/adr/                 # Architecture Decision Records
-├── docs/superpowers/         # Active feature designs and implementation plans
+├── docs/superpowers/         # Feature specifications and their execution plans
+│   ├── specs/
+│   └── plans/
 ├── .github/                  # CI workflow + secret/policy scan script
 ├── .cursor/rules/
 └── text-story-to-audiobook-requirements.md
 ```
+
+## Plan directories
+
+`docs/ai/plans/` and `docs/superpowers/plans/` stay separate.
+
+- `docs/ai/plans/` holds milestone plans that extend [`implementation-plan.md`](implementation-plan.md) (M14 today). Index: [`README.md`](README.md).
+- `docs/superpowers/plans/` holds execution plans for feature specs in `docs/superpowers/specs/`. Index: [`docs/README.md`](../README.md).
+
+Do not move milestone plans into `docs/superpowers/` or feature plans into `docs/ai/plans/`.
 
 ## Layer rules
 

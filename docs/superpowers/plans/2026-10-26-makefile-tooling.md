@@ -28,6 +28,8 @@
 
 ### Task 1: Cài đặt và xác minh GNU Make trên máy Host
 
+Bootstrap bằng apt. Không tạo target `install-make` — target đó chỉ chạy được khi `make` đã có trong `$PATH`. Lệnh cài đặt nằm ở phần prerequisites của `README.md`.
+
 **Files:**
 - Không tạo/sửa file mã nguồn.
 
@@ -69,11 +71,9 @@
   - Khai báo `.PHONY` bao gồm tất cả các target.
   - Nhóm Trợ giúp:
     - `help`: Dùng awk để đọc và hiển thị các dòng có `##` mô tả.
-  - Nhóm Cài đặt hệ thống:
-    - `install-make`: `sudo apt update && sudo apt install -y make`
   - Nhóm Môi trường & Khởi tạo:
-    - `setup`: Kiểm tra tạo `.env`, tạo venv backend `python3 -m venv backend/.venv`, cài `backend/.venv/bin/pip install -e ".[dev]"`, và cài `npm ci` trong thư mục `frontend/`.
-    - `clean`: Dọn dẹp cache `find . -type d -name "__pycache__" -exec rm -rf {} +`, `.pytest_cache`, `.ruff_cache`, `.coverage`.
+    - `setup`: Kiểm tra tạo `.env`, tạo venv `python3 -m venv backend/.venv`, rồi cài bằng `backend/.venv/bin/python -m pip` (`install --upgrade pip` và `install -e "backend[dev]"`). Không dùng `$(PYTHON)` / `python3 -m pip` trong cùng recipe, vì GNU Make nở biến trước khi venv tồn tại.
+    - `clean`: Dọn cache host (`__pycache__`, `.pytest_cache`, `.ruff_cache`, `.coverage`). Nếu `rm` bị từ chối quyền (cache Docker/root), in lệnh `docker run --rm -v "$PWD:/work" -w /work alpine rm -rf ...` và thoát khác 0.
   - Nhóm Vòng đời Docker Compose:
     - `up`: `docker compose up -d`
     - `up-build`: `docker compose up -d --build`
@@ -82,7 +82,7 @@
     - `logs`: `docker compose logs -f`
     - `build`: `docker compose build`
   - Nhóm Phát triển kết hợp (Hybrid Dev):
-    - `dev-hybrid`: Bật `docker compose up -d redis api worker` rồi chạy `cd frontend && npm run dev`.
+    - `dev-hybrid`: Bật `docker compose up -d --build redis api worker` (cùng lệnh với README) rồi chạy `cd frontend && npm run dev`.
   - Nhóm Kiểm thử & Chất lượng (Host-first):
     - `test-backend`: Chạy `pytest -m "not integration"` (dùng `backend/.venv/bin/pytest` nếu có, fallback `pytest`).
     - `test-frontend`: `cd frontend && npm test`.

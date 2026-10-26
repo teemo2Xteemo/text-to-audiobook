@@ -1,7 +1,7 @@
 # Design Document: Project Cleanup & Documentation Standardization
 
 **Date:** 2026-10-26  
-**Status:** In Review (Pending Builder Check & User Approval)  
+**Status:** Implemented  
 **Scope:** Project  
 **Author:** Pair Programming Session with User  
 
@@ -11,7 +11,7 @@
 
 Over the course of developing multiple milestones and features (M1–M13 MVP, Speckit local translation, Gemini adapter, parallel chunk processing, timed SRT subtitles, translation profiles, studio UI, and hybrid hot reload), the repository accumulated various transient artifacts, deprecated experiment tooling, and documentation drift:
 
-1. **Environment & Cache Clutter:** A leftover [node_modules/](../../../node_modules) directory in the project root (containing only an old Vite cache from September, while actual frontend code lives in [frontend/](../../../frontend)), lingering Playwright test artifacts in [.playwright-mcp/](../../../.playwright-mcp), local job outputs and translation caches in [storage/](../../../storage), and a merged worktree in [.worktrees/frontend-hot-reload](../../../.worktrees).
+1. **Environment & Cache Clutter:** A leftover `node_modules/` directory in the project root (containing only an old Vite cache from September, while actual frontend code lives in [frontend/](../../../frontend)), lingering Playwright test artifacts in `.playwright-mcp/`, local job outputs and translation caches in `storage/`, and a merged worktree in `.worktrees/frontend-hot-reload`.
 2. **Permission Conflicts:** `backend/.pytest_cache` and `backend/.ruff_cache` were created inside Docker with `nobody:nogroup` ownership, causing `Permission denied` errors when running `ruff` locally on the host.
 3. **Obsolete / Duplicate Tooling (Speckit):** The `specs/` directory, `.specify/` framework, and 10 `.cursor/skills/speckit-*` skills were introduced during an experimental feature implementation (Feature 001: Optional Local Translation). That capability has long been accepted, codified in [docs/adr/0011-ollama-translategemma-optional-translation.md](../../../docs/adr/0011-ollama-translategemma-optional-translation.md), and integrated into the core backend and tests. Maintaining Speckit introduces unnecessary maintenance overhead and violates the single canonical layout defined in [docs/ai/target-structure.md](../../../docs/ai/target-structure.md).
 4. **Documentation Drift:** [README.md](../../../README.md) and [docs/README.md](../../../docs/README.md) stopped updating at milestone M13, omitting major capabilities like the Gemini provider, parallel chunking, subtitle sync, and hot reload workflow.
@@ -78,9 +78,9 @@ The user requested a thorough cleanup across code, project structure, unnecessar
    ```bash
    rm -rf node_modules
    ```
-2. Clean [.playwright-mcp/](../../../.playwright-mcp):
+2. Clean `.playwright-mcp/`:
    Remove all generated `.png`, `.yml`, `.log`, and `.mp3` files, keeping `.playwright-mcp/.gitignore` intact.
-3. Clean [storage/](../../../storage):
+3. Clean `storage/`:
    Remove all temporary job directories in `storage/jobs/*` and cache blobs in `storage/cache/*` while keeping `.gitkeep` or base directory structure intact.
 4. Clean `.superpowers`:
    Remove unused `.superpowers/sdd/` if empty or preserve `.superpowers/sdd/.gitignore`.
