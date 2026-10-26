@@ -371,7 +371,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
           </div>
 
           {profileOptions.length > 0 && (
-            <div className="translation-profile-row" style={{ marginTop: "12px" }}>
+            <div className="translation-profile-row">
               <StudioSelect
                 id="translation-profile"
                 label="Translation engine"
