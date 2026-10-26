@@ -85,7 +85,12 @@ def test_adjust_tempo(tmp_path: Path) -> None:
     async def _run() -> None:
         processor = FFmpegAudioProcessor()
         source_file = tmp_path / "source.mp3"
-        source_file.write_bytes(b"source_audio")
+        await processor.generate_silence(
+            duration_ms=1000,
+            destination=source_file,
+            output_format=OutputFormat.MP3,
+            bitrate_kbps=128,
+        )
         destination_file = tmp_path / "sped_up.mp3"
         artifact = await processor.adjust_tempo(
             source=source_file,
