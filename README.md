@@ -18,6 +18,21 @@ Chinese → Vietnamese is a common example, not the only supported pair. Languag
 
 Start at [`AGENTS.md`](AGENTS.md) and [`docs/ai/README.md`](docs/ai/README.md). Do not hard-code languages or vendor SDKs into domain logic.
 
+## Quick commands with Make
+
+A `Makefile` is available at the repository root for common development workflows:
+
+```bash
+make help          # Show all available make targets
+make setup         # Setup .env, backend venv with dev deps, and frontend dependencies
+make up            # Start all Docker services in background
+make dev-hybrid    # Start backend in Docker and frontend on host with instant HMR
+make test          # Run all unit tests (backend pytest + frontend vitest)
+make lint          # Run ruff check/format and TypeScript typecheck
+make check         # Run full pre-commit verification (lint + test + security/policy scans)
+make down          # Stop all containers
+```
+
 ## Run
 
 Copy the example env file, then start all four services (frontend, api, worker, redis). CPU only — Compose has no GPU runtime.

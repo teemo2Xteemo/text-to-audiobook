@@ -1,0 +1,82 @@
+.DEFAULT_GOAL := help
+
+# Môi trường và công cụ thực thi
+VENV ?= backend/.venv
+PYTHON ?= $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
+PYTEST ?= $(if $(wildcard $(VENV)/bin/pytest),$(VENV)/bin/pytest,pytest)
+RUFF ?= $(if $(wildcard $(VENV)/bin/ruff),$(VENV)/bin/ruff,ruff)
+RUFF_CACHE_DIR ?= /tmp/.ruff_cache
+NPM ?= npm
+DOCKER_COMPOSE ?= docker compose
+
+.PHONY: help install-make setup up up-build down restart logs build dev-hybrid \
+	test-backend test-frontend test lint-backend format-backend typecheck-frontend lint check clean
+
+help: ## Hiển thị hướng dẫn và danh sách các lệnh
+	@echo "Sử dụng: make [lệnh]"
+	@echo ""
+	@echo "Các lệnh có sẵn:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+install-make: ## Cài đặt GNU Make trên Ubuntu Linux
+	sudo apt update && sudo apt install -y make
+
+setup: ## Chuẩn bị môi trường ban đầu (.env, backend venv, frontend node_modules)
+	@if [ ! -f .env ]; then cp -n .env.example .env && echo "Da khoi tao .env tu .env.example"; else echo ".env da ton tai"; fi
+	@if [ ! -d backend/.venv ]; then python3 -m venv backend/.venv; fi
+	$(PYTHON) -m pip install --upgrade pip
+	(cd backend && ../$(VENV)/bin/pip install -e ".[dev]")
+	cd frontend && $(NPM) ci
+
+up: ## Khởi động toàn bộ stack dịch vụ ngầm (Docker Compose)
+	@if [ ! -f .env ]; then cp -n .env.example .env && echo "Da khoi tao .env tu .env.example"; fi
+	$(DOCKER_COMPOSE) up -d
+
+up-build: ## Build lại và khởi động toàn bộ stack (Docker Compose)
+	@if [ ! -f .env ]; then cp -n .env.example .env && echo "Da khoi tao .env tu .env.example"; fi
+	$(DOCKER_COMPOSE) up -d --build
+
+down: ## Dừng và gỡ bỏ toàn bộ container của stack
+	$(DOCKER_COMPOSE) down
+
+restart: ## Khởi động lại toàn bộ container của stack
+	$(DOCKER_COMPOSE) restart
+
+logs: ## Xem log các container theo thời gian thực
+	$(DOCKER_COMPOSE) logs -f
+
+build: ## Build lại các Docker images cho dự án
+	$(DOCKER_COMPOSE) build
+
+dev-hybrid: ## Chạy backend qua Docker và frontend qua Vite dev server trên máy host
+	@if [ ! -f .env ]; then cp -n .env.example .env && echo "Da khoi tao .env tu .env.example"; fi
+	$(DOCKER_COMPOSE) up -d redis api worker
+	cd frontend && $(NPM) run dev
+
+test-backend: ## Chạy unit test backend với pytest
+	$(PYTEST) -m "not integration"
+
+test-frontend: ## Chạy unit test frontend với vitest
+	cd frontend && $(NPM) test
+
+test: test-backend test-frontend ## Chạy toàn bộ unit test (backend + frontend)
+
+lint-backend: ## Kiểm tra linter và định dạng mã nguồn backend với ruff
+	$(RUFF) check backend --cache-dir $(RUFF_CACHE_DIR)
+	$(RUFF) format --check backend --cache-dir $(RUFF_CACHE_DIR)
+
+format-backend: ## Tự động format mã nguồn backend với ruff
+	$(RUFF) format backend --cache-dir $(RUFF_CACHE_DIR)
+
+typecheck-frontend: ## Kiểm tra kiểu TypeScript trong frontend
+	cd frontend && $(NPM) run typecheck
+
+lint: lint-backend typecheck-frontend ## Kiểm tra toàn bộ mã nguồn (backend lint + frontend typecheck)
+
+check: lint test ## Kiểm tra toàn diện trước khi commit (lint, test, hooks, scan)
+	python3 .cursor/hooks/selftest.py
+	python3 .github/scripts/scan_repo.py
+
+clean: ## Dọn dẹp cache và các tệp tạm thời
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	rm -rf .pytest_cache backend/.pytest_cache .ruff_cache backend/.ruff_cache .coverage htmlcov
