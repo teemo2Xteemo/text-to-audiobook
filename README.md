@@ -90,11 +90,17 @@ When actively developing UI components and styling, running the frontend inside 
 
 To get instant **Hot Module Replacement (HMR)** with sub-second feedback, run the backend services in Docker and Vite dev server directly on the host:
 
+0. **Ensure root environment file exists:**
+   ```bash
+   cp -n .env.example .env
+   ```
+   Vite is configured (`envDir: ".."`) to read `VITE_*` variables directly from the repository root `.env`. Keep `VITE_API_BASE_URL` empty (the default) so requests route through the Vite proxy rather than triggering direct CORS requests.
+
 1. **Start backend services in Docker:**
    ```bash
-   docker compose up -d redis api worker
+   docker compose up -d --build redis api worker
    ```
-   This boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker without building or starting the frontend container.
+   This rebuilds updated backend code and boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker without building or running the frontend container.
 
 2. **Start Vite development server on the host:**
    ```bash
@@ -102,12 +108,12 @@ To get instant **Hot Module Replacement (HMR)** with sub-second feedback, run th
    npm ci
    npm run dev
    ```
-   Open **http://127.0.0.1:5173** in your browser.
+   Open **http://127.0.0.1:5173** in your browser (`host: "127.0.0.1"` and `strictPort: true` ensure consistent IPv4 binding on port 5173).
 
 3. **Instant HMR & Proxying Benefits:**
-   - Any code changes in `frontend/src/` trigger instant HMR in the browser without full page refreshes.
-   - Vite proxies `/api` and `/health` directly to `http://127.0.0.1:8000` with `changeOrigin: true`.
-   - Connecting directly to `127.0.0.1:8000` on the host completely avoids the Docker Nginx stale DNS cache 502 errors when `api` or `worker` containers restart.
+   - Edits to React components in `frontend/src/` reflect immediately via Vite HMR without a full page reload (root config or HTML edits trigger a standard reload).
+   - Vite proxies `/api` and `/health` directly to `http://127.0.0.1:8000`. Upstream `Host` header is rewritten with `changeOrigin: true`. Audio responses and Range/206 seek requests are streamed natively by Vite's proxy without buffering.
+   - Connecting directly to `127.0.0.1:8000` on the host avoids the Docker Nginx stale-DNS 502 error described in [Troubleshooting](#frontend-api-returns-502-after-recreating-api) (though temporary connection errors will appear while `api` is actively restarting).
 
 4. **Teardown backend services when done:**
    ```bash

@@ -1,7 +1,7 @@
 # Design Document: Frontend Local Dev Hot Reload (Hybrid Mode)
 
 **Date:** 2026-10-26  
-**Status:** Pending User Approval  
+**Status:** Approved by User  
 **Scope:** Small Change  
 **Author:** Pair Programming Session with User  
 
@@ -69,13 +69,21 @@ The operator selected the **Hybrid Approach**: running backend services (`redis`
    - Healthcheck on `api` and `redis` confirms backend readiness.
 
 2. **Frontend Vite Configuration Verification:**
-   - [`frontend/vite.config.ts`](file:///home/teemo/documents/projects/text-to-audiobook/frontend/vite.config.ts) already contains:
+   - [`frontend/vite.config.ts`](../../frontend/vite.config.ts) is configured with `envDir: ".."` (to load root `.env`), explicit host binding, and proxy settings:
      ```ts
      server: {
+       host: "127.0.0.1",
        port: 5173,
+       strictPort: true,
        proxy: {
-         "/api": "http://127.0.0.1:8000",
-         "/health": "http://127.0.0.1:8000",
+         "/api": {
+           target: "http://127.0.0.1:8000",
+           changeOrigin: true,
+         },
+         "/health": {
+           target: "http://127.0.0.1:8000",
+           changeOrigin: true,
+         },
        },
      }
      ```
@@ -83,8 +91,8 @@ The operator selected the **Hybrid Approach**: running backend services (`redis`
 
 3. **Convenience & Documentation:**
    - Add a dedicated section to `README.md` under development instructions explaining the hybrid workflow:
-     1. Start backend: `docker compose up -d redis api worker`
-     2. Start UI with HMR: `cd frontend && npm install && npm run dev`
+     1. Start backend: `docker compose up -d --build redis api worker`
+     2. Start UI with HMR: `cd frontend && npm ci && npm run dev`
      3. Access UI at `http://127.0.0.1:5173`
    - (Optional helper) Add a convenience script in `package.json` or root if needed, or keep standard commands.
 

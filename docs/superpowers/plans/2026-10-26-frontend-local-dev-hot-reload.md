@@ -8,7 +8,7 @@
 
 **Tech Stack:** React 18, Vite 6, TypeScript, Docker Compose, Vitest.
 
-**Spec:** [docs/superpowers/specs/2026-10-26-frontend-local-dev-hot-reload-design.md](file:///home/teemo/documents/projects/text-to-audiobook/docs/superpowers/specs/2026-10-26-frontend-local-dev-hot-reload-design.md)
+**Spec:** [docs/superpowers/specs/2026-10-26-frontend-local-dev-hot-reload-design.md](../specs/2026-10-26-frontend-local-dev-hot-reload-design.md)
 
 ## Global Constraints
 
