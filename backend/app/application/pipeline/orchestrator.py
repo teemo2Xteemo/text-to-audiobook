@@ -68,6 +68,8 @@ class PipelineOrchestrator:
         max_chars: int = CHUNK_MAX_CHARS,
         retry_policy: RetryPolicy | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
+        translation_concurrency: int = 1,
+        tts_concurrency: int = 1,
     ) -> None:
         self._translation = translation
         self._tts = tts
@@ -82,6 +84,8 @@ class PipelineOrchestrator:
         # duplicate Settings / factory defaults; Settings should be the only source.
         self._retry_policy = retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0)
         self._sleep = sleep or asyncio.sleep
+        self._translation_concurrency = max(1, translation_concurrency)
+        self._tts_concurrency = max(1, tts_concurrency)
         self._active_chunk_id: str | None = None
 
     async def run(self, job: Job, text: str, *, workspace: Path) -> Job:
@@ -352,56 +356,123 @@ class PipelineOrchestrator:
         checkpoints: CheckpointStore,
     ) -> Job:
         job = await self._reset_chunk_progress(job, JobStatus.TRANSLATING)
-        for chunk in chunks:
-            self._active_chunk_id = chunk.id
-            path = workspace / "chunks" / f"{chunk.id}.translated.txt"
-            if not checkpoints.is_complete(chunk.id, STAGE_TRANSLATED):
-                filled = False
-                if self._artifact_cache is not None:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    filled = self._artifact_cache.fill_translation(
-                        text=chunk.text,
-                        source_language=job.source_language,
-                        target_language=job.target_language,
-                        destination=path,
-                        job_id=job.id,
-                        chunk_id=chunk.id,
-                    )
-                if filled:
-                    checkpoints.record(chunk.id, STAGE_TRANSLATED, path)
-                else:
+        lock = asyncio.Lock()
+        already_completed_ids = {
+            c.id for c in chunks if checkpoints.is_complete(c.id, STAGE_TRANSLATED)
+        }
+        completed_count = len(already_completed_ids)
+        if completed_count > 0 and job.status is JobStatus.TRANSLATING:
+            job = replace(job, chunk_current=completed_count)
+            await self._jobs.save(job)
 
-                    async def _translate(text: str = chunk.text) -> str:
-                        return await translate_chunk(
-                            text,
-                            source_language=job.source_language,
-                            target_language=job.target_language,
-                            provider=self._translation,
-                        )
-
-                    translated = await with_chunk_retry(
-                        _translate,
-                        policy=self._retry_policy,
-                        sleep=self._sleep,
-                        job_id=job.id,
-                        chunk_id=chunk.id,
-                        stage=STAGE_TRANSLATED,
-                    )
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(translated, encoding="utf-8")
-                    checkpoints.record(chunk.id, STAGE_TRANSLATED, path)
+        async def _process_chunk(chunk: Chunk) -> None:
+            nonlocal job, completed_count
+            try:
+                path = workspace / "chunks" / f"{chunk.id}.translated.txt"
+                if not checkpoints.is_complete(chunk.id, STAGE_TRANSLATED):
+                    filled = False
                     if self._artifact_cache is not None:
-                        self._artifact_cache.store_translation(
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        filled = self._artifact_cache.fill_translation(
                             text=chunk.text,
                             source_language=job.source_language,
                             target_language=job.target_language,
-                            source=path,
+                            destination=path,
                             job_id=job.id,
                             chunk_id=chunk.id,
                         )
-            job = await self._touch_chunk(
-                job, chunk, STAGE_TRANSLATED, active_status=JobStatus.TRANSLATING
-            )
+                    if filled:
+                        async with lock:
+                            checkpoints.record(chunk.id, STAGE_TRANSLATED, path)
+                    else:
+
+                        async def _translate(text: str = chunk.text) -> str:
+                            return await translate_chunk(
+                                text,
+                                source_language=job.source_language,
+                                target_language=job.target_language,
+                                provider=self._translation,
+                            )
+
+                        translated = await with_chunk_retry(
+                            _translate,
+                            policy=self._retry_policy,
+                            sleep=self._sleep,
+                            job_id=job.id,
+                            chunk_id=chunk.id,
+                            stage=STAGE_TRANSLATED,
+                        )
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(translated, encoding="utf-8")
+                        async with lock:
+                            checkpoints.record(chunk.id, STAGE_TRANSLATED, path)
+                        if self._artifact_cache is not None:
+                            self._artifact_cache.store_translation(
+                                text=chunk.text,
+                                source_language=job.source_language,
+                                target_language=job.target_language,
+                                source=path,
+                                job_id=job.id,
+                                chunk_id=chunk.id,
+                            )
+
+                async with lock:
+                    completed_count += 1
+                    already_completed_ids.add(chunk.id)
+                    if job.status is JobStatus.TRANSLATING:
+                        job = replace(
+                            job,
+                            chunk_current=completed_count,
+                        )
+                        await self._jobs.save(job)
+                    logger.info(
+                        "pipeline_chunk_done",
+                        extra={
+                            "job_id": job.id,
+                            "chunk_id": chunk.id,
+                            "stage": STAGE_TRANSLATED,
+                        },
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._active_chunk_id is None:
+                    self._active_chunk_id = chunk.id
+                raise
+
+        queue: asyncio.Queue[Chunk] = asyncio.Queue()
+        for chunk in chunks:
+            if chunk.id not in already_completed_ids:
+                queue.put_nowait(chunk)
+
+        if queue.empty():
+            return job
+
+        self._active_chunk_id = None
+        effective_concurrency = min(
+            self._translation_concurrency,
+            getattr(self._translation, "max_concurrency", self._translation_concurrency),
+        )
+        worker_count = min(effective_concurrency, queue.qsize())
+
+        async def _worker() -> None:
+            while not queue.empty():
+                try:
+                    chunk = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                await _process_chunk(chunk)
+                queue.task_done()
+
+        tasks = [asyncio.create_task(_worker()) for _ in range(worker_count)]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         return job
 
     async def _narrate_chunks(
@@ -412,7 +483,17 @@ class PipelineOrchestrator:
         checkpoints: CheckpointStore,
     ) -> Job:
         job = await self._reset_chunk_progress(job, JobStatus.PREPARING_TTS)
+        already_completed_ids = {
+            c.id for c in chunks if checkpoints.is_complete(c.id, STAGE_NARRATED)
+        }
+        completed_count = len(already_completed_ids)
+        if completed_count > 0 and job.status is JobStatus.PREPARING_TTS:
+            job = replace(job, chunk_current=completed_count)
+            await self._jobs.save(job)
+
         for chunk in chunks:
+            if chunk.id in already_completed_ids:
+                continue
             self._active_chunk_id = chunk.id
             source = workspace / "chunks" / f"{chunk.id}.translated.txt"
             path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
@@ -425,8 +506,16 @@ class PipelineOrchestrator:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(narrated, encoding="utf-8")
                 checkpoints.record(chunk.id, STAGE_NARRATED, path)
-            job = await self._touch_chunk(
-                job, chunk, STAGE_NARRATED, active_status=JobStatus.PREPARING_TTS
+            completed_count += 1
+            if job.status is JobStatus.PREPARING_TTS:
+                job = replace(
+                    job,
+                    chunk_current=completed_count,
+                )
+                await self._jobs.save(job)
+            logger.info(
+                "pipeline_chunk_done",
+                extra={"job_id": job.id, "chunk_id": chunk.id, "stage": STAGE_NARRATED},
             )
         return job
 
@@ -440,82 +529,155 @@ class PipelineOrchestrator:
         job = await self._reset_chunk_progress(job, JobStatus.GENERATING_AUDIO)
         ext = job.output_format.value
         settings = TTSSettings(speed=job.speed)
-        for chunk in chunks:
-            self._active_chunk_id = chunk.id
-            narrated_path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
-            narrated = narrated_path.read_text(encoding="utf-8")
-            raw_path = workspace / "audio" / f"{chunk.id}.{ext}"
-            if not checkpoints.is_complete(chunk.id, STAGE_TTS):
-                selected_voice = select_voice(self._tts, job.target_language, job.voice)
-                filled = False
-                if self._artifact_cache is not None:
-                    filled = self._artifact_cache.fill_tts(
-                        text=narrated,
-                        source_language=job.source_language,
-                        target_language=job.target_language,
-                        voice=selected_voice,
-                        settings=settings,
-                        destination=raw_path,
-                        job_id=job.id,
-                        chunk_id=chunk.id,
-                    )
-                if filled:
-                    checkpoints.record(chunk.id, STAGE_TTS, raw_path)
-                else:
+        lock = asyncio.Lock()
+        already_completed_ids = {
+            c.id
+            for c in chunks
+            if checkpoints.is_complete(c.id, STAGE_TTS)
+            and checkpoints.is_complete(c.id, STAGE_NORMALIZED)
+        }
+        completed_count = len(already_completed_ids)
+        if completed_count > 0 and job.status is JobStatus.GENERATING_AUDIO:
+            job = replace(job, chunk_current=completed_count)
+            await self._jobs.save(job)
 
-                    async def _synthesize(
-                        narrated_text: str = narrated,
-                        destination: Path = raw_path,
-                        voice: str = selected_voice,
-                    ) -> None:
-                        artifact = await synthesize_chunk(
-                            narrated_text,
-                            language=job.target_language,
-                            voice=voice,
-                            settings=settings,
-                            provider=self._tts,
-                        )
-                        _place_artifact(artifact.path, destination)
-                        if not _nonempty(destination):
-                            destination.unlink(missing_ok=True)
-                            raise DomainError(ErrorType.TTS_FAILED, "tts failed")
-
-                    await with_chunk_retry(
-                        _synthesize,
-                        policy=self._retry_policy,
-                        sleep=self._sleep,
-                        job_id=job.id,
-                        chunk_id=chunk.id,
-                        stage=STAGE_TTS,
-                    )
-                    checkpoints.record(chunk.id, STAGE_TTS, raw_path)
+        async def _process_chunk(chunk: Chunk) -> None:
+            nonlocal job, completed_count
+            try:
+                narrated_path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
+                narrated = narrated_path.read_text(encoding="utf-8")
+                raw_path = workspace / "audio" / f"{chunk.id}.{ext}"
+                if not checkpoints.is_complete(chunk.id, STAGE_TTS):
+                    selected_voice = select_voice(self._tts, job.target_language, job.voice)
+                    filled = False
                     if self._artifact_cache is not None:
-                        self._artifact_cache.store_tts(
+                        filled = self._artifact_cache.fill_tts(
                             text=narrated,
                             source_language=job.source_language,
                             target_language=job.target_language,
                             voice=selected_voice,
                             settings=settings,
-                            source=raw_path,
+                            destination=raw_path,
                             job_id=job.id,
                             chunk_id=chunk.id,
                         )
+                    if filled:
+                        async with lock:
+                            checkpoints.record(chunk.id, STAGE_TTS, raw_path)
+                    else:
 
-            normalized_path = workspace / "audio" / f"{chunk.id}.normalized.{ext}"
-            if not checkpoints.is_complete(chunk.id, STAGE_NORMALIZED):
-                await normalize_chunk(
-                    self._audio,
-                    raw_path,
-                    normalized_path,
-                    output_format=job.output_format,
-                    bitrate_kbps=job.output_bitrate_kbps,
-                )
-                if not _nonempty(normalized_path):
-                    raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "audio normalize failed")
-                checkpoints.record(chunk.id, STAGE_NORMALIZED, normalized_path)
-            job = await self._touch_chunk(
-                job, chunk, "generating_audio", active_status=JobStatus.GENERATING_AUDIO
-            )
+                        async def _synthesize(
+                            narrated_text: str = narrated,
+                            destination: Path = raw_path,
+                            voice: str = selected_voice,
+                        ) -> None:
+                            artifact = await synthesize_chunk(
+                                narrated_text,
+                                language=job.target_language,
+                                voice=voice,
+                                settings=settings,
+                                provider=self._tts,
+                            )
+                            _place_artifact(artifact.path, destination)
+                            if not _nonempty(destination):
+                                destination.unlink(missing_ok=True)
+                                raise DomainError(ErrorType.TTS_FAILED, "tts failed")
+
+                        await with_chunk_retry(
+                            _synthesize,
+                            policy=self._retry_policy,
+                            sleep=self._sleep,
+                            job_id=job.id,
+                            chunk_id=chunk.id,
+                            stage=STAGE_TTS,
+                        )
+                        async with lock:
+                            checkpoints.record(chunk.id, STAGE_TTS, raw_path)
+                        if self._artifact_cache is not None:
+                            self._artifact_cache.store_tts(
+                                text=narrated,
+                                source_language=job.source_language,
+                                target_language=job.target_language,
+                                voice=selected_voice,
+                                settings=settings,
+                                source=raw_path,
+                                job_id=job.id,
+                                chunk_id=chunk.id,
+                            )
+
+                normalized_path = workspace / "audio" / f"{chunk.id}.normalized.{ext}"
+                if not checkpoints.is_complete(chunk.id, STAGE_NORMALIZED):
+                    await normalize_chunk(
+                        self._audio,
+                        raw_path,
+                        normalized_path,
+                        output_format=job.output_format,
+                        bitrate_kbps=job.output_bitrate_kbps,
+                    )
+                    if not _nonempty(normalized_path):
+                        raise DomainError(
+                            ErrorType.AUDIO_PROCESSING_FAILED, "audio normalize failed"
+                        )
+                    async with lock:
+                        checkpoints.record(chunk.id, STAGE_NORMALIZED, normalized_path)
+
+                async with lock:
+                    completed_count += 1
+                    already_completed_ids.add(chunk.id)
+                    if job.status is JobStatus.GENERATING_AUDIO:
+                        job = replace(
+                            job,
+                            chunk_current=completed_count,
+                        )
+                        await self._jobs.save(job)
+                    logger.info(
+                        "pipeline_chunk_done",
+                        extra={
+                            "job_id": job.id,
+                            "chunk_id": chunk.id,
+                            "stage": "generating_audio",
+                        },
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._active_chunk_id is None:
+                    self._active_chunk_id = chunk.id
+                raise
+
+        queue: asyncio.Queue[Chunk] = asyncio.Queue()
+        for chunk in chunks:
+            if chunk.id not in already_completed_ids:
+                queue.put_nowait(chunk)
+
+        if queue.empty():
+            return job
+
+        self._active_chunk_id = None
+        effective_concurrency = min(
+            self._tts_concurrency,
+            getattr(self._tts, "max_concurrency", self._tts_concurrency),
+        )
+        worker_count = min(effective_concurrency, queue.qsize())
+
+        async def _worker() -> None:
+            while not queue.empty():
+                try:
+                    chunk = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                await _process_chunk(chunk)
+                queue.task_done()
+
+        tasks = [asyncio.create_task(_worker()) for _ in range(worker_count)]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         return job
 
     async def _merge(self, job: Job, chunks: list[Chunk], workspace: Path) -> Job:
@@ -550,6 +712,7 @@ class PipelineOrchestrator:
             job,
             status=status,
             chunk_current=0 if reset_progress else job.chunk_current,
+            recovery_attempts=0,
         )
         await self._jobs.save(job)
         return job
@@ -570,11 +733,9 @@ class PipelineOrchestrator:
         active_status: JobStatus,
     ) -> Job:
         if job.status is active_status:
-            advanced = chunk.index > job.chunk_current
             job = replace(
                 job,
                 chunk_current=max(job.chunk_current, chunk.index),
-                recovery_attempts=0 if advanced else job.recovery_attempts,
             )
             await self._jobs.save(job)
         logger.info(

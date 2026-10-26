@@ -664,6 +664,12 @@ textarea {
   padding: 0.48rem 0.7rem;
   background: var(--panel-subtle);
   border-bottom: 1px solid var(--border);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.studio-select-search-box:focus-within {
+  background: var(--panel);
+  border-bottom-color: var(--accent);
 }
 
 .studio-select-search-icon {
@@ -671,6 +677,11 @@ textarea {
   height: 0.95rem;
   color: var(--muted);
   flex-shrink: 0;
+  transition: color 150ms ease;
+}
+
+.studio-select-search-box:focus-within .studio-select-search-icon {
+  color: var(--accent);
 }
 
 .studio-select-search-input {
@@ -728,7 +739,8 @@ textarea {
   transition: background-color 120ms ease;
 }
 
-.studio-select-item:hover {
+.studio-select-item:hover,
+.studio-select-item-highlighted {
   background: var(--panel-elevated);
 }
 
@@ -736,7 +748,8 @@ textarea {
   background: rgba(249, 115, 22, 0.14);
 }
 
-.studio-select-item-selected:hover {
+.studio-select-item-selected:hover,
+.studio-select-item-selected.studio-select-item-highlighted {
   background: rgba(249, 115, 22, 0.2);
 }
 

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,10 +48,16 @@ class Settings(BaseSettings):
     translation_provider: str = Field(default="fake")
     tts_provider: str = Field(default="fake")
     worker_concurrency: int = Field(default=1, ge=1)
+    chunk_translation_concurrency: int = Field(default=2, ge=1)
+    chunk_tts_concurrency: int = Field(default=2, ge=1)
     nllb_model_id: str = Field(default="facebook/nllb-200-distilled-600M", min_length=1)
     ollama_base_url: str = Field(default="http://127.0.0.1:11434")
     ollama_translation_model: str = Field(default="translategemma:4b", min_length=1)
     ollama_http_timeout_seconds: float = Field(default=120.0, gt=0)
+    gemini_api_key: SecretStr | None = Field(default=None)
+    gemini_translation_model: str = Field(default="gemini-3.5-flash", min_length=1)
+    gemini_base_url: str = Field(default="https://generativelanguage.googleapis.com")
+    gemini_http_timeout_seconds: float = Field(default=60.0, gt=0)
     language_detect_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     tts_default_voice_by_language: str = Field(default="")
     retry_max_attempts: int = Field(default=3, ge=1)
@@ -65,4 +71,12 @@ class Settings(BaseSettings):
         url = value.strip()
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("OLLAMA_BASE_URL must be an http or https URL")
+        return url
+
+    @field_validator("gemini_base_url")
+    @classmethod
+    def gemini_base_url_must_be_http(cls, value: str) -> str:
+        url = value.strip()
+        if not url.lower().startswith(("http://", "https://")):
+            raise ValueError("GEMINI_BASE_URL must be an http or https URL")
         return url

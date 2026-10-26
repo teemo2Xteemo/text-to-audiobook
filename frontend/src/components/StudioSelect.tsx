@@ -17,6 +17,7 @@ type StudioSelectProps = {
   disabled?: boolean;
   icon?: ReactNode;
   placeholder?: string;
+  searchable?: boolean;
 };
 
 export function StudioSelect({
@@ -28,11 +29,16 @@ export function StudioSelect({
   disabled = false,
   icon,
   placeholder = "Select an option",
+  searchable,
 }: StudioSelectProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  const isSearchable = searchable ?? options.length > 5;
 
   const selectedOption = useMemo(
     () => options.find((opt) => opt.value === value) ?? options[0],
@@ -60,6 +66,42 @@ export function StudioSelect({
     }
   }, [disabled, open]);
 
+  // Sync highlighted index to current value when popover opens
+  useEffect(() => {
+    if (open) {
+      const idx = filteredOptions.findIndex((opt) => opt.value === value);
+      setHighlightedIndex(idx >= 0 ? idx : 0);
+    }
+  }, [open, value]);
+
+  // Reset highlighted index when search query changes
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [search]);
+
+  // Auto-focus search input immediately when popover opens
+  useEffect(() => {
+    if (open && isSearchable) {
+      searchInputRef.current?.focus();
+      const raf = requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [open, isSearchable]);
+
+  // Scroll highlighted item into view during keyboard navigation
+  useEffect(() => {
+    if (
+      open &&
+      typeof itemRefs.current[highlightedIndex]?.scrollIntoView === "function"
+    ) {
+      itemRefs.current[highlightedIndex]?.scrollIntoView({
+        block: "nearest",
+      });
+    }
+  }, [highlightedIndex, open]);
+
   useEffect(() => {
     if (!open) {
       setSearch("");
@@ -77,6 +119,8 @@ export function StudioSelect({
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setOpen(false);
+        const el = document.getElementById(id);
+        el?.focus();
       }
     }
     document.addEventListener("mousedown", handleOutsideClick);
@@ -85,7 +129,7 @@ export function StudioSelect({
       document.removeEventListener("mousedown", handleOutsideClick);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [open, options.length]);
+  }, [open, id]);
 
   function handleToggle() {
     if (disabled || options.length === 0) {
@@ -97,6 +141,31 @@ export function StudioSelect({
   function handleSelectOption(nextValue: string) {
     onChange(nextValue);
     setOpen(false);
+    const el = document.getElementById(id);
+    el?.focus();
+  }
+
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedIndex((prev) =>
+        prev < filteredOptions.length - 1 ? prev + 1 : prev,
+      );
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const targetOption = filteredOptions[highlightedIndex] ?? filteredOptions[0];
+      if (targetOption) {
+        handleSelectOption(targetOption.value);
+      }
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+      const el = document.getElementById(id);
+      el?.focus();
+    }
   }
 
   return (
@@ -118,6 +187,16 @@ export function StudioSelect({
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (
+              event.key === " " ||
+              event.key === "Enter" ||
+              (event.key === "ArrowDown" && event.altKey)
+            ) {
+              event.preventDefault();
+              setOpen(true);
+            }
+          }}
         >
           {options.map((opt) => (
             <option key={opt.value} value={opt.value}>
@@ -168,7 +247,7 @@ export function StudioSelect({
         {/* Floating shadcn/ui-inspired Popover Menu */}
         {open ? (
           <div className="studio-select-popover" role="region" aria-label={`${label} selector`}>
-            {options.length > 5 ? (
+            {isSearchable ? (
               <div className="studio-select-search-box">
                 <svg
                   viewBox="0 0 20 20"
@@ -183,10 +262,12 @@ export function StudioSelect({
                 <input
                   ref={searchInputRef}
                   type="text"
+                  autoFocus
                   className="studio-select-search-input"
                   placeholder={`Filter ${label.toLowerCase()}...`}
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
+                  onKeyDown={handleSearchKeyDown}
                   onClick={(event) => event.stopPropagation()}
                 />
               </div>
@@ -201,16 +282,21 @@ export function StudioSelect({
               {filteredOptions.length === 0 ? (
                 <div className="studio-select-empty">No matching options</div>
               ) : (
-                filteredOptions.map((opt) => {
+                filteredOptions.map((opt, index) => {
                   const isSelected = opt.value === value;
+                  const isHighlighted = index === highlightedIndex;
                   return (
                     <div
                       key={opt.value}
+                      ref={(el) => {
+                        itemRefs.current[index] = el;
+                      }}
                       role="option"
                       aria-selected={isSelected}
                       className={`studio-select-item ${
                         isSelected ? "studio-select-item-selected" : ""
-                      }`}
+                      } ${isHighlighted ? "studio-select-item-highlighted" : ""}`}
+                      onMouseEnter={() => setHighlightedIndex(index)}
                       onClick={(event) => {
                         event.stopPropagation();
                         handleSelectOption(opt.value);
