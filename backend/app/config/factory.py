@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 from dataclasses import replace
 from pathlib import Path
 
@@ -34,8 +35,14 @@ from app.infrastructure.rq_queue import RQ_QUEUE_NAME, RQJobQueue
 from app.providers.translation.fake import FakeTranslationProvider
 from app.providers.tts.fake import FakeTTSProvider
 
+logger = logging.getLogger(__name__)
 
-class UnknownProviderError(ValueError):
+
+class ProviderConfigurationError(ValueError):
+    """Raised when provider configuration or required credentials are missing."""
+
+
+class UnknownProviderError(ProviderConfigurationError):
     """Raised when ``TRANSLATION_PROVIDER`` or ``TTS_PROVIDER`` is not registered."""
 
 
@@ -69,17 +76,17 @@ def _nllb_available() -> bool:
 
 def _languages_for_provider(provider: str) -> tuple[str, ...]:
     if provider == "gemini":
-        from app.providers.translation.gemini import _BCP47_TO_GEMINI
+        from app.providers.translation.gemini import SUPPORTED_LANGUAGES
 
-        return tuple(sorted(_BCP47_TO_GEMINI))
+        return SUPPORTED_LANGUAGES
     if provider == "nllb":
-        from app.providers.translation.nllb import _BCP47_TO_FLORES
+        from app.providers.translation.nllb import SUPPORTED_LANGUAGES
 
-        return tuple(sorted(_BCP47_TO_FLORES))
+        return SUPPORTED_LANGUAGES
     if provider == "ollama":
-        from app.providers.translation.ollama import _BCP47_TO_TRANSLATEGEMMA
+        from app.providers.translation.ollama import SUPPORTED_LANGUAGES
 
-        return tuple(sorted(_BCP47_TO_TRANSLATEGEMMA))
+        return SUPPORTED_LANGUAGES
     return ("en-US", "ja-JP", "ko-KR", "vi-VN")
 
 
@@ -189,6 +196,17 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
         profiles.insert(0, configured_profile)
         matched_idx = 0
 
+    if default_provider == "gemini" and not gemini_key:
+        logger.warning(
+            "configured_default_provider_gemini_missing_api_key",
+            extra={"provider": "gemini", "model": default_model},
+        )
+    elif default_provider == "nllb" and not _nllb_available():
+        logger.warning(
+            "configured_default_provider_nllb_missing_dependencies",
+            extra={"provider": "nllb", "model": default_model},
+        )
+
     return [replace(p, is_default=(i == matched_idx)) for i, p in enumerate(profiles)]
 
 
@@ -257,7 +275,9 @@ def build_translation_provider(settings: Settings) -> TranslationProvider:
             else ""
         )
         if not api_key:
-            raise ValueError("GEMINI_API_KEY is required when TRANSLATION_PROVIDER=gemini")
+            raise ProviderConfigurationError(
+                "GEMINI_API_KEY is required when TRANSLATION_PROVIDER=gemini"
+            )
         from app.providers.translation.gemini import GeminiTranslationProvider
 
         return GeminiTranslationProvider(

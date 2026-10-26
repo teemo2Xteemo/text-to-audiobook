@@ -236,8 +236,8 @@ def test_create_truncates_long_unknown_profile_id_in_error() -> None:
     with pytest.raises(DomainError) as exc_info:
         asyncio.run(service.create(cmd))
     assert exc_info.value.error_type == ErrorType.INVALID_INPUT
-    assert len(exc_info.value.message) < 100
-    assert "..." not in exc_info.value.message or len(exc_info.value.message) < 100
+    assert "a" * 64 in exc_info.value.message
+    assert "a" * 65 not in exc_info.value.message
 
 
 def test_create_with_fake_lab_stores_fake_pin() -> None:

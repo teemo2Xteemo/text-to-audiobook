@@ -60,6 +60,8 @@ _BCP47_TO_TRANSLATEGEMMA: dict[str, tuple[str, str]] = {
     "zh-TW": ("zh-Hant", "Chinese"),
 }
 
+SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(sorted(_BCP47_TO_TRANSLATEGEMMA))
+
 _MAX_INPUT_CHARS = 8000
 _SOURCE_BEGIN = "<<<TRANSLATION_SOURCE_BEGIN>>>"
 _SOURCE_END = "<<<TRANSLATION_SOURCE_END>>>"

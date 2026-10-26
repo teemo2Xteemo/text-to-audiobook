@@ -11,7 +11,7 @@ from app.application.pipeline.passthrough import (
     FixedLanguageDetector,
     PassthroughNarrationProcessor,
 )
-from app.config.factory import build_orchestrator
+from app.config.factory import build_job_service, build_orchestrator
 from app.config.settings import Settings
 from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.infrastructure.checkpoint_fs import CheckpointFilesystem
@@ -526,9 +526,15 @@ def test_process_job_fails_with_provider_configuration_error_when_worker_missing
 
     process_job(job.id)
 
-    filesystem = FilesystemJobStorage(tmp_path)
-    updated = asyncio.run(filesystem.get_job(job.id))
+    service = build_job_service(settings)
+    updated = asyncio.run(service.get(job.id))
     assert updated is not None
     assert updated.status == JobStatus.FAILED
     assert updated.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
     assert "GEMINI_API_KEY" in (updated.message or "")
+
+    filesystem = FilesystemJobStorage(tmp_path)
+    fs_job = asyncio.run(filesystem.get_job(job.id))
+    assert fs_job is not None
+    assert fs_job.status == JobStatus.FAILED
+    assert fs_job.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
