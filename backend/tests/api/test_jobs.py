@@ -553,3 +553,79 @@ def test_post_vtt_upload_is_accepted(
     job_id = response.json()["job_id"]
     _, _, source, _ = memory
     assert "Hello WebVTT." in source.texts[job_id]
+
+
+def test_decode_source_text_encodings():
+    from app.api.parse import _decode_source_text
+
+    # UTF-8 with BOM
+    text_utf8, enc = _decode_source_text(b"\xef\xbb\xbfHello world")
+    assert text_utf8 == "Hello world"
+    assert "utf-8" in enc.lower()
+
+    # GBK Chinese
+    sample_gbk = "第一章 序幕".encode("gbk")
+    text_gbk, enc_gbk = _decode_source_text(sample_gbk)
+    assert text_gbk == "第一章 序幕"
+    assert "gb" in enc_gbk.lower()
+
+    # Big5 Traditional Chinese
+    sample_big5 = "第一章 序幕".encode("big5")
+    text_big5, enc_big5 = _decode_source_text(sample_big5)
+    assert text_big5 == "第一章 序幕"
+    assert "big5" in enc_big5.lower()
+
+    # UTF-16 LE with BOM
+    sample_utf16_le = b"\xff\xfe" + "Hello world".encode("utf-16le")
+    text_utf16_le, enc_utf16_le = _decode_source_text(sample_utf16_le)
+    assert text_utf16_le == "Hello world"
+    assert "utf-16" in enc_utf16_le.lower()
+
+    # UTF-16 BE with BOM
+    sample_utf16_be = b"\xfe\xff" + "Hello world".encode("utf-16be")
+    text_utf16_be, enc_utf16_be = _decode_source_text(sample_utf16_be)
+    assert text_utf16_be == "Hello world"
+    assert "utf-16" in enc_utf16_be.lower()
+
+    # Newline normalization
+    text_newlines, _ = _decode_source_text(b"Line 1\r\nLine 2\rLine 3\n")
+    assert text_newlines == "Line 1\nLine 2\nLine 3\n"
+
+
+def test_decode_source_text_error_handling():
+    from app.api.parse import _decode_source_text
+    from app.domain.errors import DomainError
+
+    # Unsupported / undecodable binary bytes
+    with pytest.raises(DomainError) as exc_info:
+        _decode_source_text(bytes([0x80, 0x81, 0x82, 0x83, 0x84, 0x85]))
+    assert exc_info.value.error_type == ErrorType.INVALID_INPUT
+    assert "unsupported encoding" in exc_info.value.message
+
+    # Null bytes in decoded text
+    with pytest.raises(DomainError) as exc_info_null:
+        _decode_source_text(b"Hello\x00world")
+    assert exc_info_null.value.error_type == ErrorType.INVALID_INPUT
+    assert "null byte" in exc_info_null.value.message
+
+    # Size limit
+    with pytest.raises(DomainError) as exc_info_limit:
+        _decode_source_text(b"Hello world", max_upload_bytes=5)
+    assert exc_info_limit.value.error_type == ErrorType.INVALID_INPUT
+    assert "size limit" in exc_info_limit.value.message
+
+
+def test_post_txt_upload_gbk(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+) -> None:
+    sample_gbk = "第一章 序幕\n天地不仁以万物为刍狗".encode("gbk")
+    response = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "zh-CN", "target_language": "en-US"},
+        files={"file": ("story.txt", sample_gbk, "text/plain")},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    _, _, source, _ = memory
+    assert "第一章 序幕" in source.texts[job_id]

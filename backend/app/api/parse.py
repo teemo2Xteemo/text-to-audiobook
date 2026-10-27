@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import charset_normalizer
 from fastapi import Request, UploadFile
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -22,6 +23,44 @@ _READ_CHUNK = 64 * 1024
 _ALLOWED_FILE_MIME = frozenset(
     {"application/octet-stream", "application/x-subrip", "text/plain", "text/vtt"}
 )
+_ALLOWED_ENCODINGS = frozenset(
+    {
+        "gb18030",
+        "gbk",
+        "gb2312",
+        "big5",
+        "big5hkscs",
+        "cp950",
+        "shift_jis",
+        "cp932",
+        "euc-kr",
+        "euc_kr",
+        "cp949",
+        "cp1258",
+        "windows-1258",
+        "windows-1252",
+        "cp1252",
+        "latin-1",
+        "latin_1",
+        "iso-8859-1",
+        "iso8859-1",
+    }
+)
+
+
+def _is_match_allowed(m: charset_normalizer.CharsetMatch) -> bool:
+    enc = m.encoding.lower().replace("-", "_")
+    if enc not in _ALLOWED_ENCODINGS and m.encoding.lower() not in _ALLOWED_ENCODINGS:
+        return False
+    # Reject CP949 if it unnaturally mixes Hangul and CJK ideographs
+    # (typical of Chinese GBK decoded as Korean).
+    if (
+        enc in ("cp949", "euc_kr")
+        and "Hangul Syllables" in m.alphabets
+        and "CJK Unified Ideographs" in m.alphabets
+    ):
+        return False
+    return True
 
 
 async def parse_create_job(request: Request, settings: Settings) -> CreateJobCommand:
@@ -65,7 +104,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
         parsed = CreateJobJsonBody.model_validate(payload)
     except ValidationError as exc:
         raise DomainError(ErrorType.INVALID_INPUT, validation_message(list(exc.errors()))) from exc
-    text = _decode_source_text(parsed.text.encode("utf-8"), max_upload_bytes)
+    text, _ = _decode_source_text(parsed.text.encode("utf-8"), max_upload_bytes)
     return CreateJobCommand(
         source_language=parsed.source_language,
         target_language=parsed.target_language,
@@ -91,7 +130,7 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         text = await _read_upload(upload, max_upload_bytes)
     else:
         assert isinstance(text_value, str)
-        text = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
+        text, _ = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
 
     speed_raw = form.get("speed")
     output_raw = form.get("output_format")
@@ -119,21 +158,56 @@ async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_byte
         if total > max_upload_bytes:
             raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
         chunks.append(piece)
-    return _decode_source_text(b"".join(chunks), max_upload_bytes)
+    text, _ = _decode_source_text(b"".join(chunks), max_upload_bytes)
+    return text
 
 
-def _decode_source_text(raw: bytes, max_upload_bytes: int) -> str:
-    if len(raw) > max_upload_bytes:
+def _decode_source_text(raw: bytes, max_upload_bytes: int | None = None) -> tuple[str, str]:
+    if max_upload_bytes is not None and len(raw) > max_upload_bytes:
         raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise DomainError(ErrorType.INVALID_INPUT, "source text must be UTF-8") from exc
+
+    if raw.startswith(b"\xef\xbb\xbf"):
+        try:
+            text = raw[3:].decode("utf-8")
+            encoding = "utf-8-sig"
+        except UnicodeDecodeError as exc:
+            raise DomainError(
+                ErrorType.INVALID_INPUT, "source text has unsupported encoding"
+            ) from exc
+    elif raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            text = raw.decode("utf-16")
+            encoding = "utf-16"
+        except UnicodeDecodeError as exc:
+            raise DomainError(
+                ErrorType.INVALID_INPUT, "source text has unsupported encoding"
+            ) from exc
+    else:
+        try:
+            text = raw.decode("utf-8")
+            encoding = "utf-8"
+        except UnicodeDecodeError:
+            matches = charset_normalizer.from_bytes(raw)
+            selected_match = None
+            for m in matches:
+                if _is_match_allowed(m):
+                    selected_match = m
+                    break
+            if selected_match is None:
+                raise DomainError(ErrorType.INVALID_INPUT, "source text has unsupported encoding")
+            try:
+                text = str(selected_match)
+                encoding = selected_match.encoding
+            except Exception as exc:
+                raise DomainError(
+                    ErrorType.INVALID_INPUT, "source text has unsupported encoding"
+                ) from exc
+
     if "\x00" in text:
         raise DomainError(ErrorType.INVALID_INPUT, "source text must not contain null bytes")
     if text.startswith("\ufeff"):
         text = text[1:]
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.replace("\r\n", "\n").replace("\r", "\n"), encoding
 
 
 def _assert_safe_txt_filename(filename: str | None) -> None:
