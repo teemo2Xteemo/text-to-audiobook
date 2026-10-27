@@ -16,6 +16,7 @@ Chinese → Vietnamese is a common example, not the only supported pair. Languag
 **MVP & Extended Capabilities in place:**
 - **Core Pipeline (M1–M13):** FastAPI async jobs, Redis/RQ queue, domain ports, chunking with retry & checkpoint resume, translation/TTS caching, conservative narration, NLLB CPU adapter, Edge TTS + FFmpeg audio normalization, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
 - **Translation Adapters:** NLLB (CPU distilled), Ollama/TranslateGemma ([ADR 0011](docs/adr/0011-ollama-translategemma-optional-translation.md)), Google Gemini API (`TRANSLATION_PROVIDER=gemini`), OpenRouter, Groq, and offline fakes. A clean clone still boots with `fake`. When `TRANSLATION_PROVIDER=openrouter`, the default profile is DeepSeek V4 Flash.
+- **Narrate Mode & Pre-Submit Analysis:** Direct speech synthesis from text in source language without translation or LLM calls, script encoding and chapter analysis, fast candidate language detection, and voice audition previews.
 - **High-Throughput Parallel Chunks:** Asynchronous parallel chunk processing with configurable concurrency limits for rapid translation and audio generation.
 - **Audio & Subtitle Sync:** Timed SRT subtitle generation, automatic timestamp alignment, and synchronized timeline merging.
 - **Studio UI & Hot Reload:** Modernized React Studio UI, translation profile selector, SRT timestamp cleaner, and hybrid host-Vite HMR dev mode.
@@ -173,6 +174,193 @@ python -m venv .venv
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
 .venv/bin/pytest -m "not integration"
+```
+
+## API Reference
+
+The FastAPI backend exposes endpoints for capabilities discovery, pre-submit script analysis and voice auditions, asynchronous job lifecycle management, and audio/subtitle downloads.
+
+### Capabilities (`GET /api/capabilities`)
+
+Returns supported languages, available voices, active translation profiles, and duration estimation metrics.
+
+```bash
+curl -sS http://127.0.0.1:8000/api/capabilities
+```
+
+**Fields:**
+- `languages`: Languages supported for translation (intersection of translation provider and TTS voices).
+- `narrate_languages`: Languages directly supported by the TTS provider for narration without translation.
+- `voices`: Available voices with `id`, `language`, and `label`. Filterable via query parameter: `?language=<bcp47>`.
+- `translation_profiles`: Configured translation profiles (`id`, `provider`, `model`, `label`, `badge`, `description`, `is_default`, `supported_languages`).
+- `estimate_defaults`: Default duration calculation parameters (`chars_per_second`, `preview_wpm`).
+
+---
+
+### Pre-Submit Analysis & Auditions
+
+Clients can inspect file encoding, language candidates, chapter splits, and audition voice snippets before creating a job.
+
+#### 1. Language Detection (`POST /api/detect-language`)
+
+Fast candidate language detection on a sample (evaluates up to the first 8 KB) with confidence scores and preview lines. Accepts JSON (`{"text": "..."}`) or multipart form data.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/detect-language \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Once upon a time in a faraway kingdom..."}'
+```
+
+**Response:**
+```json
+{
+  "language": "en-US",
+  "confidence": 0.99,
+  "needs_confirmation": false,
+  "candidates": [
+    {"language": "en-US", "confidence": 0.99}
+  ],
+  "preview_lines": ["Once upon a time in a faraway kingdom..."]
+}
+```
+*Note:* If top candidate `confidence` falls below `LANGUAGE_CONFIRM_THRESHOLD` (default `0.70`), `needs_confirmation` is set to `true`.
+
+#### 2. Pre-Submit Script Analysis (`POST /api/analyze`)
+
+Comprehensive analysis for full text or uploaded files (`.txt`). Detects file encoding (UTF-8, GB18030, Shift-JIS, etc.), ranked language candidates, chapter breakdown, and estimated audio and processing times. Accepts JSON or multipart form data.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/analyze \
+  -F "file=@story.txt"
+```
+
+**Response:**
+```json
+{
+  "encoding": "utf-8",
+  "language": "zh-CN",
+  "confidence": 0.98,
+  "needs_confirmation": false,
+  "candidates": [
+    {"language": "zh-CN", "confidence": 0.98}
+  ],
+  "chapters_count": 10,
+  "chapters_preview": [
+    {"index": 1, "title": "第一章 少年", "char_count": 2840}
+  ],
+  "duration_estimate_seconds": 189.3,
+  "process_time_estimate_seconds": 28.4,
+  "preview_lines": ["第一章 少年", "..."]
+}
+```
+
+#### 3. Voice Audition Preview (`POST /api/tts/preview`)
+
+Generates a short audition snippet (~10 seconds, maximum 300 characters) for quick voice and speed evaluation before submitting a job.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/tts/preview \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Hello, this is an audio audition preview.",
+    "voice": "en-US-JennyNeural",
+    "speed": 1.0
+  }'
+```
+
+**Response:**
+```json
+{
+  "audio_base64": "<base64-encoded-audio>",
+  "mime_type": "audio/mpeg"
+}
+```
+
+---
+
+### Job Lifecycle
+
+#### 1. Create Job (`POST /api/jobs`)
+
+Creates an asynchronous generation job. Accepts JSON (`CreateJobJsonBody`) or multipart form data (`file` or `text`). Returns HTTP 202 with `job_id` and initial `status: "queued"`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `text` / `file` | string / file | *Required* | Exactly one of plain text string or uploaded file (`.txt` or `.srt`). |
+| `mode` | string | `"translate"` | `"translate"` (translate then narrate) or `"narrate"` (direct narration in source language, zero model cost). |
+| `source_language` | string | `"auto"` | BCP-47 language tag or `"auto"` (auto-detected via language detector). |
+| `target_language` | string | `""` | Target language tag. Required in `translate` mode. In `narrate` mode, optional (defaults to resolved source language). |
+| `voice` | string | `null` | Voice ID. If omitted, resolved via language-family fallback matching the language. |
+| `speed` | float | `1.0` | Speech rate multiplier (`0.5` to `2.0`). |
+| `output_format` | string | `"mp3"` | Audio output container: `"mp3"` or `"wav"`. |
+| `translation_profile_id` | string | `null` | Optional translation profile from capabilities. Allowed in `translate` mode; rejected in `narrate` mode. |
+
+**Narrate Mode Example (Direct Narration Without Translation):**
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This story is narrated directly in the original language without translation...",
+    "mode": "narrate",
+    "source_language": "en-US",
+    "output_format": "mp3"
+  }'
+```
+
+**Translate Mode Example:**
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Once upon a time in a faraway kingdom...",
+    "mode": "translate",
+    "source_language": "en-US",
+    "target_language": "vi-VN",
+    "output_format": "mp3"
+  }'
+```
+*Note:* In `translate` mode, if `source_language == target_language`, translation is automatically bypassed using pass-through checkpoints.
+
+#### 2. Get Job Status (`GET /api/jobs/{job_id}`)
+
+Polls current progress, stage, chunk counters, error details, and artifact download links.
+
+```bash
+curl -sS http://127.0.0.1:8000/api/jobs/${JOB_ID}
+```
+
+**Response:**
+```json
+{
+  "job_id": "c9a646d3-9c61-4cc9-bc07-7b833ef1cbbe",
+  "status": "completed",
+  "stage": "completed",
+  "mode": "narrate",
+  "chunk_current": 4,
+  "chunk_total": 4,
+  "source_language": "vi-VN",
+  "target_language": "vi-VN",
+  "voice": "vi-VN-HoaiMyNeural",
+  "speed": 1.0,
+  "output_format": "mp3",
+  "audio_url": "/api/jobs/c9a646d3-9c61-4cc9-bc07-7b833ef1cbbe/audio",
+  "subtitles_url": "/api/jobs/c9a646d3-9c61-4cc9-bc07-7b833ef1cbbe/subtitles",
+  "error_type": null,
+  "message": null
+}
+```
+
+#### 3. Download Artifacts
+
+- **Audio:** `GET /api/jobs/{job_id}/audio` — streams the generated audiobook (`audio/mpeg` or `audio/wav`) with HTTP Range (206) seek support.
+- **Subtitles:** `GET /api/jobs/{job_id}/subtitles` — downloads timed SubRip subtitles (`.srt`) aligned with narration timestamps.
+
+#### 4. Retry Failed Job (`POST /api/jobs/{job_id}/retry`)
+
+Retries a job in `failed` status from its last valid checkpoint without repeating completed chunks. Returns HTTP 202.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/jobs/${JOB_ID}/retry
 ```
 
 ## Troubleshooting

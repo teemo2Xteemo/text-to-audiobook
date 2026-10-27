@@ -25,3 +25,36 @@ Narration can be unit-tested with plain strings. Providers can change without re
 
 - Prompt an LLM to “write a script and speak it” in one call — rejected for MVP cost/CPU and weak retry granularity.
 - TTS SSML-only, skip narration — insufficient for punctuation/number normalization across providers.
+
+## Addendum: Narrate Mode & Pass-Through Pipeline (2026-10-28)
+
+### Context
+
+Users often wish to generate audiobooks from source text directly without translation (e.g. stories already in the intended listening language, or self-narrated material). Invoking translation models in this scenario incurs unnecessary latency, compute costs, and risks introducing hallucinations or altering phrasing. Furthermore, users requesting `translate` mode with identical source and target languages (`source == target`) should not trigger redundant model calls.
+
+### Decision
+
+1. **Job Modes (`JobMode`):**
+   - Introduce explicit job modes: `"translate"` (default) and `"narrate"`.
+   - **Narrate Mode:** Synthesizes speech directly from text/TXT in the source language without translation or LLM calls.
+   - In narrate mode, `target_language` defaults to the resolved `source_language`, and translation configuration (`translation_profile_id`) is rejected.
+
+2. **Same-Language Translate Bypass:**
+   - In translate mode, if `source_language == target_language` (for both plain text and SRT inputs), translation calls are bypassed automatically.
+
+3. **Pass-Through Chunks & Checkpoint Reuse (`_pass_through_chunks`):**
+   - Both Narrate mode and same-language Translate bypass reuse the orchestrator's pass-through chunk mechanism (`_pass_through_chunks`).
+   - The original chunks are copied to `chunks/<id>.translated.txt` and recorded under the `STAGE_TRANSLATED` checkpoint.
+   - This ensures full compatibility with the existing three-stage architecture: downstream narration formatting (`_narrate_chunks`), audio generation (`_generate_audio`), audio merging (`_finish_audio`), checkpoint resumption, and cache lookups execute identically without specialized branching.
+
+4. **Language-Family Voice Fallback & Dialect Separation:**
+   - Voice resolution (`resolve_voice`) falls back across regional variants within the same primary language family (e.g., falling back to `zh-CN` or `zh-TW` for generic `zh`) based on configured preferences (`FAMILY_PREFERENCES`).
+   - **Bidirectional Cantonese/Mandarin Separation:** Cross-fallback between Cantonese (`zh-HK`, `zh-MO`, `zh-yue`, `yue`) and Mandarin (`zh`, `zh-CN`, `zh-TW`, `cmn`) is strictly forbidden in both directions.
+   - **Dialect Voice Exclusion:** Regional dialect voices (e.g., Liaoning, Shaanxi, Shandong, Sichuan) are excluded from generic Mandarin fallback unless explicitly selected by the user.
+
+### Consequences
+
+- Zero model cost and near-instant initial pipeline progression for direct narration.
+- Checkpoint persistence and resume behavior remain completely unified across both modes.
+- Narration text processing continues to clean symbols, format numbers, and insert natural punctuation pauses before TTS synthesis.
+
