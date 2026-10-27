@@ -51,6 +51,10 @@ def build_job_service(settings: Settings) -> JobService:
     filesystem, store, queue = _infrastructure(settings)
     provider, model = translation_pin_from_settings(settings)
     profiles = build_available_translation_profiles(settings)
+    try:
+        tts: TTSProvider | None = build_tts_provider(settings)
+    except ProviderConfigurationError:
+        tts = None
     return JobService(
         jobs=store,
         source_storage=filesystem,
@@ -62,7 +66,7 @@ def build_job_service(settings: Settings) -> JobService:
         translation_provider=provider,
         translation_model=model,
         available_profiles=profiles,
-        tts=build_tts_provider(settings),
+        tts=tts,
         detector=build_language_detector(settings),
     )
 

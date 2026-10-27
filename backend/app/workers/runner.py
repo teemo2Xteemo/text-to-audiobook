@@ -110,8 +110,23 @@ async def _process_job_async(job_id: str) -> None:
                             settings_for_translation_pin(settings, fresh),
                             translation_provider=NullTranslationProvider(),
                         )
-                    except TypeError:
-                        raise exc
+                    except (TypeError, ProviderConfigurationError) as fallback_exc:
+                        final_exc = (
+                            fallback_exc
+                            if isinstance(fallback_exc, ProviderConfigurationError)
+                            else exc
+                        )
+                        logger.error(
+                            "worker_provider_configuration_error",
+                            extra={"job_id": job_id, "error": str(final_exc)},
+                        )
+                        service = build_job_service(settings)
+                        await service.mark_failed(
+                            job_id,
+                            ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                            str(final_exc),
+                        )
+                        return
                 else:
                     logger.error(
                         "worker_provider_configuration_error",
