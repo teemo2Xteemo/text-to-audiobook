@@ -156,18 +156,15 @@ async def retry_job(
     return JobCreatedResponse(job_id=retried.id, status=retried.status)
 
 
-@router.post("/api/detect-language", response_model=DetectLanguageResponse)
-async def detect_language(
-    request: Request,
-    settings: Settings = Depends(get_settings),
-    detector: LanguageDetector = Depends(get_language_detector),
-) -> DetectLanguageResponse:
-    text = await parse_detect_language(request, settings.max_upload_bytes)
-    slice_text = text[:8192]
-    candidates_raw = await detector.detect_candidates(slice_text)
+async def _resolve_language_candidates(
+    sample: str,
+    detector: LanguageDetector,
+    threshold: float,
+) -> tuple[str, float, bool, list[LanguageCandidate]]:
+    candidates_raw = await detector.detect_candidates(sample)
     if not candidates_raw:
         try:
-            detected = await detector.detect(slice_text)
+            detected = await detector.detect(sample)
             candidates_raw = [(detected.language_code, detected.confidence)]
         except DomainError:
             candidates_raw = []
@@ -178,12 +175,26 @@ async def detect_language(
     if candidates:
         top_lang = candidates[0].language
         top_conf = candidates[0].confidence
-        needs_confirmation = top_conf < settings.language_confirm_threshold
+        needs_confirmation = top_conf < threshold
     else:
         top_lang = "unknown"
         top_conf = 0.0
         needs_confirmation = True
 
+    return top_lang, top_conf, needs_confirmation, candidates
+
+
+@router.post("/api/detect-language", response_model=DetectLanguageResponse)
+async def detect_language(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    detector: LanguageDetector = Depends(get_language_detector),
+) -> DetectLanguageResponse:
+    text = await parse_detect_language(request, settings.max_upload_bytes)
+    slice_text = text[:8192]
+    top_lang, top_conf, needs_confirmation, candidates = await _resolve_language_candidates(
+        slice_text, detector, settings.language_confirm_threshold
+    )
     preview_lines = [line.strip() for line in slice_text.splitlines() if line.strip()][:5]
     return DetectLanguageResponse(
         language=top_lang,
@@ -202,25 +213,9 @@ async def analyze_text(
 ) -> AnalyzeResponse:
     text, encoding = await parse_analyze(request, settings)
     slice_text = text[:8192]
-    candidates_raw = await detector.detect_candidates(slice_text)
-    if not candidates_raw:
-        try:
-            detected = await detector.detect(slice_text)
-            candidates_raw = [(detected.language_code, detected.confidence)]
-        except DomainError:
-            candidates_raw = []
-
-    candidates = [
-        LanguageCandidate(language=lang, confidence=conf) for lang, conf in candidates_raw
-    ]
-    if candidates:
-        top_lang = candidates[0].language
-        top_conf = candidates[0].confidence
-        needs_confirmation = top_conf < settings.language_confirm_threshold
-    else:
-        top_lang = "unknown"
-        top_conf = 0.0
-        needs_confirmation = True
+    top_lang, top_conf, needs_confirmation, candidates = await _resolve_language_candidates(
+        slice_text, detector, settings.language_confirm_threshold
+    )
 
     chapters = split_chapters(text)
     chapters_count = len(chapters)
@@ -233,7 +228,7 @@ async def analyze_text(
         char_len / max(1.0, float(settings.estimate_chars_per_second)), 1
     )
     process_time_estimate_seconds = round(duration_estimate_seconds * 0.15, 1)
-    preview_lines = [line.strip() for line in text.splitlines() if line.strip()][:5]
+    preview_lines = [line.strip() for line in slice_text.splitlines() if line.strip()][:5]
 
     return AnalyzeResponse(
         encoding=encoding,
