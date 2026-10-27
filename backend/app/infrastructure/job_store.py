@@ -4,8 +4,6 @@ import logging
 from contextlib import suppress
 from typing import Protocol
 
-from redis.exceptions import RedisError
-
 from app.domain.jobs import Job
 from app.infrastructure.fs_storage import FilesystemJobStorage
 
@@ -21,7 +19,12 @@ class JobStatusCache(Protocol):
 
 
 class DualWriteJobStore:
-    """Filesystem status.json is source of truth; Redis is a write-through GET hint."""
+    """Filesystem status.json is source of truth (ADR/M12); Redis is write-through with read-repair.
+
+    Per project architecture, disk status.json is strictly authoritative over Redis to
+    prevent a stale terminal Redis status from masking a re-queued job after retry.
+    Redis is compared during GET to self-heal (read-repair) any cache discrepancies.
+    """
 
     def __init__(self, filesystem: FilesystemJobStorage, cache: JobStatusCache) -> None:
         self._filesystem = filesystem
@@ -39,7 +42,12 @@ class DualWriteJobStore:
     async def get(self, job_id: str) -> Job | None:
         try:
             cached = await self._cache.get(job_id)
-        except RedisError:
+        except Exception:
+            logger.warning(
+                "job_cache_read_failed",
+                extra={"job_id": job_id, "chunk_id": None},
+                exc_info=True,
+            )
             cached = None
         job = await self._filesystem.get_job(job_id)
         if job is not None:

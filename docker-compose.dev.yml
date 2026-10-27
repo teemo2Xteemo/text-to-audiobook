@@ -1,0 +1,29 @@
+# Dev-only overlay. Default `docker compose up` / `make up` runs the code baked
+# into the image. This file bind-mounts the host checkout so api and worker
+# execute that tree, and reloads the API process when Python files change.
+#
+# Dependencies still come from the image. Rebuild when pyproject or Dockerfiles
+# change. The worker does not reload; restart it after worker code changes.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build redis api worker
+#   make dev-hybrid
+services:
+  api:
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+        "--reload-dir",
+        "/app/app",
+      ]
+    volumes:
+      - ./backend/app:/app/app:ro
+
+  worker:
+    volumes:
+      - ./backend/app:/app/app:ro

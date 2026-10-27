@@ -68,7 +68,21 @@ def test_factory_builds_edge_provider_without_calling_sdk(tmp_path: Path) -> Non
     provider = build_tts_provider(settings)
     assert isinstance(provider, EdgeTTSProvider)
     assert provider._defaults == {"ja-JP": "ja-JP-AdapterANeural"}
-    assert isinstance(build_audio_processor(settings), FFmpegAudioProcessor)
+    processor = build_audio_processor(settings)
+    assert isinstance(processor, FFmpegAudioProcessor)
+    assert processor._encode_timeout_ceiling_seconds == 1800.0
+
+
+def test_ffmpeg_processor_ceiling_follows_job_timeout(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        tts_provider="edge",
+        rq_job_timeout_seconds=3600,
+    )
+    processor = build_audio_processor(settings)
+    assert isinstance(processor, FFmpegAudioProcessor)
+    assert processor._encode_timeout_ceiling_seconds == 3600.0
 
 
 def test_factory_builds_conservative_narration() -> None:
@@ -545,3 +559,154 @@ def test_build_available_translation_profiles_omits_nllb_when_packages_missing(
     profiles = build_available_translation_profiles(settings)
     ids = [p.id for p in profiles]
     assert not any("nllb" in pid for pid in ids)
+
+
+def test_build_translation_provider_groq_missing_and_present_key() -> None:
+    from app.config.factory import ProviderConfigurationError
+    from app.providers.translation.openai_compatible import GroqTranslationProvider
+
+    settings_no_key = Settings(_env_file=None, translation_provider="groq", groq_api_key=None)
+    with pytest.raises(ProviderConfigurationError, match="GROQ_API_KEY is required"):
+        build_translation_provider(settings_no_key)
+
+    settings_with_key = Settings(
+        _env_file=None, translation_provider="groq", groq_api_key="gsk_valid_key"
+    )
+    provider = build_translation_provider(settings_with_key)
+    assert isinstance(provider, GroqTranslationProvider)
+
+
+def test_build_translation_provider_openrouter_missing_and_present_key() -> None:
+    from app.config.factory import ProviderConfigurationError
+    from app.providers.translation.openai_compatible import OpenRouterTranslationProvider
+
+    settings_no_key = Settings(
+        _env_file=None, translation_provider="openrouter", openrouter_api_key=None
+    )
+    with pytest.raises(ProviderConfigurationError, match="OPENROUTER_API_KEY is required"):
+        build_translation_provider(settings_no_key)
+
+    settings_with_key = Settings(
+        _env_file=None, translation_provider="openrouter", openrouter_api_key="sk-or-valid_key"
+    )
+    provider = build_translation_provider(settings_with_key)
+    assert isinstance(provider, OpenRouterTranslationProvider)
+
+
+def test_translation_pin_from_settings_groq_and_openrouter() -> None:
+    settings_groq = Settings(
+        _env_file=None,
+        translation_provider="groq",
+        groq_translation_model="qwen/qwen3.8-27b",
+    )
+    assert translation_pin_from_settings(settings_groq) == ("groq", "qwen/qwen3.8-27b")
+
+    settings_or = Settings(
+        _env_file=None,
+        translation_provider="openrouter",
+        openrouter_translation_model="openrouter/auto",
+    )
+    assert translation_pin_from_settings(settings_or) == (
+        "openrouter",
+        "openrouter/auto",
+    )
+
+
+def test_build_available_translation_profiles_with_groq_and_openrouter() -> None:
+    from app.config.factory import build_available_translation_profiles
+
+    settings = Settings(
+        _env_file=None,
+        translation_provider="groq",
+        groq_api_key="gsk_key",
+        openrouter_api_key="sk-or-key",
+    )
+    profiles = build_available_translation_profiles(settings)
+    ids = [p.id for p in profiles]
+    assert "groq-qwen" in ids
+    assert "groq-gpt-oss-120b" in ids
+    assert "groq-gpt-oss-20b" in ids
+    assert "groq-llama-70b" not in ids
+    assert "groq-llama-8b" not in ids
+    assert "openrouter-auto" in ids
+    by_id = {profile.id: profile for profile in profiles}
+    assert by_id["groq-qwen"].model == "qwen/qwen3.8-27b"
+    assert by_id["groq-gpt-oss-120b"].model == "openai/gpt-oss-120b"
+    assert by_id["groq-gpt-oss-120b"].label == "Groq (GPT-OSS 120B)"
+    assert by_id["groq-gpt-oss-20b"].model == "openai/gpt-oss-20b"
+    assert by_id["groq-gpt-oss-20b"].label == "Groq (GPT-OSS 20B)"
+    assert all("llama-3" not in profile.model for profile in profiles)
+
+    # Default profile matches configured translation_provider
+    default_p = next(p for p in profiles if p.is_default)
+    assert default_p.provider == "groq"
+    assert default_p.model == "qwen/qwen3.8-27b"
+
+
+def test_retired_groq_model_pin_is_rewritten() -> None:
+    settings = Settings(
+        _env_file=None,
+        translation_provider="groq",
+        groq_api_key="gsk_key",
+        groq_translation_model="llama-3.3-70b-versatile",
+    )
+    assert translation_pin_from_settings(settings) == ("groq", "openai/gpt-oss-120b")
+    assert cache_identity_from_settings(settings).translation_model == "openai/gpt-oss-120b"
+
+    job = Job(
+        id="11111111-1111-4111-8111-111111111111",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="vi-VN",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        translation_provider="groq",
+        translation_model="llama-3.1-8b-instant",
+    )
+    pinned = settings_for_translation_pin(settings, job)
+    assert pinned.groq_translation_model == "openai/gpt-oss-20b"
+    provider = build_translation_provider(pinned)
+    from app.providers.translation.openai_compatible import GroqTranslationProvider
+
+    assert isinstance(provider, GroqTranslationProvider)
+    assert provider._model == "openai/gpt-oss-20b"
+
+
+def test_openrouter_deepseek_v4_flash_is_the_default_profile() -> None:
+    from app.config.factory import build_available_translation_profiles
+
+    settings = Settings(
+        _env_file=None,
+        translation_provider="openrouter",
+        openrouter_api_key="sk-or-key",
+    )
+    assert settings.openrouter_translation_model == "deepseek/deepseek-v4-flash"
+    assert translation_pin_from_settings(settings) == (
+        "openrouter",
+        "deepseek/deepseek-v4-flash",
+    )
+    profiles = build_available_translation_profiles(settings)
+    by_id = {profile.id: profile for profile in profiles}
+    deepseek = by_id["openrouter-deepseek-v4-flash"]
+    assert deepseek.model == "deepseek/deepseek-v4-flash"
+    assert deepseek.provider == "openrouter"
+    assert deepseek.label == "OpenRouter (DeepSeek V4 Flash)"
+    assert deepseek.is_default is True
+    assert by_id["openrouter-auto"].is_default is False
+
+    stored = Job(
+        id="11111111-1111-4111-8111-111111111111",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="vi-VN",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        translation_provider="openrouter",
+        translation_model="openrouter/auto",
+    )
+    pinned = settings_for_translation_pin(settings, stored)
+    assert pinned.openrouter_translation_model == "openrouter/auto"

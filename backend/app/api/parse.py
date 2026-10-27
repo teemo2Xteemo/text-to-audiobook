@@ -129,6 +129,8 @@ def _decode_source_text(raw: bytes, max_upload_bytes: int) -> str:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise DomainError(ErrorType.INVALID_INPUT, "source text must be UTF-8") from exc
+    if "\x00" in text:
+        raise DomainError(ErrorType.INVALID_INPUT, "source text must not contain null bytes")
     if text.startswith("\ufeff"):
         text = text[1:]
     return text.replace("\r\n", "\n").replace("\r", "\n")
@@ -137,6 +139,8 @@ def _decode_source_text(raw: bytes, max_upload_bytes: int) -> str:
 def _assert_safe_txt_filename(filename: str | None) -> None:
     if filename is None or not filename.strip():
         raise DomainError(ErrorType.INVALID_INPUT, "filename is required")
+    if "\x00" in filename:
+        raise DomainError(ErrorType.INVALID_INPUT, "filename must not contain null bytes")
     normalized = filename.replace("\\", "/")
     if ".." in normalized.split("/"):
         raise DomainError(ErrorType.INVALID_INPUT, "filename must not contain path traversal")

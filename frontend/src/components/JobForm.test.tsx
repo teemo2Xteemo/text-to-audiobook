@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -246,5 +246,54 @@ describe("JobForm", () => {
         translation_profile_id: undefined,
       }),
     );
+  });
+
+  it("rejects unsupported file formats and displays an error", () => {
+    const onSubmit = vi.fn();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    const badFile = new File(["binary content"], "program.exe", {
+      type: "application/x-msdownload",
+    });
+    const input = screen.getByLabelText(/upload a/i);
+    fireEvent.change(input, { target: { files: [badFile] } });
+    expect(
+      screen.getByText("Only .txt, .srt, and .vtt files are supported."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("rejects files that exceed the 2MB size limit", () => {
+    const onSubmit = vi.fn();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    const bigFile = new File(["x".repeat(100)], "huge.txt", { type: "text/plain" });
+    Object.defineProperty(bigFile, "size", { value: 3 * 1024 * 1024 });
+    const input = screen.getByLabelText(/upload a/i);
+    fireEvent.change(input, { target: { files: [bigFile] } });
+    expect(
+      screen.getByText(/File exceeds maximum allowed size of 2 MB/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid files dropped via drag and drop", () => {
+    const onSubmit = vi.fn();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    const badFile = new File(["binary content"], "archive.zip", {
+      type: "application/zip",
+    });
+    const dropzone = screen.getByText(/Or upload a \.txt or \.srt file/i).closest(".upload-dropzone");
+    expect(dropzone).not.toBeNull();
+    fireEvent.drop(dropzone!, {
+      dataTransfer: {
+        files: [badFile],
+      },
+    });
+    expect(
+      screen.getByText("Only .txt, .srt, and .vtt files are supported."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

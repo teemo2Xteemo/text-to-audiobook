@@ -14,17 +14,63 @@ function isEnvelope(value: unknown): value is { error_type: string; message: str
   return typeof record.error_type === "string" && typeof record.message === "string";
 }
 
-async function parseError(response: Response): Promise<never> {
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw new ApiError("INVALID_INPUT", "request failed", response.status);
+function extractDetailMessage(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) {
+    return null;
   }
+  const record = body as { detail?: unknown };
+  if (typeof record.detail === "string") {
+    return record.detail;
+  }
+  if (Array.isArray(record.detail)) {
+    const messages = record.detail
+      .map((item) => {
+        if (typeof item === "object" && item !== null && "msg" in item && typeof item.msg === "string") {
+          return item.msg;
+        }
+        return typeof item === "string" ? item : "";
+      })
+      .filter(Boolean);
+    if (messages.length > 0) {
+      return messages.join("; ");
+    }
+  }
+  return null;
+}
+
+async function parseError(response: Response): Promise<never> {
+  const defaultErrorType = response.status >= 500 ? "INTERNAL_ERROR" : "INVALID_INPUT";
+  let body: unknown = null;
+  let rawText = "";
+
+  try {
+    rawText = await response.text();
+    body = JSON.parse(rawText);
+  } catch {
+    const trimmed = rawText.trim();
+    const message =
+      trimmed.length > 0 && trimmed.length < 200 && !trimmed.startsWith("<")
+        ? trimmed
+        : response.status >= 500
+          ? `server error (${response.status})`
+          : "request failed";
+    throw new ApiError(defaultErrorType, message, response.status);
+  }
+
   if (isEnvelope(body)) {
     throw new ApiError(body.error_type, body.message, response.status);
   }
-  throw new ApiError("INVALID_INPUT", "request failed", response.status);
+
+  const detailMsg = extractDetailMessage(body);
+  if (detailMsg) {
+    throw new ApiError(defaultErrorType, detailMsg, response.status);
+  }
+
+  throw new ApiError(
+    defaultErrorType,
+    response.status >= 500 ? `server error (${response.status})` : "request failed",
+    response.status,
+  );
 }
 
 async function parseJson<T>(response: Response): Promise<T> {

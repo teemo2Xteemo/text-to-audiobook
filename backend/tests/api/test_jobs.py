@@ -57,6 +57,15 @@ def memory(
                 description="desc",
                 supported_languages=("en-US", "vi-VN"),
             ),
+            TranslationProfile(
+                id="groq-qwen",
+                provider="groq",
+                model="qwen/qwen3.8-27b",
+                label="Groq Qwen",
+                badge="ONLINE",
+                description="Specialized Asian stories",
+                supported_languages=("en-US", "ja-JP", "vi-VN", "zh-CN", "ar-SA"),
+            ),
         ],
     )
     return service, store, source, queue
@@ -104,6 +113,26 @@ def test_post_with_translation_profile_id_resolves_profile(
     assert status.status_code == 200
     assert status.json()["translation_provider"] == "gemini"
     assert status.json()["translation_model"] == "gemini-3.5-flash"
+
+
+def test_post_with_groq_profile_resolves_profile(
+    jobs_client: TestClient,
+) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": "林动深吸了一口气",
+            "source_language": "auto",
+            "target_language": "ar-SA",
+            "translation_profile_id": "groq-qwen",
+        },
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    status = jobs_client.get(f"/api/jobs/{job_id}")
+    assert status.status_code == 200
+    assert status.json()["translation_provider"] == "groq"
+    assert status.json()["translation_model"] == "qwen/qwen3.8-27b"
 
 
 def test_post_with_unknown_translation_profile_id_fails(
@@ -243,6 +272,21 @@ def test_post_rejects_bad_mime(jobs_client: TestClient) -> None:
     )
     assert response.status_code == 400
     assert response.json()["error_type"] == ErrorType.INVALID_INPUT
+
+
+def test_post_rejects_null_bytes(jobs_client: TestClient) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": "Hello\x00World",
+            "source_language": "en-US",
+            "target_language": "ja-JP",
+        },
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error_type"] == ErrorType.INVALID_INPUT
+    assert "null byte" in body["message"]
 
 
 def test_post_rejects_oversize_text(jobs_client: TestClient) -> None:

@@ -69,6 +69,7 @@ class AudioProcessor(Protocol):
         *,
         output_format: OutputFormat,
         bitrate_kbps: int,
+        full_encode: bool = False,
     ) -> AudioArtifact: ...
 
     async def merge(

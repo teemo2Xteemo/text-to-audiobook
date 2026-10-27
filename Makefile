@@ -9,7 +9,7 @@ RUFF_CACHE_DIR ?= /tmp/.ruff_cache
 NPM ?= npm
 DOCKER_COMPOSE ?= docker compose
 
-.PHONY: help setup up up-build down restart logs build dev-hybrid \
+.PHONY: help setup up up-build down restart logs build dev-hybrid dev-hybrid-build \
 	test-backend test-frontend test lint-backend format-backend typecheck-frontend lint check clean
 
 help: ## Hiển thị hướng dẫn và danh sách các lệnh
@@ -49,10 +49,14 @@ logs: ## Xem log các container theo thời gian thực
 build: ## Build lại các Docker images cho dự án
 	$(DOCKER_COMPOSE) build
 
-dev-hybrid: ## Rebuild image backend (redis, api, worker) rồi chạy Vite trên host
+dev-hybrid: ## Rebuild backend với mount code dev, rồi chạy Vite trên host
 	@if [ ! -f .env ]; then cp -n .env.example .env && echo "Da khoi tao .env tu .env.example"; fi
-	$(DOCKER_COMPOSE) up -d --build redis api worker
+	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up -d --build redis api worker
 	cd frontend && $(NPM) run dev
+
+dev-hybrid-build: ## Alias cũ của dev-hybrid (in cảnh báo rồi chạy dev-hybrid)
+	@echo "note: dev-hybrid-build is a deprecated alias of dev-hybrid"
+	@$(MAKE) dev-hybrid
 
 test-backend: ## Chạy unit test backend với pytest
 	$(PYTEST) -m "not integration"

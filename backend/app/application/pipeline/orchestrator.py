@@ -306,11 +306,14 @@ class PipelineOrchestrator:
 
         destination = workspace / f"output.{ext}"
         if job.output_format is OutputFormat.MP3:
+            # Re-encodes the merged timeline. The processor scales this call
+            # with duration, up to the worker job timeout. Chunk calls stay short.
             await self._audio.normalize(
                 timeline_wav,
                 destination,
                 output_format=OutputFormat.MP3,
                 bitrate_kbps=job.output_bitrate_kbps,
+                full_encode=True,
             )
         else:
             if destination != timeline_wav:

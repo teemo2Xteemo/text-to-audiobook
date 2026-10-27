@@ -12,12 +12,20 @@ class ErrorType(StrEnum):
     TIMEOUT = "TIMEOUT"
     WORKER_FAILED = "WORKER_FAILED"
     PROVIDER_CONFIGURATION_ERROR = "PROVIDER_CONFIGURATION_ERROR"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
 class DomainError(Exception):
     """User-facing domain failure with a stable error_type code."""
 
-    def __init__(self, error_type: ErrorType, message: str) -> None:
+    def __init__(
+        self,
+        error_type: ErrorType,
+        message: str,
+        *,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.error_type = error_type
         self.message = message
+        self.retry_after_seconds = retry_after_seconds

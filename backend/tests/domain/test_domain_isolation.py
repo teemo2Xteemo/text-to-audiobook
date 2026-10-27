@@ -36,6 +36,7 @@ def test_error_type_codes_match_backend_rule() -> None:
         "TIMEOUT",
         "WORKER_FAILED",
         "PROVIDER_CONFIGURATION_ERROR",
+        "INTERNAL_ERROR",
     }
 
 

@@ -10,7 +10,7 @@ from rq.timeouts import JobTimeoutException
 
 from app.config.factory import ProviderConfigurationError, build_job_service
 from app.config.settings import Settings
-from app.domain.errors import ErrorType
+from app.domain.errors import DomainError, ErrorType
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,8 @@ def _domain_job_id(job: Any) -> str | None:
 
 
 def _map_error(exc_type: Any, exc_value: Any, timeout_seconds: int) -> tuple[ErrorType, str]:
+    if isinstance(exc_value, DomainError):
+        return exc_value.error_type, exc_value.message
     if exc_type is JobTimeoutException or isinstance(exc_value, JobTimeoutException):
         return ErrorType.TIMEOUT, f"job exceeded the worker timeout ({timeout_seconds}s)"
     if exc_type is ProviderConfigurationError or isinstance(exc_value, ProviderConfigurationError):

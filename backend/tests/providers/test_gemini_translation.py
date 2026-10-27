@@ -297,3 +297,23 @@ async def test_translate_strips_markdown_code_fences() -> None:
     provider = _provider(http=fake_http)
     result = await provider.translate("Story chapter", "en-US", "vi-VN")
     assert result == "Truyện đã dịch sạch sẽ."
+
+
+@pytest.mark.anyio
+async def test_translate_strips_markdown_code_fences_with_crlf_and_spaces() -> None:
+    fake_http = FakeGeminiHttp(
+        response_data={
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {
+                        "parts": [{"text": "```markdown  \r\nTruyện CRLF sạch sẽ.\r\n```  "}],
+                        "role": "model",
+                    },
+                }
+            ]
+        }
+    )
+    provider = _provider(http=fake_http)
+    result = await provider.translate("Story chapter", "en-US", "vi-VN")
+    assert result == "Truyện CRLF sạch sẽ."

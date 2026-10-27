@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     gemini_translation_model: str = Field(default="gemini-3.5-flash", min_length=1)
     gemini_base_url: str = Field(default="https://generativelanguage.googleapis.com")
     gemini_http_timeout_seconds: float = Field(default=60.0, gt=0)
+    groq_api_key: SecretStr | None = Field(default=None)
+    groq_translation_model: str = Field(default="qwen/qwen3.8-27b", min_length=1)
+    groq_base_url: str = Field(default="https://api.groq.com/openai/v1")
+    groq_http_timeout_seconds: float = Field(default=60.0, gt=0)
+    openrouter_api_key: SecretStr | None = Field(default=None)
+    openrouter_translation_model: str = Field(default="deepseek/deepseek-v4-flash", min_length=1)
+    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
+    openrouter_http_timeout_seconds: float = Field(default=60.0, gt=0)
     language_detect_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     tts_default_voice_by_language: str = Field(default="")
     retry_max_attempts: int = Field(default=3, ge=1)
@@ -79,4 +87,20 @@ class Settings(BaseSettings):
         url = value.strip()
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("GEMINI_BASE_URL must be an http or https URL")
+        return url
+
+    @field_validator("groq_base_url")
+    @classmethod
+    def groq_base_url_must_be_http(cls, value: str) -> str:
+        url = value.strip()
+        if not url.lower().startswith(("http://", "https://")):
+            raise ValueError("GROQ_BASE_URL must be an http or https URL")
+        return url
+
+    @field_validator("openrouter_base_url")
+    @classmethod
+    def openrouter_base_url_must_be_http(cls, value: str) -> str:
+        url = value.strip()
+        if not url.lower().startswith(("http://", "https://")):
+            raise ValueError("OPENROUTER_BASE_URL must be an http or https URL")
         return url

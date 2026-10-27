@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 
 import type { Capabilities, CreateJobInput, OutputFormat, Voice } from "../api/types";
-import { AUTO_SOURCE_LANGUAGE, SPEED_DEFAULT, SPEED_MAX, SPEED_MIN } from "../lib/constants";
+import {
+  ALLOWED_FILE_EXTENSIONS,
+  AUTO_SOURCE_LANGUAGE,
+  MAX_FILE_SIZE_BYTES,
+  SPEED_DEFAULT,
+  SPEED_MAX,
+  SPEED_MIN,
+} from "../lib/constants";
 import { envDefaultSourceLanguage, envDefaultTargetLanguage } from "../lib/env";
 import {
   canGenerate,
@@ -56,6 +63,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("mp3");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [uploadedDisplayName, setUploadedDisplayName] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -177,6 +185,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     if (value.trim()) {
       setFile(null);
       setUploadedDisplayName(null);
+      setFileError(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -191,12 +200,36 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     setText(cleaned);
   }
 
+  function validateFile(candidate: File): string | null {
+    const lowerName = candidate.name.toLowerCase();
+    const isAllowedExt = ALLOWED_FILE_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+    if (!isAllowedExt) {
+      return "Only .txt, .srt, and .vtt files are supported.";
+    }
+    if (candidate.size > MAX_FILE_SIZE_BYTES) {
+      return `File exceeds maximum allowed size of 2 MB (${formatFileSize(candidate.size)}).`;
+    }
+    return null;
+  }
+
   function handleFileChange(next: File | null) {
     if (!next) {
       setFile(null);
       setUploadedDisplayName(null);
+      setFileError(null);
       return;
     }
+    const err = validateFile(next);
+    if (err) {
+      setFile(null);
+      setUploadedDisplayName(null);
+      setFileError(err);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      return;
+    }
+    setFileError(null);
     setText("");
     setFile(next);
     setUploadedDisplayName(next.name);
@@ -205,6 +238,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   function handleRemoveFile() {
     setFile(null);
     setUploadedDisplayName(null);
+    setFileError(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -624,6 +658,20 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
               accept=".txt,.srt,.vtt,text/plain,text/vtt"
               onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
             />
+
+            {fileError ? (
+              <div
+                className="upload-error-msg"
+                role="alert"
+                style={{
+                  color: "var(--destructive, #dc2626)",
+                  fontSize: "0.85rem",
+                  marginTop: "0.5rem",
+                }}
+              >
+                {fileError}
+              </div>
+            ) : null}
 
             {file ? (
               <div className="selected-file-pill" aria-live="polite">

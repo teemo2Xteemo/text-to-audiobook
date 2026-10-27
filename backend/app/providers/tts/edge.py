@@ -39,9 +39,15 @@ class EdgeTTSProvider:
         self._defaults = dict(default_voice_by_language or {})
         self._client = client if client is not None else SdkEdgeTtsClient()
         self._voices: list[Voice] | None = None
+        self._voices_by_language: dict[str, list[Voice]] | None = None
 
     def voices_for(self, language: str) -> Sequence[Voice]:
-        matched = [voice for voice in self._all_voices() if voice.language == language]
+        if self._voices_by_language is None:
+            indexed: dict[str, list[Voice]] = {}
+            for voice in self._all_voices():
+                indexed.setdefault(voice.language, []).append(voice)
+            self._voices_by_language = indexed
+        matched = self._voices_by_language.get(language, [])
         preferred_id = self._defaults.get(language)
         if not preferred_id:
             return matched
@@ -94,8 +100,14 @@ class EdgeTTSProvider:
         return self._voices
 
 
+DEFAULT_EDGE_TTS_TIMEOUT_SECONDS = 60.0
+
+
 class SdkEdgeTtsClient:
     """Lazy ``edge_tts`` wrapper. Imported only when listing or synthesizing."""
+
+    def __init__(self, timeout_seconds: float = DEFAULT_EDGE_TTS_TIMEOUT_SECONDS) -> None:
+        self._timeout_seconds = timeout_seconds
 
     def list_voices(self) -> Sequence[Mapping[str, Any]]:
         import edge_tts
@@ -106,7 +118,7 @@ class SdkEdgeTtsClient:
         import edge_tts
 
         communicate = edge_tts.Communicate(text, voice, rate=rate)
-        await communicate.save(str(output_path))
+        await asyncio.wait_for(communicate.save(str(output_path)), timeout=self._timeout_seconds)
 
 
 def _to_voice(record: Mapping[str, Any]) -> Voice:

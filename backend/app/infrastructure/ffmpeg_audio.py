@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -18,6 +20,14 @@ from app.infrastructure.ffmpeg import (
     write_concat_list,
 )
 
+logger = logging.getLogger(__name__)
+
+DEFAULT_FFMPEG_TIMEOUT_SECONDS = 120.0
+DEFAULT_FFPROBE_TIMEOUT_SECONDS = 30.0
+DEFAULT_ENCODE_TIMEOUT_CEILING_SECONDS = 1800.0
+# Wall-clock seconds allowed per second of audio for a long re-encode.
+_ENCODE_TIMEOUT_FACTOR = 4.0
+
 
 class FFmpegAudioProcessor:
     """Real FFmpeg normalize/merge/silence/duration/tempo for non-fake TTS."""
@@ -27,9 +37,11 @@ class FFmpegAudioProcessor:
         *,
         executable: str | None = None,
         ffprobe_executable: str | None = None,
+        encode_timeout_ceiling_seconds: float = DEFAULT_ENCODE_TIMEOUT_CEILING_SECONDS,
     ) -> None:
         self._executable = executable
         self._ffprobe_executable = ffprobe_executable
+        self._encode_timeout_ceiling_seconds = encode_timeout_ceiling_seconds
 
     async def normalize(
         self,
@@ -38,7 +50,10 @@ class FFmpegAudioProcessor:
         *,
         output_format: OutputFormat,
         bitrate_kbps: int,
+        full_encode: bool = False,
     ) -> AudioArtifact:
+        if not source.is_file():
+            raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, f"Audio file not found: {source}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         argv = normalize_argv(
             source,
@@ -47,7 +62,11 @@ class FFmpegAudioProcessor:
             bitrate_kbps=bitrate_kbps,
             executable=self._resolved_executable(),
         )
-        await run_ffmpeg_argv(argv)
+        if full_encode:
+            timeout = await self._full_encode_timeout(source)
+        else:
+            timeout = DEFAULT_FFMPEG_TIMEOUT_SECONDS
+        await run_ffmpeg_argv(argv, timeout_seconds=timeout)
         return AudioArtifact(path=destination)
 
     async def merge(
@@ -59,6 +78,11 @@ class FFmpegAudioProcessor:
         bitrate_kbps: int,
     ) -> AudioArtifact:
         del output_format, bitrate_kbps
+        if not sources:
+            raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "cannot merge empty audio sources")
+        for src in sources:
+            if not src.is_file():
+                raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, f"Audio file not found: {src}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         list_file = destination.parent / (destination.name + ".concat.txt")
         write_concat_list(list_file, sources)
@@ -100,7 +124,11 @@ class FFmpegAudioProcessor:
             bitrate_kbps=bitrate_kbps,
             executable=self._resolved_executable(),
         )
-        await run_ffmpeg_argv(argv)
+        timeout = scaled_subprocess_timeout_seconds(
+            max(duration_ms, 0) / 1000.0,
+            ceiling_seconds=self._encode_timeout_ceiling_seconds,
+        )
+        await run_ffmpeg_argv(argv, timeout_seconds=timeout)
         return AudioArtifact(path=destination)
 
     async def adjust_tempo(
@@ -152,8 +180,69 @@ class FFmpegAudioProcessor:
             raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffprobe is not available")
         return found
 
+    async def _full_encode_timeout(self, source: Path) -> float:
+        try:
+            duration_ms = await self.get_duration_ms(source)
+        except DomainError:
+            ceiling = self._encode_timeout_ceiling_seconds
+            unknown = {"timeout_ceiling": ceiling}
+            logger.warning("ffmpeg_encode_duration_unknown", extra=unknown)
+            if ceiling > 0:
+                return ceiling
+            return DEFAULT_FFMPEG_TIMEOUT_SECONDS
+        return scaled_subprocess_timeout_seconds(
+            duration_ms / 1000.0,
+            ceiling_seconds=self._encode_timeout_ceiling_seconds,
+        )
 
-async def run_ffmpeg_argv(argv: Sequence[str]) -> None:
+
+_PATH_PATTERN = re.compile(r"(?:/|[a-zA-Z]:[\\/])(?:[^\s:?*\"<>|\r\n]+[\\/])+[^\s:?*\"<>|\r\n]+")
+_POINTER_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
+
+
+def sanitize_ffmpeg_stderr(stderr_text: str) -> str:
+    """Sanitize FFmpeg/FFprobe stderr for client-facing error messages.
+
+    Redacts absolute filesystem paths and memory addresses to prevent information leakage,
+    while preserving the operational error diagnosis.
+    """
+    if not stderr_text:
+        return ""
+    cleaned = _POINTER_PATTERN.sub("<addr>", stderr_text)
+    cleaned = _PATH_PATTERN.sub("<path>", cleaned)
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    if len(lines) >= 2 and len(f"{lines[-2]} · {lines[-1]}") <= 200:
+        return f"{lines[-2]} · {lines[-1]}"
+    return lines[-1][:200]
+
+
+def scaled_subprocess_timeout_seconds(
+    duration_seconds: float,
+    *,
+    ceiling_seconds: float,
+    floor_seconds: float = DEFAULT_FFMPEG_TIMEOUT_SECONDS,
+) -> float:
+    """Timeout for one ffmpeg re-encode of ``duration_seconds`` of audio.
+
+    Short inputs stay at ``floor_seconds``. Longer inputs scale by
+    ``_ENCODE_TIMEOUT_FACTOR`` and stop at ``ceiling_seconds`` (the worker
+    job timeout). A ceiling below the floor is itself the limit.
+    """
+    duration = duration_seconds if duration_seconds > 0 else 0.0
+    scaled = max(floor_seconds, duration * _ENCODE_TIMEOUT_FACTOR)
+    if ceiling_seconds <= 0:
+        return floor_seconds
+    if ceiling_seconds < floor_seconds:
+        return ceiling_seconds
+    return min(scaled, ceiling_seconds)
+
+
+async def run_ffmpeg_argv(
+    argv: Sequence[str],
+    timeout_seconds: float = DEFAULT_FFMPEG_TIMEOUT_SECONDS,
+) -> None:
     try:
         process = await asyncio.create_subprocess_exec(
             *argv,
@@ -162,12 +251,28 @@ async def run_ffmpeg_argv(argv: Sequence[str]) -> None:
         )
     except FileNotFoundError as exc:
         raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffmpeg is not available") from exc
-    await process.communicate()
+    try:
+        _, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        extra_ctx = {"argv": list(argv), "timeout": timeout_seconds}
+        logger.error("ffmpeg_timed_out", extra=extra_ctx)
+        msg_timeout = "ffmpeg timed out after " + str(int(timeout_seconds)) + "s"
+        raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, msg_timeout) from None
     if process.returncode != 0:
-        raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffmpeg failed")
+        err_msg = stderr.decode("utf-8", errors="replace").strip()
+        extra_fail = {"argv": list(argv), "stderr": err_msg}
+        logger.error("ffmpeg_execution_failed", extra=extra_fail)
+        sanitized = sanitize_ffmpeg_stderr(err_msg)
+        msg = ("ffmpeg failed: " + sanitized) if sanitized else "ffmpeg failed"
+        raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, msg)
 
 
-async def run_ffprobe_argv(argv: Sequence[str]) -> str:
+async def run_ffprobe_argv(
+    argv: Sequence[str],
+    timeout_seconds: float = DEFAULT_FFPROBE_TIMEOUT_SECONDS,
+) -> str:
     try:
         process = await asyncio.create_subprocess_exec(
             *argv,
@@ -176,7 +281,20 @@ async def run_ffprobe_argv(argv: Sequence[str]) -> str:
         )
     except FileNotFoundError as exc:
         raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffprobe is not available") from exc
-    stdout, _ = await process.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        extra_ctx = {"argv": list(argv), "timeout": timeout_seconds}
+        logger.error("ffprobe_timed_out", extra=extra_ctx)
+        msg_timeout = "ffprobe timed out after " + str(int(timeout_seconds)) + "s"
+        raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, msg_timeout) from None
     if process.returncode != 0:
-        raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffprobe failed")
+        err_msg = stderr.decode("utf-8", errors="replace").strip()
+        extra_fail = {"argv": list(argv), "stderr": err_msg}
+        logger.error("ffprobe_execution_failed", extra=extra_fail)
+        sanitized = sanitize_ffmpeg_stderr(err_msg)
+        msg = ("ffprobe failed: " + sanitized) if sanitized else "ffprobe failed"
+        raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, msg)
     return stdout.decode("utf-8", errors="replace").strip()

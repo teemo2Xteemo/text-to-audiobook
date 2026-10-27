@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 from app.domain.cache import CACHE_OPERATIONS
@@ -29,7 +30,7 @@ class FilesystemArtifactCache:
             return
         destination = self._blob(operation, key)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        tmp = destination.with_name(f"{destination.name}.tmp")
+        tmp = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
         try:
             shutil.copyfile(source, tmp)
             tmp.replace(destination)

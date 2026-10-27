@@ -15,10 +15,19 @@ Chinese → Vietnamese is a common example, not the only supported pair. Languag
 
 **MVP & Extended Capabilities in place:**
 - **Core Pipeline (M1–M13):** FastAPI async jobs, Redis/RQ queue, domain ports, chunking with retry & checkpoint resume, translation/TTS caching, conservative narration, NLLB CPU adapter, Edge TTS + FFmpeg audio normalization, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
-- **Translation Adapters:** NLLB (CPU distilled), Ollama/TranslateGemma ([ADR 0011](docs/adr/0011-ollama-translategemma-optional-translation.md)), Google Gemini API (`TRANSLATION_PROVIDER=gemini`), and offline fakes.
+- **Translation Adapters:** NLLB (CPU distilled), Ollama/TranslateGemma ([ADR 0011](docs/adr/0011-ollama-translategemma-optional-translation.md)), Google Gemini API (`TRANSLATION_PROVIDER=gemini`), OpenRouter, Groq, and offline fakes. A clean clone still boots with `fake`. When `TRANSLATION_PROVIDER=openrouter`, the default profile is DeepSeek V4 Flash.
 - **High-Throughput Parallel Chunks:** Asynchronous parallel chunk processing with configurable concurrency limits for rapid translation and audio generation.
 - **Audio & Subtitle Sync:** Timed SRT subtitle generation, automatic timestamp alignment, and synchronized timeline merging.
 - **Studio UI & Hot Reload:** Modernized React Studio UI, translation profile selector, SRT timestamp cleaner, and hybrid host-Vite HMR dev mode.
+
+### OpenRouter profiles
+
+| Profile | Model | When it is the default |
+| --- | --- | --- |
+| `openrouter-deepseek-v4-flash` | `deepseek/deepseek-v4-flash` (paid) | `TRANSLATION_PROVIDER=openrouter` and `OPENROUTER_TRANSLATION_MODEL` is unset or set to this id |
+| `openrouter-auto` | `openrouter/auto` | `OPENROUTER_TRANSLATION_MODEL=openrouter/auto` |
+
+**Upgrade:** installs that used OpenRouter without setting `OPENROUTER_TRANSLATION_MODEL` previously defaulted to `openrouter/auto`. They now default to `deepseek/deepseek-v4-flash`. Jobs that already stored a translation pin keep that model. To keep auto-routing for new jobs, set `OPENROUTER_TRANSLATION_MODEL=openrouter/auto`.
 
 ## For coding agents
 
@@ -36,7 +45,8 @@ sudo apt update && sudo apt install -y make
 make help          # Show all available make targets
 make setup         # Create .env and install backend/frontend deps into backend/.venv
 make up            # Start all Docker services in background
-make dev-hybrid    # Rebuild backend images, then run the Vite dev server on the host
+make dev-hybrid    # Rebuild backend images with the dev source mount, then run Vite on the host
+make dev-hybrid-build  # Deprecated alias of dev-hybrid
 make test          # Run all unit tests (backend pytest + frontend vitest)
 make lint          # Run ruff check/format and TypeScript typecheck
 make check         # Run full pre-commit verification (lint + test + security/policy scans)
@@ -124,9 +134,11 @@ To get instant **Hot Module Replacement (HMR)** with sub-second feedback, run th
 
 1. **Start backend services in Docker:**
    ```bash
-   docker compose up -d --build redis api worker
+   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build redis api worker
    ```
-   This rebuilds updated backend code and boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker without building or running the frontend container. `make dev-hybrid` runs this same Compose command, then `npm run dev` in `frontend/`.
+   This rebuilds the api and worker images, so dependency changes in the image are installed, and boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker. The dev overlay bind-mounts `./backend/app` into those containers and starts uvicorn with `--reload`. `make dev-hybrid` runs this same Compose command, then `npm run dev` in `frontend/`. `make dev-hybrid-build` is a deprecated alias that prints a note and runs `dev-hybrid`.
+
+   `make up` and `docker compose up` use `docker-compose.yml` alone and run the code baked into the image. Rebuild the dev stack when `pyproject.toml` or the Dockerfiles change. The RQ worker does not auto-reload; restart the worker container after worker code changes.
 
 2. **Start Vite development server on the host:**
    ```bash

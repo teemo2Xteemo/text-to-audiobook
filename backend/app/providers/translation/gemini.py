@@ -80,7 +80,7 @@ def bcp47_to_gemini(language: str) -> tuple[str, str]:
 
 def _strip_markdown_fences(text: str) -> str:
     cleaned = text.strip()
-    match = re.match(r"^```[a-zA-Z0-9_-]*\n(.*)\n```$", cleaned, re.DOTALL)
+    match = re.match(r"^```[a-zA-Z0-9_-]*[ \t]*\r?\n(.*)\r?\n```[ \t]*$", cleaned, re.DOTALL)
     if match:
         return match.group(1).strip()
     return cleaned

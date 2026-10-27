@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_serializer
 
-from app.domain.audio import SPEED_DEFAULT, Voice
+from app.domain.audio import SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, Voice
 from app.domain.jobs import Job, JobStatus, OutputFormat
 
 
@@ -72,7 +72,7 @@ class CreateJobJsonBody(BaseModel):
     source_language: str
     target_language: str
     voice: str | None = None
-    speed: float = SPEED_DEFAULT
+    speed: float = Field(default=SPEED_DEFAULT, ge=SPEED_MIN, le=SPEED_MAX)
     output_format: str = Field(default=OutputFormat.MP3.value)
     translation_profile_id: str | None = None
 
