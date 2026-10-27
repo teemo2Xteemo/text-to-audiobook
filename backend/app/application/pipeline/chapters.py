@@ -69,7 +69,11 @@ def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) 
         body = chapter.body.strip()
         if not body:
             continue
-        chapter_chunks = chunk_source(body, max_chars=max_chars)
+        if chapter.title and chapter.title != "Full text":
+            text_to_chunk = f"{chapter.title}\n\n{body}"
+        else:
+            text_to_chunk = body
+        chapter_chunks = chunk_source(text_to_chunk, max_chars=max_chars)
         for c in chapter_chunks:
             chunks.append(
                 Chunk(

@@ -214,10 +214,10 @@ async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_byte
 async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
     content_type = (request.headers.get("content-type") or "").lower()
     _assert_content_length(request, max_upload_bytes)
-    body = await request.body()
-    if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
-        raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
     if content_type.startswith(_JSON_CONTENT):
+        body = await request.body()
+        if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
+            raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
         try:
             payload = json.loads(body)
         except json.JSONDecodeError as exc:
@@ -228,7 +228,34 @@ async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
         if not isinstance(text, str) or not text.strip():
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
         return text
+
+    if content_type.startswith(_MULTIPART_CONTENT):
+        form = await request.form()
+        text_value = form.get("text")
+        upload = form.get("file")
+        text_present = isinstance(text_value, str) and text_value.strip() != ""
+        file_present = isinstance(upload, StarletteUploadFile) and bool(upload.filename)
+        if not text_present and not file_present:
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        if text_present and file_present:
+            raise DomainError(ErrorType.INVALID_INPUT, "provide exactly one of text or file")
+
+        if file_present:
+            assert isinstance(upload, StarletteUploadFile)
+            raw = await _read_upload_raw(upload, max_upload_bytes)
+            text, _ = _decode_source_text(raw, max_upload_bytes)
+        else:
+            assert isinstance(text_value, str)
+            text, _ = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
+
+        if not text.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        return text
+
     # Otherwise treat as raw text
+    body = await request.body()
+    if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
+        raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
     try:
         text, _ = _decode_source_text(body, max_upload_bytes)
     except Exception:

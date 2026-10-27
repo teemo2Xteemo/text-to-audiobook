@@ -31,6 +31,7 @@ def apply_security_headers[R: Response](response: R) -> R:
 _STATUS_BY_ERROR = {
     ErrorType.INVALID_INPUT: 400,
     ErrorType.UNSUPPORTED_LANGUAGE: 400,
+    ErrorType.PROVIDER_RATE_LIMIT: 429,
     ErrorType.STORAGE_FAILED: 503,
 }
 

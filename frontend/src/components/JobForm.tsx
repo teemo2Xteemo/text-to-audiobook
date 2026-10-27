@@ -116,7 +116,12 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     setMode(nextMode);
   }
 
-  const activeVoiceLanguage = mode === "narrate" ? sourceLanguage : targetLanguage;
+  const activeVoiceLanguage =
+    mode === "narrate"
+      ? sourceLanguage === AUTO_SOURCE_LANGUAGE
+        ? analysis?.language || AUTO_SOURCE_LANGUAGE
+        : sourceLanguage
+      : targetLanguage;
   const targetVoices = useMemo(
     () => voicesForTarget(capabilities.voices, activeVoiceLanguage),
     [capabilities.voices, activeVoiceLanguage],

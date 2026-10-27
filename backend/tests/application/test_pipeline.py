@@ -1075,6 +1075,38 @@ def test_narrate_mode_executes_zero_translation_calls(tmp_path: Path) -> None:
     assert saved is not None and saved.status is JobStatus.COMPLETED
 
 
+def test_narrate_mode_splits_chapters_and_preserves_titles(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-chapters-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, translation, _, _, tts, _, jobs = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=500,
+    )
+    story = (
+        "Chapter 1: The Beginning\n\n"
+        "It started on a cold winter morning.\n\n"
+        "Chapter 2: The Journey\n\n"
+        "They traveled across the mountains."
+    )
+    result = _run(orchestrator, job, workspace, text=story)
+    assert result.status is JobStatus.COMPLETED
+    assert result.chunk_total == 2
+    chunk_1_text = (workspace / "chunks" / "chunk-001.translated.txt").read_text(encoding="utf-8")
+    chunk_2_text = (workspace / "chunks" / "chunk-002.translated.txt").read_text(encoding="utf-8")
+    assert "Chapter 1: The Beginning" in chunk_1_text
+    assert "It started on a cold winter morning." in chunk_1_text
+    assert "Chapter 2: The Journey" in chunk_2_text
+    assert "They traveled across the mountains." in chunk_2_text
+
+
 def test_translate_same_language_bypasses_translation(tmp_path: Path) -> None:
     job = _job(
         id="test-trans-same-1",

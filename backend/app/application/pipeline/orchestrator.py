@@ -8,6 +8,7 @@ from pathlib import Path
 from shutil import copyfile, rmtree
 
 from app.application.pipeline.artifact_cache import PipelineArtifactCache
+from app.application.pipeline.chapters import chunk_by_chapter, split_chapters
 from app.application.pipeline.checkpoint import (
     STAGE_NARRATED,
     STAGE_NORMALIZED,
@@ -166,7 +167,8 @@ class PipelineOrchestrator:
     ) -> Job:
         cleaned_text = prepare_narration_text(text)
         normalized, resolved = await parse_source(cleaned_text, job.source_language, self._detector)
-        chunks = chunk_source(normalized, max_chars=self._max_chars)
+        chapters = split_chapters(cleaned_text)
+        chunks = chunk_by_chapter(chapters, max_chars=self._max_chars)
         target_lang = (
             resolved
             if not job.target_language or job.target_language == AUTO_SOURCE_LANGUAGE

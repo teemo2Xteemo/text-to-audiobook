@@ -815,12 +815,76 @@ def test_analyze_empty_text(client: TestClient) -> None:
     assert "text is required" in res.json()["message"]
 
 
-def test_tts_preview_too_long(client: TestClient) -> None:
-    long_text = "a" * 301
+def test_tts_preview_truncates_long_text(client: TestClient) -> None:
+    long_text = "Hello world! This is a long story segment. " + ("word " * 60)
     res = client.post("/api/tts/preview", json={"text": long_text, "voice": "en-US-JennyNeural"})
-    assert res.status_code == 400
-    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
-    assert "preview text must be at most 300 characters" in res.json()["message"]
+    assert res.status_code == 200
+    assert "audio_base64" in res.json()
+
+
+def test_tts_preview_truncation_logic() -> None:
+    from app.api.jobs import truncate_preview_text
+
+    assert truncate_preview_text("Short text.") == "Short text."
+    prefix = "Hello world! "
+    text = prefix + ("x" * 350)
+    assert truncate_preview_text(text) == "Hello world!"
+
+    cjk_prefix = "第一句话。第二句话！"
+    cjk_text = cjk_prefix + ("字" * 350)
+    assert truncate_preview_text(cjk_text) == "第一句话。第二句话！"
+
+    no_punct = "a" * 350
+    assert truncate_preview_text(no_punct) == "a" * 300
+
+
+def test_tts_preview_rate_limit(tmp_path: Path) -> None:
+    from app.api.jobs import _preview_rate_limiter
+
+    _preview_rate_limiter.reset()
+    try:
+        settings = Settings(_env_file=None, storage_path=tmp_path, tts_preview_rate_per_minute=2)
+        app = create_app(settings)
+        with TestClient(app) as test_client:
+            res1 = test_client.post(
+                "/api/tts/preview", json={"text": "hello", "voice": "en-US-JennyNeural"}
+            )
+            assert res1.status_code == 200
+            res2 = test_client.post(
+                "/api/tts/preview", json={"text": "world", "voice": "en-US-JennyNeural"}
+            )
+            assert res2.status_code == 200
+            res3 = test_client.post(
+                "/api/tts/preview", json={"text": "again", "voice": "en-US-JennyNeural"}
+            )
+            assert res3.status_code == 429
+            assert res3.json()["error_type"] == ErrorType.PROVIDER_RATE_LIMIT
+            assert "Too many preview requests" in res3.json()["message"]
+    finally:
+        _preview_rate_limiter.reset()
+
+
+def test_detect_language_multipart_text(client: TestClient) -> None:
+    res = client.post(
+        "/api/detect-language",
+        data={"text": "Hello world, this is an English sentence for language detection."},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["language"] == "en-US"
+    assert "confidence" in data
+
+
+def test_detect_language_multipart_file(client: TestClient) -> None:
+    content = b"Konnichiwa, watashi wa nihongo desu."
+    res = client.post(
+        "/api/detect-language",
+        files={"file": ("story.txt", content, "text/plain")},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "language" in data
+    assert "confidence" in data
 
 
 def test_tts_preview_empty_fields(client: TestClient) -> None:

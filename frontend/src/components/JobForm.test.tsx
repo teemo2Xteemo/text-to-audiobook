@@ -443,4 +443,50 @@ describe("JobForm", () => {
 
     expect(await screen.findByText(/confirm the language/i)).toBeInTheDocument();
   });
+
+  it("populates voices and enables generation when pasting text with Auto in Narrate mode", async () => {
+    const user = userEvent.setup();
+    const fakeAnalyze = {
+      encoding: "UTF-8",
+      language: "en-US",
+      confidence: 0.95,
+      needs_confirmation: false,
+      candidates: [{ language: "en-US", confidence: 0.95 }],
+      chapters_count: 1,
+      chapters_preview: [],
+      duration_estimate_seconds: 30,
+      process_time_estimate_seconds: 4,
+      preview_lines: ["Once upon a time in a faraway land."],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/analyze")) {
+          return new Response(JSON.stringify(fakeAnalyze), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={vi.fn()} />);
+    const narrateTab = screen.getByRole("tab", { name: /Narrate/i });
+    await user.click(narrateTab);
+
+    // Set source language to auto
+    await user.selectOptions(screen.getByLabelText("Source language"), "auto");
+    const generateBtn = screen.getByRole("button", { name: "Generate" });
+    expect(generateBtn).toBeDisabled();
+
+    // Paste text into story area
+    await user.type(screen.getByLabelText("Paste story"), "Once upon a time in a faraway land.");
+
+    // Wait for analysis to arrive and voices to populate
+    const voiceSelect = screen.getByLabelText("Voice");
+    expect(await within(voiceSelect).findByText("English A")).toBeInTheDocument();
+    expect(generateBtn).toBeEnabled();
+  });
 });

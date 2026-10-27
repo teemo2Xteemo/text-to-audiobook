@@ -74,16 +74,44 @@ def test_chunk_by_chapter_sequential_indexing():
             char_count=45,
         ),
     ]
-    # Use max_chars=25 to force each chapter into multiple chunks
+    # Use max_chars=25 to force each chapter paragraph into separate chunks
     chunks = chunk_by_chapter(chapters, max_chars=25)
-    assert len(chunks) == 4
+    assert len(chunks) == 6
     for i, chunk in enumerate(chunks, start=1):
         assert chunk.index == i
         assert chunk.id == f"chunk-{i:03d}"
-    assert chunks[0].text == "Para 1 of chapter 1."
-    assert chunks[1].text == "Para 2 of chapter 1."
-    assert chunks[2].text == "Para 1 of chapter 2."
-    assert chunks[3].text == "Para 2 of chapter 2."
+    assert chunks[0].text == "Chapter 1"
+    assert chunks[1].text == "Para 1 of chapter 1."
+    assert chunks[2].text == "Para 2 of chapter 1."
+    assert chunks[3].text == "Chapter 2"
+    assert chunks[4].text == "Para 1 of chapter 2."
+    assert chunks[5].text == "Para 2 of chapter 2."
+
+
+def test_chunk_by_chapter_forces_boundary_between_chapters():
+    chapters = [
+        Chapter(index=1, title="Chapter 1", body="Body 1", char_count=6),
+        Chapter(index=2, title="Chapter 2", body="Body 2", char_count=6),
+    ]
+    # Even with huge max_chars, each chapter must be in its own chunk
+    chunks = chunk_by_chapter(chapters, max_chars=5000)
+    assert len(chunks) == 2
+    assert chunks[0].text == "Chapter 1\n\nBody 1"
+    assert chunks[1].text == "Chapter 2\n\nBody 2"
+
+
+def test_chunk_by_chapter_full_text_title_not_prepended():
+    chapters = [
+        Chapter(
+            index=1,
+            title="Full text",
+            body="Single story content without chapter headings.",
+            char_count=47,
+        ),
+    ]
+    chunks = chunk_by_chapter(chapters, max_chars=500)
+    assert len(chunks) == 1
+    assert chunks[0].text == "Single story content without chapter headings."
 
 
 def test_chunk_by_chapter_empty_and_whitespace():

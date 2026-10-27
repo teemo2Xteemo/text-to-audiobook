@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import base64
+import threading
+import time
 import uuid
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -244,21 +247,78 @@ async def analyze_text(
     )
 
 
+_SENTENCE_BOUNDARIES = (".", "?", "!", "。", "！", "？", "\n")
+
+
+def truncate_preview_text(text: str, max_chars: int = 300) -> str:
+    if len(text) <= max_chars:
+        return text
+    candidate = text[:max_chars]
+    last_boundary_idx = max((candidate.rfind(b) for b in _SENTENCE_BOUNDARIES), default=-1)
+    if last_boundary_idx != -1:
+        sliced = candidate[: last_boundary_idx + 1].strip()
+        if sliced:
+            return sliced
+    return candidate.strip()
+
+
+class InMemoryRateLimiter:
+    """Thread-safe sliding window in-memory rate limiter per key."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._timestamps: dict[str, list[float]] = defaultdict(list)
+
+    def check(self, key: str, rate_per_minute: int) -> None:
+        now = time.monotonic()
+        window_start = now - 60.0
+        with self._lock:
+            history = [t for t in self._timestamps[key] if t > window_start]
+            if len(history) >= rate_per_minute:
+                self._timestamps[key] = history
+                raise DomainError(
+                    ErrorType.PROVIDER_RATE_LIMIT,
+                    "Too many preview requests, please try again shortly",
+                )
+            history.append(now)
+            self._timestamps[key] = history
+            if len(self._timestamps) > 10_000:
+                expired = [
+                    k for k, ts in self._timestamps.items() if not ts or ts[-1] <= window_start
+                ]
+                for k in expired:
+                    del self._timestamps[k]
+
+    def reset(self) -> None:
+        with self._lock:
+            self._timestamps.clear()
+
+
+_preview_rate_limiter = InMemoryRateLimiter()
+
+
 @router.post("/api/tts/preview", response_model=TTSPreviewResponse)
 async def tts_preview(
     req: TTSPreviewRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
     tts: TTSProvider = Depends(get_tts_provider),
 ) -> TTSPreviewResponse:
     if not req.text.strip():
         raise DomainError(ErrorType.INVALID_INPUT, "text is required")
     if not req.voice.strip():
         raise DomainError(ErrorType.INVALID_INPUT, "voice is required")
-    if len(req.text) > 300:
-        raise DomainError(ErrorType.INVALID_INPUT, "preview text must be at most 300 characters")
     ensure_valid_speed(req.speed)
 
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    _preview_rate_limiter.check(client_ip, settings.tts_preview_rate_per_minute)
+
+    preview_text = truncate_preview_text(req.text.strip())
+
     artifact = await tts.synthesize(
-        req.text,
+        preview_text,
         language="",
         voice=req.voice,
         settings=TTSSettings(speed=req.speed),
