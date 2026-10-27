@@ -14,7 +14,7 @@ from app.application.jobs import CreateJobCommand
 from app.config.settings import Settings
 from app.domain.audio import SPEED_DEFAULT
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import OutputFormat
+from app.domain.jobs import JobMode, OutputFormat
 
 _JSON_CONTENT = "application/json"
 _MULTIPART_CONTENT = "multipart/form-data"
@@ -120,14 +120,26 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
     except ValidationError as exc:
         raise DomainError(ErrorType.INVALID_INPUT, validation_message(list(exc.errors()))) from exc
     text, _ = _decode_source_text(parsed.text.encode("utf-8"), max_upload_bytes)
+    source_language = parsed.source_language
+    target_language = parsed.target_language
+    if parsed.mode == JobMode.TRANSLATE:
+        if not source_language:
+            raise DomainError(ErrorType.INVALID_INPUT, "source_language is required")
+        if not target_language:
+            raise DomainError(ErrorType.INVALID_INPUT, "target_language is required")
+    else:
+        source_language = source_language or "auto"
+        target_language = target_language or source_language
+
     return CreateJobCommand(
-        source_language=parsed.source_language,
-        target_language=parsed.target_language,
+        source_language=source_language,
+        target_language=target_language,
         text=text,
         voice=parsed.voice,
         speed=parsed.speed,
         output_format=parsed.output_format,
         translation_profile_id=parsed.translation_profile_id,
+        mode=parsed.mode,
     )
 
 
@@ -147,16 +159,31 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         assert isinstance(text_value, str)
         text, _ = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
 
+    mode_raw = _optional_form_string(form.get("mode")) or JobMode.TRANSLATE.value
+    try:
+        mode = JobMode(mode_raw)
+    except ValueError:
+        raise DomainError(ErrorType.INVALID_INPUT, f"invalid mode: {mode_raw}") from None
+
     speed_raw = form.get("speed")
     output_raw = form.get("output_format")
+
+    if mode == JobMode.NARRATE:
+        source_language = _optional_form_string(form.get("source_language")) or "auto"
+        target_language = _optional_form_string(form.get("target_language")) or source_language
+    else:
+        source_language = _form_string(form.get("source_language"), "source_language")
+        target_language = _form_string(form.get("target_language"), "target_language")
+
     return CreateJobCommand(
-        source_language=_form_string(form.get("source_language"), "source_language"),
-        target_language=_form_string(form.get("target_language"), "target_language"),
+        source_language=source_language,
+        target_language=target_language,
         text=text,
         voice=_optional_form_string(form.get("voice")),
         speed=_parse_speed(speed_raw),
         output_format=_optional_form_string(output_raw) or OutputFormat.MP3.value,
         translation_profile_id=_optional_form_string(form.get("translation_profile_id")),
+        mode=mode,
     )
 
 

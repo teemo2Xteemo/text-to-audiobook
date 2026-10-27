@@ -124,3 +124,12 @@ def test_security_headers_present(capabilities_client: TestClient) -> None:
     assert response.headers.get("x-content-type-options") == "nosniff"
     assert response.headers.get("x-frame-options") == "DENY"
     assert response.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+
+
+def test_capabilities_includes_narrate_languages(client: TestClient) -> None:
+    res = client.get("/api/capabilities")
+    assert res.status_code == 200
+    data = res.json()
+    assert "narrate_languages" in data
+    assert "estimate_defaults" in data
+    assert len(data["narrate_languages"]) >= len(data["languages"])

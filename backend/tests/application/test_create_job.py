@@ -9,6 +9,7 @@ import pytest
 from app.application.jobs import CreateJobCommand, JobService
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.ports import LanguageDetector, TTSProvider
 from app.domain.translation_profile import TranslationProfile
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.job_store import DualWriteJobStore
@@ -23,6 +24,8 @@ def _service(
     translation_provider: str = "fake",
     translation_model: str = "fake",
     available_profiles: list[TranslationProfile] | None = None,
+    tts: TTSProvider | None = None,
+    detector: LanguageDetector | None = None,
 ) -> tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue | FailingQueue]:
     store = jobs or InMemoryJobStore()
     storage = source or InMemorySourceStorage()
@@ -36,6 +39,8 @@ def _service(
         translation_provider=translation_provider,
         translation_model=translation_model,
         available_profiles=available_profiles,
+        tts=tts,
+        detector=detector,
     )
     return service, store, storage, queued
 
@@ -898,3 +903,116 @@ def test_fake_tts_languages_and_voice_inspection() -> None:
     ]
     assert fake_tts.languages() == {"en-US", "en-GB"}
     assert [v.id for v in fake_tts.voices_list] == ["v1", "v2"]
+
+
+@pytest.fixture
+def job_service() -> JobService:
+    service, _, _, _ = _service()
+    return service
+
+
+def test_create_narrate_job_validation(job_service: JobService) -> None:
+    from app.domain.errors import DomainError, ErrorType
+    from app.domain.jobs import JobMode
+
+    # Narrate rejects translation profile
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(
+            job_service.create(
+                CreateJobCommand(
+                    text="Hello",
+                    source_language="en-US",
+                    target_language="en-US",
+                    mode=JobMode.NARRATE,
+                    translation_profile_id="some-profile",
+                )
+            )
+        )
+    assert exc.value.error_type == ErrorType.INVALID_INPUT
+
+
+def test_create_narrate_job_auto_source_without_detector_raises() -> None:
+    from app.domain.jobs import JobMode
+
+    service, _, _, _ = _service(detector=None)
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(
+            service.create(
+                CreateJobCommand(
+                    text="Hello world",
+                    source_language="auto",
+                    target_language="",
+                    mode=JobMode.NARRATE,
+                )
+            )
+        )
+    assert exc.value.error_type == ErrorType.INVALID_INPUT
+    assert "auto language detection unavailable" in exc.value.message
+
+
+def test_create_narrate_job_auto_source_resolves_and_sets_target_language() -> None:
+    from app.domain.jobs import JobMode
+    from app.domain.languages import LanguageDetection
+
+    class _FakeDetector:
+        async def detect(self, text: str) -> LanguageDetection:
+            return LanguageDetection(language_code="vi-VN", confidence=0.99)
+
+    service, _, _, _ = _service(detector=_FakeDetector())
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                text="Xin chào thế giới",
+                source_language="auto",
+                target_language="",
+                mode=JobMode.NARRATE,
+            )
+        )
+    )
+    assert job.mode == JobMode.NARRATE
+    assert job.source_language == "vi-VN"
+    assert job.target_language == "vi-VN"
+    assert job.translation_provider is None
+    assert job.translation_model is None
+
+
+def test_create_narrate_job_target_language_mismatch_raises() -> None:
+    from app.domain.jobs import JobMode
+
+    service, _, _, _ = _service()
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(
+            service.create(
+                CreateJobCommand(
+                    text="Hello world",
+                    source_language="en-US",
+                    target_language="ja-JP",
+                    mode=JobMode.NARRATE,
+                )
+            )
+        )
+    assert exc.value.error_type == ErrorType.INVALID_INPUT
+    assert "target_language must match source_language" in exc.value.message
+
+
+def test_create_narrate_job_resolves_voice_via_tts() -> None:
+    from app.domain.audio import Voice
+    from app.domain.jobs import JobMode
+    from app.providers.fake import FakeTTSProvider
+
+    fake_tts = FakeTTSProvider()
+    fake_tts.voices_list = [
+        Voice(id="vi-VN-HoaiMyNeural", name="HoaiMy", language="vi-VN", gender="female"),
+    ]
+    service, _, _, _ = _service(tts=fake_tts)
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                text="Xin chào",
+                source_language="vi-VN",
+                target_language="vi-VN",
+                mode=JobMode.NARRATE,
+            )
+        )
+    )
+    assert job.voice == "vi-VN-HoaiMyNeural"

@@ -61,6 +61,8 @@ def build_job_service(settings: Settings) -> JobService:
         translation_provider=provider,
         translation_model=model,
         available_profiles=profiles,
+        tts=build_tts_provider(settings),
+        detector=build_language_detector(settings),
     )
 
 
@@ -311,6 +313,10 @@ def build_capabilities_service(settings: Settings) -> CapabilitiesService:
         translation=translation,
         tts=tts,
         translation_profiles=profiles,
+        estimate_defaults={
+            "chars_per_second": float(settings.estimate_chars_per_second),
+            "preview_wpm": float(settings.tts_preview_rate_per_minute),
+        },
     )
 
 

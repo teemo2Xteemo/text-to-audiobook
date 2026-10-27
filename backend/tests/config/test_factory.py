@@ -710,3 +710,27 @@ def test_openrouter_deepseek_v4_flash_is_the_default_profile() -> None:
     )
     pinned = settings_for_translation_pin(settings, stored)
     assert pinned.openrouter_translation_model == "openrouter/auto"
+
+
+def test_factory_wires_job_service_and_capabilities_for_narrate(tmp_path: Path) -> None:
+    from app.config.factory import build_capabilities_service, build_job_service
+
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="fake",
+        tts_provider="fake",
+        estimate_chars_per_second=18.5,
+        tts_preview_rate_per_minute=160,
+    )
+    job_service = build_job_service(settings)
+    assert job_service._tts is not None
+    assert job_service._detector is not None
+
+    capabilities_service = build_capabilities_service(settings)
+    caps = capabilities_service.get()
+    assert len(caps.narrate_languages) > 0
+    assert caps.estimate_defaults == {
+        "chars_per_second": 18.5,
+        "preview_wpm": 160.0,
+    }

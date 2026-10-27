@@ -67,11 +67,14 @@ class EdgeTTSProvider:
         if voice not in available:
             lang_prefix = language.split("-")[0].lower()
             family_voices = {
-                item.id for item in self._all_voices()
+                item.id
+                for item in self._all_voices()
                 if item.language.split("-")[0].lower() == lang_prefix
             }
             if voice not in family_voices:
-                raise DomainError(ErrorType.UNSUPPORTED_LANGUAGE, "voice is not available for language")
+                raise DomainError(
+                    ErrorType.UNSUPPORTED_LANGUAGE, "voice is not available for language"
+                )
         rate = speed_to_edge_rate(settings.speed)
         self._output_dir.mkdir(parents=True, exist_ok=True)
         path = self._output_dir / f"edge-{uuid4().hex}.mp3"

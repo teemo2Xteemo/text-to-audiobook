@@ -635,3 +635,39 @@ def test_post_txt_upload_gbk(
     job_id = response.json()["job_id"]
     _, _, source, _ = memory
     assert "第一章 序幕" in source.texts[job_id]
+
+
+def test_post_narrate_job_json_and_get_status(jobs_client: TestClient) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": "Once upon a time in a faraway kingdom",
+            "source_language": "en-US",
+            "mode": "narrate",
+        },
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    get_res = jobs_client.get(f"/api/jobs/{job_id}")
+    assert get_res.status_code == 200
+    body = get_res.json()
+    assert body["mode"] == "narrate"
+    assert body["source_language"] == "en-US"
+    assert body["target_language"] == "en-US"
+    assert "translation_provider" not in body
+
+
+def test_post_narrate_job_multipart(jobs_client: TestClient) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "mode": "narrate"},
+        files={"file": ("story.txt", b"Once upon a time in a kingdom", "text/plain")},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    get_res = jobs_client.get(f"/api/jobs/{job_id}")
+    assert get_res.status_code == 200
+    body = get_res.json()
+    assert body["mode"] == "narrate"
+    assert body["source_language"] == "en-US"
+    assert body["target_language"] == "en-US"
