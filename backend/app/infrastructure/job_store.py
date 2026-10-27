@@ -43,6 +43,11 @@ class DualWriteJobStore:
         try:
             cached = await self._cache.get(job_id)
         except Exception:
+            logger.warning(
+                "job_cache_read_failed",
+                extra={"job_id": job_id, "chunk_id": None},
+                exc_info=True,
+            )
             cached = None
         job = await self._filesystem.get_job(job_id)
         if job is not None:

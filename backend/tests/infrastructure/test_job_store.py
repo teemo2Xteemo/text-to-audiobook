@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from dataclasses import replace
 from pathlib import Path
 
@@ -82,6 +83,31 @@ class RedisErrorCache:
 
     async def delete(self, job_id: str) -> None:
         raise RedisError("connection refused")
+
+
+def test_dual_write_get_logs_cache_read_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    filesystem = FilesystemJobStorage(tmp_path)
+    job = _job()
+    asyncio.run(filesystem.save_job(job))
+
+    class _BrokenCache:
+        async def save(self, item: Job) -> None:
+            del item
+
+        async def get(self, job_id: str) -> Job | None:
+            del job_id
+            raise ValueError("cache payload is not a job")
+
+        async def delete(self, job_id: str) -> None:
+            del job_id
+
+    store = DualWriteJobStore(filesystem, _BrokenCache())
+    with caplog.at_level(logging.WARNING, logger="app.infrastructure.job_store"):
+        loaded = asyncio.run(store.get(job.id))
+    assert loaded == job
+    assert any(record.message == "job_cache_read_failed" for record in caplog.records)
 
 
 def test_dual_write_get_falls_back_when_redis_errors(tmp_path: Path) -> None:

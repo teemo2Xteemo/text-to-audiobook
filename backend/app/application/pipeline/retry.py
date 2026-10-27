@@ -36,8 +36,13 @@ async def with_chunk_retry[T](
                     "retry_count": retry_count,
                     "error_type": exc.error_type.value,
                     "stage": stage,
+                    "retry_after_seconds": exc.retry_after_seconds,
                 },
             )
-            await sleep(delay_for(attempt, policy))
+            wait = delay_for(attempt, policy)
+            hint = exc.retry_after_seconds
+            if hint is not None:
+                wait = max(wait, hint)
+            await sleep(wait)
     assert last_error is not None
     raise last_error

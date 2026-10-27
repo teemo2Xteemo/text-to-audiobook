@@ -22,6 +22,12 @@ from app.infrastructure.ffmpeg import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_FFMPEG_TIMEOUT_SECONDS = 120.0
+DEFAULT_FFPROBE_TIMEOUT_SECONDS = 30.0
+DEFAULT_ENCODE_TIMEOUT_CEILING_SECONDS = 1800.0
+# Wall-clock seconds allowed per second of audio for a long re-encode.
+_ENCODE_TIMEOUT_FACTOR = 4.0
+
 
 class FFmpegAudioProcessor:
     """Real FFmpeg normalize/merge/silence/duration/tempo for non-fake TTS."""
@@ -31,9 +37,11 @@ class FFmpegAudioProcessor:
         *,
         executable: str | None = None,
         ffprobe_executable: str | None = None,
+        encode_timeout_ceiling_seconds: float = DEFAULT_ENCODE_TIMEOUT_CEILING_SECONDS,
     ) -> None:
         self._executable = executable
         self._ffprobe_executable = ffprobe_executable
+        self._encode_timeout_ceiling_seconds = encode_timeout_ceiling_seconds
 
     async def normalize(
         self,
@@ -42,6 +50,7 @@ class FFmpegAudioProcessor:
         *,
         output_format: OutputFormat,
         bitrate_kbps: int,
+        full_encode: bool = False,
     ) -> AudioArtifact:
         if not source.is_file():
             raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, f"Audio file not found: {source}")
@@ -53,7 +62,11 @@ class FFmpegAudioProcessor:
             bitrate_kbps=bitrate_kbps,
             executable=self._resolved_executable(),
         )
-        await run_ffmpeg_argv(argv)
+        if full_encode:
+            timeout = await self._full_encode_timeout(source)
+        else:
+            timeout = DEFAULT_FFMPEG_TIMEOUT_SECONDS
+        await run_ffmpeg_argv(argv, timeout_seconds=timeout)
         return AudioArtifact(path=destination)
 
     async def merge(
@@ -111,7 +124,11 @@ class FFmpegAudioProcessor:
             bitrate_kbps=bitrate_kbps,
             executable=self._resolved_executable(),
         )
-        await run_ffmpeg_argv(argv)
+        timeout = scaled_subprocess_timeout_seconds(
+            max(duration_ms, 0) / 1000.0,
+            ceiling_seconds=self._encode_timeout_ceiling_seconds,
+        )
+        await run_ffmpeg_argv(argv, timeout_seconds=timeout)
         return AudioArtifact(path=destination)
 
     async def adjust_tempo(
@@ -163,6 +180,21 @@ class FFmpegAudioProcessor:
             raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffprobe is not available")
         return found
 
+    async def _full_encode_timeout(self, source: Path) -> float:
+        try:
+            duration_ms = await self.get_duration_ms(source)
+        except DomainError:
+            ceiling = self._encode_timeout_ceiling_seconds
+            unknown = {"timeout_ceiling": ceiling}
+            logger.warning("ffmpeg_encode_duration_unknown", extra=unknown)
+            if ceiling > 0:
+                return ceiling
+            return DEFAULT_FFMPEG_TIMEOUT_SECONDS
+        return scaled_subprocess_timeout_seconds(
+            duration_ms / 1000.0,
+            ceiling_seconds=self._encode_timeout_ceiling_seconds,
+        )
+
 
 _PATH_PATTERN = re.compile(r"(?:/|[a-zA-Z]:[\\/])(?:[^\s:?*\"<>|\r\n]+[\\/])+[^\s:?*\"<>|\r\n]+")
 _POINTER_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
@@ -186,8 +218,25 @@ def sanitize_ffmpeg_stderr(stderr_text: str) -> str:
     return lines[-1][:200]
 
 
-DEFAULT_FFMPEG_TIMEOUT_SECONDS = 120.0
-DEFAULT_FFPROBE_TIMEOUT_SECONDS = 30.0
+def scaled_subprocess_timeout_seconds(
+    duration_seconds: float,
+    *,
+    ceiling_seconds: float,
+    floor_seconds: float = DEFAULT_FFMPEG_TIMEOUT_SECONDS,
+) -> float:
+    """Timeout for one ffmpeg re-encode of ``duration_seconds`` of audio.
+
+    Short inputs stay at ``floor_seconds``. Longer inputs scale by
+    ``_ENCODE_TIMEOUT_FACTOR`` and stop at ``ceiling_seconds`` (the worker
+    job timeout). A ceiling below the floor is itself the limit.
+    """
+    duration = duration_seconds if duration_seconds > 0 else 0.0
+    scaled = max(floor_seconds, duration * _ENCODE_TIMEOUT_FACTOR)
+    if ceiling_seconds <= 0:
+        return floor_seconds
+    if ceiling_seconds < floor_seconds:
+        return ceiling_seconds
+    return min(scaled, ceiling_seconds)
 
 
 async def run_ffmpeg_argv(

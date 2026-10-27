@@ -7,6 +7,8 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 from app.domain.errors import DomainError, ErrorType
@@ -63,6 +65,14 @@ _BCP47_TO_OPENAI: dict[str, tuple[str, str]] = {
 SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(sorted(_BCP47_TO_OPENAI))
 
 _MAX_INPUT_CHARS = 10000
+_ERROR_BODY_LIMIT = 2048
+_DETAIL_LIMIT = 200
+_CLIENT_MESSAGE_LIMIT = 300
+_MAX_RETRY_AFTER_SECONDS = 60.0
+_OPENROUTER_HTTP_REFERER = "https://github.com/teemo2Xteemo/text-to-audiobook"
+_SECRET_RE = re.compile(
+    r"(?i)\b(?:bearer\s+)[a-z0-9._\-]{8,}\b|(?:gsk_|sk-or-|sk-)[a-z0-9._\-]{8,}"
+)
 
 
 class OpenAICompatibleHttpClient(Protocol):
@@ -90,28 +100,185 @@ def _strip_markdown_fences(text: str) -> str:
     return cleaned
 
 
-def _map_openai_error(exc: Exception) -> DomainError:
+def _sanitize_provider_detail(text: str) -> str:
+    cleaned = _SECRET_RE.sub("[redacted]", text)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:_DETAIL_LIMIT]
+
+
+def _json_error_message(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str):
+            return message
+    if isinstance(error, str):
+        return error
+    message = payload.get("message")
+    if isinstance(message, str):
+        return message
+    return ""
+
+
+def _read_error_body(exc: urllib.error.HTTPError) -> bytes:
+    try:
+        raw = exc.read(_ERROR_BODY_LIMIT)
+    except Exception:
+        return b""
+    if isinstance(raw, bytes):
+        return raw
+    return b""
+
+
+def _provider_detail(exc: urllib.error.HTTPError) -> str:
+    raw = _read_error_body(exc)
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text or text.lstrip().startswith("<"):
+        return ""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return _sanitize_provider_detail(text)
+    message = _json_error_message(payload)
+    if message:
+        return _sanitize_provider_detail(message)
+    return _sanitize_provider_detail(text)
+
+
+def _parse_retry_after(value: str | None, *, now: datetime | None = None) -> float | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        seconds = _retry_after_http_date(text, now=now)
+        if seconds is None:
+            return None
+    if seconds < 0:
+        return 0.0
+    return min(seconds, _MAX_RETRY_AFTER_SECONDS)
+
+
+def _retry_after_http_date(value: str, *, now: datetime | None) -> float | None:
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    clock = now or datetime.now(UTC)
+    return (when - clock).total_seconds()
+
+
+def _retry_after_header(exc: urllib.error.HTTPError) -> str | None:
+    headers = getattr(exc, "headers", None)
+    if headers is None:
+        return None
+    value = headers.get("Retry-After")
+    if value is None:
+        return None
+    return str(value)
+
+
+def _http_client_message(code: int, detail: str, *, model: str | None) -> str:
+    head = f"HTTP {code}"
+    if code == 404 and model:
+        head = f"{head}: model {model}"
+    if detail:
+        head = f"{head}: {detail}"
+    return head[:_CLIENT_MESSAGE_LIMIT]
+
+
+def _is_timeout_failure(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    return isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, TimeoutError)
+
+
+def _payload_model(payload: dict[str, Any]) -> str | None:
+    model = payload.get("model")
+    if isinstance(model, str) and model:
+        return model
+    return None
+
+
+def _map_openai_error(
+    exc: Exception,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+) -> DomainError:
     if isinstance(exc, DomainError):
         return exc
+    mapped: DomainError
     if isinstance(exc, urllib.error.HTTPError):
+        detail = _provider_detail(exc)
+        retry_after = _parse_retry_after(_retry_after_header(exc)) if exc.code == 429 else None
         if exc.code == 429:
-            return DomainError(ErrorType.PROVIDER_RATE_LIMIT, "rate limit exceeded")
-        if exc.code in (400, 401, 403, 404):
-            return DomainError(ErrorType.PROVIDER_CONFIGURATION_ERROR, f"HTTP {exc.code}")
-        if exc.code in (500, 502, 503, 504):
-            return DomainError(ErrorType.TRANSLATION_FAILED, f"HTTP {exc.code}")
-        return DomainError(ErrorType.TRANSLATION_FAILED, f"HTTP {exc.code}")
-    if isinstance(exc, (urllib.error.URLError, TimeoutError)):
-        return DomainError(ErrorType.TIMEOUT, "request timed out")
-    return DomainError(ErrorType.TRANSLATION_FAILED, str(exc))
+            message = _http_client_message(exc.code, detail or "rate limit exceeded", model=None)
+            mapped = DomainError(
+                ErrorType.PROVIDER_RATE_LIMIT,
+                message,
+                retry_after_seconds=retry_after,
+            )
+        elif exc.code in (401, 403, 404):
+            mapped = DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                _http_client_message(exc.code, detail, model=model if exc.code == 404 else None),
+            )
+        else:
+            mapped = DomainError(
+                ErrorType.TRANSLATION_FAILED,
+                _http_client_message(exc.code, detail, model=None),
+            )
+    elif _is_timeout_failure(exc):
+        mapped = DomainError(ErrorType.TIMEOUT, "request timed out")
+    elif isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        reason_text = str(reason) if reason is not None else str(exc)
+        detail = _sanitize_provider_detail(reason_text)
+        message = "connection failed" if not detail else f"connection failed: {detail}"
+        mapped = DomainError(ErrorType.TRANSLATION_FAILED, message[:_CLIENT_MESSAGE_LIMIT])
+    else:
+        mapped = DomainError(
+            ErrorType.TRANSLATION_FAILED,
+            _sanitize_provider_detail(str(exc)) or "translation failed",
+        )
+    logger.warning(
+        "openai_compatible_request_failed",
+        extra={
+            "provider": provider,
+            "model": model,
+            "error_type": mapped.error_type.value,
+            "detail": mapped.message,
+            "retry_after_seconds": mapped.retry_after_seconds,
+        },
+    )
+    return mapped
 
 
 class UrllibOpenAIHttpClient:
     """POST ``{base_url}/chat/completions`` using standard library urllib."""
 
-    def __init__(self, *, base_url: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_seconds: float,
+        provider_name: str = "openai-compatible",
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+        self._provider_name = provider_name
 
     async def create_chat_completion(
         self,
@@ -146,14 +313,33 @@ class UrllibOpenAIHttpClient:
             headers=headers,
             method="POST",
         )
+        model = _payload_model(payload)
         try:
             with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
                 content = response.read().decode("utf-8")
-                return json.loads(content)
         except urllib.error.HTTPError as exc:
-            raise _map_openai_error(exc) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise _map_openai_error(exc) from exc
+            try:
+                mapped = _map_openai_error(exc, model=model, provider=self._provider_name)
+            finally:
+                exc.close()
+            raise mapped from exc
+        except urllib.error.URLError as exc:
+            raise _map_openai_error(exc, model=model, provider=self._provider_name) from exc
+        except TimeoutError as exc:
+            raise _map_openai_error(exc, model=model, provider=self._provider_name) from exc
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise DomainError(
+                ErrorType.TRANSLATION_FAILED,
+                "provider returned a non-JSON response",
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise DomainError(
+                ErrorType.TRANSLATION_FAILED,
+                "provider returned a non-JSON response",
+            )
+        return parsed
 
 
 class OpenAICompatibleTranslationProvider:
@@ -168,10 +354,12 @@ class OpenAICompatibleTranslationProvider:
         timeout_seconds: float = 60.0,
         extra_headers: dict[str, str] | None = None,
         http: OpenAICompatibleHttpClient | None = None,
+        provider_name: str = "openai-compatible",
     ) -> None:
         self._api_key = api_key.strip() if api_key and api_key.strip() else None
         self._model = model
         self._base_url = base_url.rstrip("/")
+        self._provider_name = provider_name
         self._extra_headers = extra_headers or {}
         self._http = (
             http
@@ -179,6 +367,7 @@ class OpenAICompatibleTranslationProvider:
             else UrllibOpenAIHttpClient(
                 base_url=self._base_url,
                 timeout_seconds=timeout_seconds,
+                provider_name=provider_name,
             )
         )
 
@@ -199,7 +388,7 @@ class OpenAICompatibleTranslationProvider:
         source_code, source_name = bcp47_to_openai_lang(source_language)
         target_code, target_name = bcp47_to_openai_lang(target_language)
         if len(text) > _MAX_INPUT_CHARS:
-            raise DomainError(ErrorType.TRANSLATION_FAILED, "text exceeds model context")
+            raise DomainError(ErrorType.INVALID_INPUT, "text exceeds model context")
 
         logger.info(
             "openai_compatible_translate",
@@ -237,7 +426,20 @@ class OpenAICompatibleTranslationProvider:
         except DomainError:
             raise
         except Exception as exc:
-            raise _map_openai_error(exc) from exc
+            raise _map_openai_error(exc, model=self._model, provider=self._provider_name) from exc
+
+        served_model = data.get("model") if isinstance(data, dict) else None
+        logger.info(
+            "openai_compatible_translated",
+            extra={
+                "provider": self._provider_name,
+                "model": self._model,
+                "served_model": served_model if isinstance(served_model, str) else None,
+                "base_url": self._base_url,
+                "source_language": source_language,
+                "target_language": target_language,
+            },
+        )
 
         choices = data.get("choices")
         if not choices or not isinstance(choices, list):
@@ -276,11 +478,18 @@ class GroqTranslationProvider(OpenAICompatibleTranslationProvider):
             timeout_seconds=timeout_seconds,
             extra_headers=None,
             http=http,
+            provider_name="groq",
         )
 
 
 class OpenRouterTranslationProvider(OpenAICompatibleTranslationProvider):
-    """OpenRouter translation adapter registered as ``TRANSLATION_PROVIDER=openrouter``."""
+    """OpenRouter adapter registered as ``TRANSLATION_PROVIDER=openrouter``.
+
+    ``openrouter/auto`` is cached under that literal model id. OpenRouter may
+    route each request to a different model, so a cache hit can replay another
+    model's output. The answering model is logged as ``served_model`` and is
+    not part of the cache key. ``openrouter/auto`` can also select a paid model.
+    """
 
     def __init__(
         self,
@@ -292,7 +501,7 @@ class OpenRouterTranslationProvider(OpenAICompatibleTranslationProvider):
         http: OpenAICompatibleHttpClient | None = None,
     ) -> None:
         extra_headers = {
-            "HTTP-Referer": "https://github.com/teemo/text-to-audiobook",
+            "HTTP-Referer": _OPENROUTER_HTTP_REFERER,
             "X-Title": "Text to Audiobook Story Narrator",
         }
         super().__init__(
@@ -302,4 +511,5 @@ class OpenRouterTranslationProvider(OpenAICompatibleTranslationProvider):
             timeout_seconds=timeout_seconds,
             extra_headers=extra_headers,
             http=http,
+            provider_name="openrouter",
         )

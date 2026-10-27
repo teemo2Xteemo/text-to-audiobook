@@ -51,8 +51,8 @@ services:
       CHUNK_TRANSLATION_CONCURRENCY: ${CHUNK_TRANSLATION_CONCURRENCY:-2}
       CHUNK_TTS_CONCURRENCY: ${CHUNK_TTS_CONCURRENCY:-2}
     volumes:
+      # Image code only. A live source mount lives in docker-compose.dev.yml.
       - ./storage:/data/storage
-      - ./backend/app:/app/app:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -108,8 +108,8 @@ services:
       CHUNK_TTS_CONCURRENCY: ${CHUNK_TTS_CONCURRENCY:-2}
       HF_HOME: /data/huggingface
     volumes:
+      # Image code only. A live source mount lives in docker-compose.dev.yml.
       - ./storage:/data/storage
-      - ./backend/app:/app/app:ro
       - huggingface-cache:/data/huggingface
     depends_on:
       redis:

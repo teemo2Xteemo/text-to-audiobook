@@ -49,14 +49,14 @@ logs: ## Xem log các container theo thời gian thực
 build: ## Build lại các Docker images cho dự án
 	$(DOCKER_COMPOSE) build
 
-dev-hybrid: ## Khởi động backend (redis, api, worker) rồi chạy Vite trên host
+dev-hybrid: ## Rebuild backend với mount code dev, rồi chạy Vite trên host
 	@if [ ! -f .env ]; then cp -n .env.example .env && echo "Da khoi tao .env tu .env.example"; fi
-	$(DOCKER_COMPOSE) up -d redis api worker
+	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up -d --build redis api worker
 	cd frontend && $(NPM) run dev
 
-dev-hybrid-build: ## Rebuild backend (redis, api, worker) rồi chạy Vite trên host
+dev-hybrid-build: ## Giống dev-hybrid: rebuild api/worker với mount code dev, rồi Vite
 	@if [ ! -f .env ]; then cp -n .env.example .env && echo "Da khoi tao .env tu .env.example"; fi
-	$(DOCKER_COMPOSE) up -d --build redis api worker
+	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up -d --build redis api worker
 	cd frontend && $(NPM) run dev
 
 test-backend: ## Chạy unit test backend với pytest

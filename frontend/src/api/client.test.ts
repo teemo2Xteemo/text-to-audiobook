@@ -158,7 +158,7 @@ describe("api client", () => {
     );
     await expect(getJob(JOB_ID)).rejects.toEqual(
       expect.objectContaining({
-        error_type: "STORAGE_FAILED",
+        error_type: "INTERNAL_ERROR",
         message: "Internal Server Error",
         status: 500,
       }),

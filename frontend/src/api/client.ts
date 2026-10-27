@@ -39,7 +39,7 @@ function extractDetailMessage(body: unknown): string | null {
 }
 
 async function parseError(response: Response): Promise<never> {
-  const defaultErrorType = response.status >= 500 ? "STORAGE_FAILED" : "INVALID_INPUT";
+  const defaultErrorType = response.status >= 500 ? "INTERNAL_ERROR" : "INVALID_INPUT";
   let body: unknown = null;
   let rawText = "";
 

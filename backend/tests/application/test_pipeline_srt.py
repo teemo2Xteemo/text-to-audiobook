@@ -118,6 +118,8 @@ def test_srt_pipeline_generates_aligned_audio_and_subtitles(tmp_path: Path) -> N
     output_audio = workspace / "output.mp3"
     assert output_audio.is_file()
     assert output_audio.stat().st_size > 0
+    assert audio.full_encode_flags[-1] is True
+    assert audio.full_encode_flags.count(True) == 1
 
     output_srt = workspace / "output.srt"
     assert output_srt.is_file()

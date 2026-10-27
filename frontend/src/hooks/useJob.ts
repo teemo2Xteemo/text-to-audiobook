@@ -15,6 +15,11 @@ function failedJobError(job: JobStatusResponse): ApiError {
   return new ApiError(job.error_type ?? "TRANSLATION_FAILED", job.message ?? "job failed", 200);
 }
 
+function isTransientPollError(error: unknown): boolean {
+  const apiError = toApiError(error);
+  return apiError.status === 0 || apiError.status >= 500;
+}
+
 export function jobFromView(view: JobView): JobStatusResponse | undefined {
   if (view.status === "idle") {
     return undefined;
@@ -26,6 +31,7 @@ export function useJob(): JobView & {
   submit: (input: CreateJobInput) => Promise<void>;
 } {
   const [view, setView] = useState<JobView>({ status: "idle" });
+  const [retryTick, setRetryTick] = useState(0);
   const failureCountRef = useRef(0);
 
   const applyJob = useCallback((job: JobStatusResponse) => {
@@ -56,20 +62,29 @@ export function useJob(): JobView & {
     const jobId = view.job.job_id;
     const timer = window.setTimeout(() => {
       void pollOnce(jobId).catch((error: unknown) => {
+        const apiError = toApiError(error);
+        if (!isTransientPollError(error)) {
+          setView((current) => ({
+            status: "error",
+            error: apiError,
+            job: current.status === "idle" ? undefined : current.job,
+          }));
+          return;
+        }
         failureCountRef.current += 1;
         if (failureCountRef.current >= 3) {
           setView((current) => ({
             status: "error",
-            error: toApiError(error),
+            error: apiError,
             job: current.status === "idle" ? undefined : current.job,
           }));
-        } else {
-          setView((current) => ({ ...current }));
+          return;
         }
+        setRetryTick((tick) => tick + 1);
       });
     }, POLL_INTERVAL_MS);
     return () => window.clearTimeout(timer);
-  }, [view, pollOnce]);
+  }, [view, pollOnce, retryTick]);
 
   useEffect(() => {
     const stored = sessionStorage.getItem(LAST_JOB_STORAGE_KEY);

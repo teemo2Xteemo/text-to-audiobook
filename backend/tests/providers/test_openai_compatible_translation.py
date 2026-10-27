@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import urllib.error
+import urllib.request
+from datetime import UTC, datetime
 from email.message import Message
 from io import BytesIO
 from typing import Any
 
 import pytest
 
+from app.domain.chunking import CHUNK_MAX_CHARS
 from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import AUTO_SOURCE_LANGUAGE
 from app.providers.translation.openai_compatible import (
+    _MAX_INPUT_CHARS,
     GroqTranslationProvider,
     OpenAICompatibleTranslationProvider,
     OpenRouterTranslationProvider,
+    UrllibOpenAIHttpClient,
+    _parse_retry_after,
     bcp47_to_openai_lang,
 )
 
@@ -326,6 +334,278 @@ async def test_groq_and_openrouter_subclasses() -> None:
 
     await openrouter.translate("Hello", "en-US", "vi-VN")
     assert fake_http.calls[-1]["extra_headers"] == {
-        "HTTP-Referer": "https://github.com/teemo/text-to-audiobook",
+        "HTTP-Referer": "https://github.com/teemo2Xteemo/text-to-audiobook",
         "X-Title": "Text to Audiobook Story Narrator",
     }
+
+
+def _http_error(
+    code: int,
+    body: bytes,
+    *,
+    retry_after: str | None = None,
+) -> urllib.error.HTTPError:
+    headers = Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError(
+        url="https://api.groq.com/openai/v1/chat/completions",
+        code=code,
+        msg="error",
+        hdrs=headers,
+        fp=BytesIO(body),
+    )
+
+
+@pytest.mark.anyio
+async def test_http_404_includes_provider_message_and_model() -> None:
+    fake_http = FakeOpenAIHttp()
+    fake_http.fail = _http_error(
+        404,
+        b'{"error": {"message": "model \'missing-model\' does not exist"}}',
+    )
+    provider = _provider(http=fake_http, model="missing-model")
+
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Text", "en-US", "vi-VN")
+
+    assert exc_info.value.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert "does not exist" in exc_info.value.message
+    assert "missing-model" in exc_info.value.message
+    assert "HTTP 404" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_http_400_includes_provider_message() -> None:
+    fake_http = FakeOpenAIHttp()
+    fake_http.fail = _http_error(400, b'{"error": {"message": "invalid request parameter"}}')
+    provider = _provider(http=fake_http)
+
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Text", "en-US", "vi-VN")
+
+    assert exc_info.value.error_type is ErrorType.TRANSLATION_FAILED
+    assert "invalid request parameter" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_http_error_redacts_secrets_from_message() -> None:
+    fake_http = FakeOpenAIHttp()
+    secret = "gsk_" + ("a" * 24)
+    body = json.dumps({"error": {"message": f"rejected key {secret}"}}).encode()
+    fake_http.fail = _http_error(401, body)
+    provider = _provider(http=fake_http)
+
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Text", "en-US", "vi-VN")
+
+    assert exc_info.value.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert secret not in exc_info.value.message
+    assert "[redacted]" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_connection_refused_is_not_a_timeout() -> None:
+    fake_http = FakeOpenAIHttp()
+    fake_http.fail = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+    provider = _provider(http=fake_http)
+
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Text", "en-US", "vi-VN")
+
+    assert exc_info.value.error_type is ErrorType.TRANSLATION_FAILED
+    assert exc_info.value.error_type is not ErrorType.TIMEOUT
+    assert "connection failed" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_socket_timeout_urlerror_is_timeout() -> None:
+    fake_http = FakeOpenAIHttp()
+    # socket.timeout is TimeoutError on Python 3.10+.
+    fake_http.fail = urllib.error.URLError(TimeoutError("timed out"))
+    provider = _provider(http=fake_http)
+
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Text", "en-US", "vi-VN")
+
+    assert exc_info.value.error_type is ErrorType.TIMEOUT
+
+
+@pytest.mark.anyio
+async def test_non_json_success_body_is_domain_error() -> None:
+    class _RawClient:
+        async def create_chat_completion(
+            self,
+            *,
+            payload: dict[str, Any],
+            api_key: str,
+            extra_headers: dict[str, str] | None = None,
+        ) -> dict[str, Any]:
+            del payload, api_key, extra_headers
+            raise json.JSONDecodeError("Expecting value", "not-json", 0)
+
+    provider = _provider(http=_RawClient())  # type: ignore[arg-type]
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Text", "en-US", "vi-VN")
+    assert exc_info.value.error_type is ErrorType.TRANSLATION_FAILED
+    assert not isinstance(exc_info.value, json.JSONDecodeError)
+
+
+def test_chunk_limit_fits_openai_compatible_context() -> None:
+    assert CHUNK_MAX_CHARS < _MAX_INPUT_CHARS
+
+
+@pytest.mark.anyio
+async def test_context_size_guard_is_invalid_input_and_not_retried() -> None:
+    from app.application.pipeline.retry import with_chunk_retry
+    from app.domain.retry import RetryPolicy
+
+    provider = _provider()
+    text = "a" * (_MAX_INPUT_CHARS + 1)
+    calls = 0
+
+    async def _op() -> str:
+        nonlocal calls
+        calls += 1
+        return await provider.translate(text, "en-US", "vi-VN")
+
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    with pytest.raises(DomainError) as exc_info:
+        await with_chunk_retry(
+            _op,
+            policy=RetryPolicy(max_attempts=3, backoff_seconds=1.0),
+            sleep=_sleep,
+            job_id="job-1",
+            chunk_id="chunk-1",
+            stage="translated",
+        )
+
+    assert exc_info.value.error_type is ErrorType.INVALID_INPUT
+    assert calls == 1
+    assert slept == []
+
+
+def test_retry_after_delta_is_capped_and_http_date_is_honored() -> None:
+    assert _parse_retry_after("30") == 30.0
+    assert _parse_retry_after("  120 ") == 60.0
+    assert _parse_retry_after("-5") == 0.0
+    assert _parse_retry_after("soon") is None
+    now = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+    parsed = _parse_retry_after("Tue, 27 Oct 2026 12:00:15 GMT", now=now)
+    assert parsed is not None
+    assert 14 <= parsed <= 16
+
+
+@pytest.mark.anyio
+async def test_retry_after_extends_chunk_backoff() -> None:
+    from app.application.pipeline.retry import with_chunk_retry
+    from app.domain.retry import RetryPolicy
+
+    fake_http = FakeOpenAIHttp()
+    fake_http.fail = _http_error(429, b'{"error": {"message": "slow down"}}', retry_after="25")
+    provider = _provider(http=fake_http)
+    calls = 0
+
+    async def _op() -> str:
+        nonlocal calls
+        calls += 1
+        return await provider.translate("Text", "en-US", "vi-VN")
+
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    with pytest.raises(DomainError) as exc_info:
+        await with_chunk_retry(
+            _op,
+            policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
+            sleep=_sleep,
+            job_id="job-1",
+            chunk_id="chunk-1",
+            stage="translated",
+        )
+
+    assert exc_info.value.error_type is ErrorType.PROVIDER_RATE_LIMIT
+    assert calls == 2
+    assert slept == [25.0]
+    assert exc_info.value.retry_after_seconds == 25.0
+
+
+def test_urllib_client_joins_url_and_sends_auth_timeout_and_extra_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return b'{"id": "ok", "choices": [], "model": "served-model"}'
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> _Response:
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["method"] = request.get_method()
+        captured["headers"] = {key.lower(): value for key, value in request.header_items()}
+        captured["body"] = request.data
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    client = UrllibOpenAIHttpClient(
+        base_url="https://openrouter.ai/api/v1/",
+        timeout_seconds=12.5,
+        provider_name="openrouter",
+    )
+    result = asyncio.run(
+        client.create_chat_completion(
+            payload={"model": "openrouter/auto"},
+            api_key="sk-or-test",
+            extra_headers={
+                "HTTP-Referer": "https://github.com/teemo2Xteemo/text-to-audiobook",
+                "X-Title": "Text to Audiobook Story Narrator",
+            },
+        )
+    )
+    assert result["model"] == "served-model"
+    assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert captured["timeout"] == 12.5
+    assert captured["method"] == "POST"
+    assert captured["headers"]["authorization"] == "Bearer sk-or-test"
+    assert (
+        captured["headers"]["http-referer"] == "https://github.com/teemo2Xteemo/text-to-audiobook"
+    )
+    assert captured["headers"]["x-title"] == "Text to Audiobook Story Narrator"
+    assert json.loads(captured["body"])["model"] == "openrouter/auto"
+
+
+def test_urllib_client_non_json_body_raises_domain_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return b"not-json"
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout: _Response())
+    client = UrllibOpenAIHttpClient(base_url="https://api.groq.com/openai/v1", timeout_seconds=5)
+    with pytest.raises(DomainError) as exc_info:
+        asyncio.run(
+            client.create_chat_completion(
+                payload={"model": "qwen/qwen3.8-27b"},
+                api_key="gsk_test",
+            )
+        )
+    assert exc_info.value.error_type is ErrorType.TRANSLATION_FAILED
+    assert "non-JSON" in exc_info.value.message

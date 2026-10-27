@@ -198,7 +198,7 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
                 model="openrouter/auto",
                 label="OpenRouter (Auto / Best Available)",
                 badge="ONLINE",
-                description="Auto-routes to active model",
+                description="Auto-routes; served model can vary and may be paid",
                 supported_languages=openrouter_langs,
             )
         )
@@ -429,7 +429,9 @@ def build_audio_processor(settings: Settings) -> AudioProcessor:
     # Fake TTS emits non-media bytes; Edge (and later real TTS) needs FFmpeg normalize/merge.
     if settings.tts_provider.strip().lower() == "fake":
         return FakeAudioProcessor()
-    return FFmpegAudioProcessor()
+    return FFmpegAudioProcessor(
+        encode_timeout_ceiling_seconds=float(settings.rq_job_timeout_seconds),
+    )
 
 
 def build_artifact_cache(settings: Settings) -> PipelineArtifactCache:
@@ -498,6 +500,10 @@ def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
     elif translation == "groq":
         translation_model = settings.groq_translation_model
     elif translation == "openrouter":
+        # Cache key is the configured id. ``openrouter/auto`` stays that literal
+        # while OpenRouter may route each request to a different model, so a hit
+        # can replay another model's translation. The served model is logged on
+        # the response and is not part of this key.
         translation_model = settings.openrouter_translation_model
     else:
         translation_model = "fake"

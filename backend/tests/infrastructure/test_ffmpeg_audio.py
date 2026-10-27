@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 
 import pytest
 
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import OutputFormat
-from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor, run_ffmpeg_argv
+from app.infrastructure.ffmpeg_audio import (
+    DEFAULT_FFMPEG_TIMEOUT_SECONDS,
+    FFmpegAudioProcessor,
+    run_ffmpeg_argv,
+    scaled_subprocess_timeout_seconds,
+)
 
 
 class _FakeProcess:
@@ -232,6 +238,137 @@ def test_merge_empty_sources_raises_domain_error(tmp_path: Path) -> None:
         )
     assert exc.value.error_type is ErrorType.AUDIO_PROCESSING_FAILED
     assert "cannot merge empty audio sources" in exc.value.message
+
+
+def test_run_ffmpeg_default_timeout_stays_short() -> None:
+    default = inspect.signature(run_ffmpeg_argv).parameters["timeout_seconds"].default
+    assert default == DEFAULT_FFMPEG_TIMEOUT_SECONDS == 120.0
+
+
+def test_scaled_timeout_keeps_short_audio_bounded_and_caps_long_audio() -> None:
+    assert scaled_subprocess_timeout_seconds(10, ceiling_seconds=1800) == 120.0
+    assert scaled_subprocess_timeout_seconds(60, ceiling_seconds=1800) == 240.0
+    assert scaled_subprocess_timeout_seconds(600, ceiling_seconds=1800) == 1800.0
+    assert scaled_subprocess_timeout_seconds(3600, ceiling_seconds=60) == 60.0
+
+
+def test_short_normalize_uses_default_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "raw.bin"
+    source.write_bytes(b"raw")
+    seen: list[float] = []
+
+    async def fake_ffmpeg(argv: object, timeout_seconds: float = 0) -> None:
+        del argv
+        seen.append(timeout_seconds)
+
+    async def fake_probe(argv: object, timeout_seconds: float = 0) -> str:
+        del argv, timeout_seconds
+        raise AssertionError("short normalize must not probe duration")
+
+    monkeypatch.setattr("app.infrastructure.ffmpeg_audio.run_ffmpeg_argv", fake_ffmpeg)
+    monkeypatch.setattr("app.infrastructure.ffmpeg_audio.run_ffprobe_argv", fake_probe)
+    processor = FFmpegAudioProcessor(executable="ffmpeg")
+    asyncio.run(
+        processor.normalize(
+            source,
+            tmp_path / "out.mp3",
+            output_format=OutputFormat.MP3,
+            bitrate_kbps=128,
+        )
+    )
+    assert seen == [120.0]
+
+
+def test_full_encode_timeout_scales_with_duration_and_job_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "timeline.wav"
+    source.write_bytes(b"wav")
+    seen: list[float] = []
+
+    async def fake_ffmpeg(argv: object, timeout_seconds: float = 0) -> None:
+        del argv
+        seen.append(timeout_seconds)
+
+    async def fake_probe(argv: object, timeout_seconds: float = 0) -> str:
+        del argv, timeout_seconds
+        return "600"
+
+    monkeypatch.setattr("app.infrastructure.ffmpeg_audio.run_ffmpeg_argv", fake_ffmpeg)
+    monkeypatch.setattr("app.infrastructure.ffmpeg_audio.run_ffprobe_argv", fake_probe)
+    processor = FFmpegAudioProcessor(executable="ffmpeg", encode_timeout_ceiling_seconds=1800)
+    asyncio.run(
+        processor.normalize(
+            source,
+            tmp_path / "out.mp3",
+            output_format=OutputFormat.MP3,
+            bitrate_kbps=128,
+            full_encode=True,
+        )
+    )
+    assert seen == [1800.0]
+
+
+def test_full_encode_unknown_duration_uses_job_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "timeline.wav"
+    source.write_bytes(b"wav")
+    seen: list[float] = []
+
+    async def fake_ffmpeg(argv: object, timeout_seconds: float = 0) -> None:
+        del argv
+        seen.append(timeout_seconds)
+
+    async def fake_probe(argv: object, timeout_seconds: float = 0) -> str:
+        del argv, timeout_seconds
+        raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffprobe failed")
+
+    monkeypatch.setattr("app.infrastructure.ffmpeg_audio.run_ffmpeg_argv", fake_ffmpeg)
+    monkeypatch.setattr("app.infrastructure.ffmpeg_audio.run_ffprobe_argv", fake_probe)
+    processor = FFmpegAudioProcessor(executable="ffmpeg", encode_timeout_ceiling_seconds=1800)
+    asyncio.run(
+        processor.normalize(
+            source,
+            tmp_path / "out.mp3",
+            output_format=OutputFormat.MP3,
+            bitrate_kbps=128,
+            full_encode=True,
+        )
+    )
+    assert seen == [1800.0]
+
+
+def test_long_silence_timeout_scales_and_short_silence_stays_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[float] = []
+
+    async def fake_ffmpeg(argv: object, timeout_seconds: float = 0) -> None:
+        del argv
+        seen.append(timeout_seconds)
+
+    monkeypatch.setattr("app.infrastructure.ffmpeg_audio.run_ffmpeg_argv", fake_ffmpeg)
+    processor = FFmpegAudioProcessor(executable="ffmpeg", encode_timeout_ceiling_seconds=1800)
+    asyncio.run(
+        processor.generate_silence(
+            1000,
+            tmp_path / "short.wav",
+            output_format=OutputFormat.WAV,
+            bitrate_kbps=128,
+        )
+    )
+    asyncio.run(
+        processor.generate_silence(
+            600_000,
+            tmp_path / "long.wav",
+            output_format=OutputFormat.WAV,
+            bitrate_kbps=128,
+        )
+    )
+    assert seen == [120.0, 1800.0]
 
 
 def test_merge_missing_source_raises_domain_error(tmp_path: Path) -> None:

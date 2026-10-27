@@ -68,7 +68,21 @@ def test_factory_builds_edge_provider_without_calling_sdk(tmp_path: Path) -> Non
     provider = build_tts_provider(settings)
     assert isinstance(provider, EdgeTTSProvider)
     assert provider._defaults == {"ja-JP": "ja-JP-AdapterANeural"}
-    assert isinstance(build_audio_processor(settings), FFmpegAudioProcessor)
+    processor = build_audio_processor(settings)
+    assert isinstance(processor, FFmpegAudioProcessor)
+    assert processor._encode_timeout_ceiling_seconds == 1800.0
+
+
+def test_ffmpeg_processor_ceiling_follows_job_timeout(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        tts_provider="edge",
+        rq_job_timeout_seconds=3600,
+    )
+    processor = build_audio_processor(settings)
+    assert isinstance(processor, FFmpegAudioProcessor)
+    assert processor._encode_timeout_ceiling_seconds == 3600.0
 
 
 def test_factory_builds_conservative_narration() -> None:

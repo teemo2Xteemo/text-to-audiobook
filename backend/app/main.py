@@ -9,6 +9,7 @@ from starlette.responses import Response
 
 from app.api.capabilities import router as capabilities_router
 from app.api.errors import (
+    apply_security_headers,
     domain_error_handler,
     http_exception_handler,
     unhandled_exception_handler,
@@ -29,10 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        return response
+        return apply_security_headers(response)
 
     application.add_exception_handler(DomainError, domain_error_handler)
     application.add_exception_handler(RequestValidationError, validation_error_handler)

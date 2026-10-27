@@ -11,6 +11,7 @@ class FakeAudioProcessor:
 
     def __init__(self) -> None:
         self.normalize_calls: list[tuple[Path, Path]] = []
+        self.full_encode_flags: list[bool] = []
         self.merge_calls: list[list[Path]] = []
         self.silence_calls: list[tuple[int, Path]] = []
         self.tempo_calls: list[tuple[Path, Path, float]] = []
@@ -73,9 +74,11 @@ class FakeAudioProcessor:
         *,
         output_format: OutputFormat,
         bitrate_kbps: int,
+        full_encode: bool = False,
     ) -> AudioArtifact:
         del output_format, bitrate_kbps
         self.normalize_calls.append((source, destination))
+        self.full_encode_flags.append(full_encode)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if source.is_file():
             copyfile(source, destination)
