@@ -91,3 +91,26 @@ class CpuLanguageDetector:
         if mapped is None:
             raise DomainError(ErrorType.INVALID_INPUT, _SET_SOURCE_MESSAGE)
         return LanguageDetection(language_code=mapped, confidence=float(top.prob))
+
+    async def detect_candidates(self, text: str) -> list[tuple[str, float]]:
+        return await asyncio.to_thread(self._detect_candidates_sync, text)
+
+    def _detect_candidates_sync(self, text: str) -> list[tuple[str, float]]:
+        _configure_seed()
+        stripped = text.strip()
+        if not stripped:
+            return []
+        try:
+            candidates = detect_langs(stripped)
+        except LangDetectException:
+            return []
+        results: list[tuple[str, float]] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            mapped = _ISO_TO_BCP47.get(candidate.lang.strip().lower())
+            if mapped is None or mapped in seen:
+                continue
+            seen.add(mapped)
+            results.append((mapped, float(candidate.prob)))
+        results.sort(key=lambda item: item[1], reverse=True)
+        return results[:3]

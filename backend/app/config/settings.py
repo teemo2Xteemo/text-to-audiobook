@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -67,6 +68,10 @@ class Settings(BaseSettings):
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_http_timeout_seconds: float = Field(default=60.0, gt=0)
     language_detect_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    language_confirm_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+    tts_preview_rate_per_minute: int = Field(default=150, ge=1)
+    estimate_chars_per_second: float = Field(default=15.0, gt=0.0)
+    estimate_translation_expansion: float = Field(default=1.2, gt=0.0)
     tts_default_voice_by_language: str = Field(default="")
     retry_max_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
@@ -104,3 +109,9 @@ class Settings(BaseSettings):
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("OPENROUTER_BASE_URL must be an http or https URL")
         return url
+
+    def __getattr__(self, name: str) -> Any:
+        lower = name.lower()
+        if lower in type(self).model_fields:
+            return getattr(self, lower)
+        return super().__getattr__(name)
