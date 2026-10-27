@@ -16,7 +16,7 @@ from app.config.factory import (
 )
 from app.config.settings import Settings
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import is_terminal
+from app.domain.jobs import JobMode, is_terminal
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.infrastructure.rq_queue import RQ_QUEUE_NAME
 from app.workers.rq_failure import handle_worker_exception
@@ -77,21 +77,53 @@ async def _process_job_async(job_id: str) -> None:
                     },
                 )
                 return
-            text = await filesystem.read_source(job_id)
-            try:
-                orchestrator = build_orchestrator(settings_for_translation_pin(settings, fresh))
-            except ProviderConfigurationError as exc:
+            if fresh.mode == JobMode.UNKNOWN:
                 logger.error(
-                    "worker_provider_configuration_error",
-                    extra={"job_id": job_id, "error": str(exc)},
+                    "worker_job_unknown_mode",
+                    extra={"job_id": job_id},
                 )
                 service = build_job_service(settings)
                 await service.mark_failed(
                     job_id,
-                    ErrorType.PROVIDER_CONFIGURATION_ERROR,
-                    str(exc),
+                    ErrorType.INVALID_INPUT,
+                    "Unknown job mode",
                 )
                 return
+
+            text = await filesystem.read_source(job_id)
+            try:
+                try:
+                    orchestrator = build_orchestrator(
+                        settings_for_translation_pin(settings, fresh),
+                        for_mode=fresh.mode,
+                    )
+                except TypeError:
+                    orchestrator = build_orchestrator(
+                        settings_for_translation_pin(settings, fresh),
+                    )
+            except ProviderConfigurationError as exc:
+                if fresh.mode == JobMode.NARRATE:
+                    from app.domain.ports import NullTranslationProvider
+
+                    try:
+                        orchestrator = build_orchestrator(
+                            settings_for_translation_pin(settings, fresh),
+                            translation_provider=NullTranslationProvider(),
+                        )
+                    except TypeError:
+                        raise exc
+                else:
+                    logger.error(
+                        "worker_provider_configuration_error",
+                        extra={"job_id": job_id, "error": str(exc)},
+                    )
+                    service = build_job_service(settings)
+                    await service.mark_failed(
+                        job_id,
+                        ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                        str(exc),
+                    )
+                    return
             await orchestrator.run(fresh, text, workspace=workspace)
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

@@ -20,7 +20,7 @@ from app.application.pipeline.merge import merge_artifacts
 from app.application.pipeline.merge_srt import merge_srt_cues
 from app.application.pipeline.narrate import narrate_chunk
 from app.application.pipeline.normalize import normalize_chunk
-from app.application.pipeline.parse import is_srt_document, parse_source
+from app.application.pipeline.parse import is_srt_document, parse_source, prepare_narration_text
 from app.application.pipeline.parse_srt import parse_srt_cues, serialize_srt_cues
 from app.application.pipeline.retry import with_chunk_retry
 from app.application.pipeline.timeline import schedule_srt_timeline
@@ -31,13 +31,14 @@ from app.domain.chunking import CHUNK_MAX_CHARS, Chunk
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import (
     Job,
+    JobMode,
     JobStatus,
     OutputFormat,
     assert_legal_transition,
     is_at_or_past,
     is_terminal,
 )
-from app.domain.languages import resolve_source_language
+from app.domain.languages import AUTO_SOURCE_LANGUAGE, resolve_source_language
 from app.domain.ports import (
     AudioProcessor,
     CheckpointStorage,
@@ -91,6 +92,8 @@ class PipelineOrchestrator:
     async def run(self, job: Job, text: str, *, workspace: Path) -> Job:
         if is_terminal(job.status):
             return job
+        if job.mode == JobMode.UNKNOWN:
+            return await self._fail(job, ErrorType.INVALID_INPUT, "Unknown job mode")
         workspace.mkdir(parents=True, exist_ok=True)
         checkpoints = CheckpointStore(storage=self._checkpoint_storage_factory(workspace))
         if job.status is not JobStatus.QUEUED:
@@ -100,36 +103,114 @@ class PipelineOrchestrator:
             )
         try:
             job = await self._advance(job, JobStatus.PARSING)
+            if job.mode == JobMode.NARRATE:
+                if is_srt_document(text):
+                    raise DomainError(
+                        ErrorType.INVALID_INPUT,
+                        "SRT narrate mode is coming in phase 2",
+                    )
+                return await self._run_narrate(
+                    job, text, workspace=workspace, checkpoints=checkpoints
+                )
+
             if is_srt_document(text):
                 return await self._run_srt(job, text, workspace=workspace, checkpoints=checkpoints)
 
-            normalized, resolved = await parse_source(text, job.source_language, self._detector)
-            chunks = chunk_source(normalized, max_chars=self._max_chars)
-            job = replace(
-                job,
-                source_language=resolved,
-                chunk_current=0 if job.status is JobStatus.PARSING else job.chunk_current,
-                chunk_total=len(chunks),
-            )
-            await self._jobs.save(job)
-
-            job = await self._advance(job, JobStatus.TRANSLATING)
-            job = await self._translate_chunks(job, chunks, workspace, checkpoints)
-
-            job = await self._advance(job, JobStatus.PREPARING_TTS)
-            job = await self._narrate_chunks(job, chunks, workspace, checkpoints)
-
-            job = await self._advance(job, JobStatus.GENERATING_AUDIO)
-            job = await self._generate_audio(job, chunks, workspace, checkpoints)
-
-            job = await self._advance(job, JobStatus.MERGING)
-            job = await self._merge(job, chunks, workspace)
-
-            return await self._advance(job, JobStatus.COMPLETED)
+            return await self._run_plain(job, text, workspace=workspace, checkpoints=checkpoints)
         except DomainError as exc:
             return await self._fail(job, exc.error_type, exc.message)
         except OSError:
             return await self._fail(job, ErrorType.STORAGE_FAILED, "failed to write artifacts")
+
+    async def _run_plain(
+        self,
+        job: Job,
+        text: str,
+        *,
+        workspace: Path,
+        checkpoints: CheckpointStore,
+    ) -> Job:
+        normalized, resolved = await parse_source(text, job.source_language, self._detector)
+        chunks = chunk_source(normalized, max_chars=self._max_chars)
+        job = replace(
+            job,
+            source_language=resolved,
+            chunk_current=0 if job.status is JobStatus.PARSING else job.chunk_current,
+            chunk_total=len(chunks),
+        )
+        await self._jobs.save(job)
+
+        job = await self._advance(job, JobStatus.TRANSLATING)
+        if job.source_language == job.target_language:
+            job = await self._pass_through_chunks(
+                job,
+                chunks,
+                workspace,
+                checkpoints,
+                stage=STAGE_TRANSLATED,
+                active_status=JobStatus.TRANSLATING,
+                suffix=".translated.txt",
+            )
+        else:
+            job = await self._translate_chunks(job, chunks, workspace, checkpoints)
+
+        return await self._finish_audio(job, chunks, workspace, checkpoints)
+
+    async def _run_narrate(
+        self,
+        job: Job,
+        text: str,
+        *,
+        workspace: Path,
+        checkpoints: CheckpointStore,
+    ) -> Job:
+        cleaned_text = prepare_narration_text(text)
+        normalized, resolved = await parse_source(cleaned_text, job.source_language, self._detector)
+        chunks = chunk_source(normalized, max_chars=self._max_chars)
+        target_lang = (
+            resolved
+            if not job.target_language or job.target_language == AUTO_SOURCE_LANGUAGE
+            else job.target_language
+        )
+        job = replace(
+            job,
+            source_language=resolved,
+            target_language=target_lang,
+            chunk_current=0 if job.status is JobStatus.PARSING else job.chunk_current,
+            chunk_total=len(chunks),
+        )
+        await self._jobs.save(job)
+
+        job = await self._advance(job, JobStatus.TRANSLATING)
+        job = await self._pass_through_chunks(
+            job,
+            chunks,
+            workspace,
+            checkpoints,
+            stage=STAGE_TRANSLATED,
+            active_status=JobStatus.TRANSLATING,
+            suffix=".translated.txt",
+        )
+
+        return await self._finish_audio(job, chunks, workspace, checkpoints)
+
+    async def _finish_audio(
+        self,
+        job: Job,
+        chunks: list[Chunk],
+        workspace: Path,
+        checkpoints: CheckpointStore,
+    ) -> Job:
+        job = await self._advance(job, JobStatus.PREPARING_TTS)
+        job = await self._narrate_chunks(job, chunks, workspace, checkpoints)
+
+        job = await self._advance(job, JobStatus.GENERATING_AUDIO)
+        job = await self._generate_audio(job, chunks, workspace, checkpoints)
+
+        job = await self._advance(job, JobStatus.MERGING)
+        job = await self._merge(job, chunks, workspace)
+
+        return await self._advance(job, JobStatus.COMPLETED)
 
     async def _run_srt(
         self,

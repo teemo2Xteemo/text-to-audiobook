@@ -13,7 +13,7 @@ from app.application.pipeline.passthrough import (
 )
 from app.config.factory import build_job_service, build_orchestrator
 from app.config.settings import Settings
-from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
 from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
@@ -538,3 +538,70 @@ def test_process_job_fails_with_provider_configuration_error_when_worker_missing
     assert fs_job is not None
     assert fs_job.status == JobStatus.FAILED
     assert fs_job.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+
+
+def test_process_job_narrate_mode_succeeds_without_translation_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = Job(
+        id="aaaa1111-2222-3333-4444-555566667777",
+        status=JobStatus.QUEUED,
+        source_language="vi-VN",
+        target_language="vi-VN",
+        voice="fake-vi-VN-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    _persist_job(tmp_path, job, "Văn bản thử nghiệm.")
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="gemini",
+        gemini_api_key=None,
+        tts_provider="fake",
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+
+    process_job(job.id)
+
+    service = build_job_service(settings)
+    updated = asyncio.run(service.get(job.id))
+    assert updated is not None
+    assert updated.status == JobStatus.COMPLETED
+
+    filesystem = FilesystemJobStorage(tmp_path)
+    fs_job = asyncio.run(filesystem.get_job(job.id))
+    assert fs_job is not None
+    assert fs_job.status == JobStatus.COMPLETED
+
+
+def test_process_job_fails_cleanly_when_job_mode_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.errors import ErrorType
+
+    job = Job(
+        id="bbbb1111-2222-3333-4444-555566667777",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="en-US",
+        voice="fake-en-US-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.UNKNOWN,
+    )
+    _persist_job(tmp_path, job, "Unknown mode text.")
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+
+    process_job(job.id)
+
+    service = build_job_service(settings)
+    updated = asyncio.run(service.get(job.id))
+    assert updated is not None
+    assert updated.status == JobStatus.FAILED
+    assert updated.error_type == ErrorType.INVALID_INPUT
+    assert "Unknown job mode" in (updated.message or "")
