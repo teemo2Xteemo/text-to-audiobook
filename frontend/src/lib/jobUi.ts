@@ -1,5 +1,5 @@
 import { AUTO_SOURCE_LANGUAGE, SPEED_MAX, SPEED_MIN } from "./constants";
-import type { JobStatus, Voice } from "../api/types";
+import type { JobMode, JobStatus, Voice } from "../api/types";
 
 export function voicesForTarget(voices: readonly Voice[], targetLanguage: string): Voice[] {
   return voices.filter((voice) => voice.language === targetLanguage);
@@ -58,6 +58,7 @@ export function progressCopy(
   status: JobStatus,
   chunkCurrent: number,
   chunkTotal: number,
+  mode?: JobMode,
 ): string {
   switch (status) {
     case "queued":
@@ -65,6 +66,9 @@ export function progressCopy(
     case "parsing":
       return "Reading story";
     case "translating":
+      if (mode === "narrate") {
+        return chunkTotal > 0 ? `Preparing text ${chunkCurrent}/${chunkTotal}` : "Preparing text";
+      }
       return chunkTotal > 0 ? `Translating ${chunkCurrent}/${chunkTotal}` : "Translating";
     case "preparing_tts":
       return "Preparing narration";
@@ -259,6 +263,18 @@ export const PIPELINE_STEPS: readonly PipelineStep[] = [
   { key: "merging", label: "Master" },
   { key: "completed", label: "Ready" },
 ];
+
+export function pipelineStepsForMode(mode?: JobMode): readonly PipelineStep[] {
+  return [
+    { key: "queued", label: "Queue" },
+    { key: "parsing", label: "Parse" },
+    { key: "translating", label: mode === "narrate" ? "Prepare" : "Translate" },
+    { key: "preparing_tts", label: "Narrate" },
+    { key: "generating_audio", label: "Synthesize" },
+    { key: "merging", label: "Master" },
+    { key: "completed", label: "Ready" },
+  ];
+}
 
 export type StepVisualState = "done" | "active" | "upcoming" | "error";
 

@@ -1,8 +1,8 @@
 import type { JobStatusResponse } from "../api/types";
 import {
-  PIPELINE_STEPS,
   computeProgressPercent,
   friendlyError,
+  pipelineStepsForMode,
   progressCopy,
   stepVisualState,
 } from "../lib/jobUi";
@@ -12,8 +12,9 @@ type JobProgressProps = {
 };
 
 export function JobProgress({ job }: JobProgressProps) {
-  const copy = progressCopy(job.status, job.chunk_current, job.chunk_total);
+  const copy = progressCopy(job.status, job.chunk_current, job.chunk_total, job.mode);
   const percent = computeProgressPercent(job.status, job.chunk_current, job.chunk_total);
+  const steps = pipelineStepsForMode(job.mode);
 
   return (
     <section className="panel progress-panel" aria-live="polite">
@@ -61,7 +62,7 @@ export function JobProgress({ job }: JobProgressProps) {
       </div>
 
       <ol className="pipeline-stepper" aria-label="Pipeline stages">
-        {PIPELINE_STEPS.map((step, index) => {
+        {steps.map((step, index) => {
           const state = stepVisualState(job.status, job.stage, step.key);
           return (
             <li key={step.key} className={`step-item step-${state}`}>

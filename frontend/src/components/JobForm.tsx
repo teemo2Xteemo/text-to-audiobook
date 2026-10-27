@@ -90,6 +90,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
+  const [confirmedCandidate, setConfirmedCandidate] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState(false);
@@ -122,14 +123,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   );
 
   const sourceOptions = useMemo<StudioSelectOption[]>(() => {
-    if (mode === "narrate") {
-      return narrateLanguages.map((code) => ({
-        value: code,
-        label: languageLabel(code),
-        displayLabel: languageDisplayName(code),
-        badge: code.toUpperCase(),
-      }));
-    }
+    const list = mode === "narrate" ? narrateLanguages : translateLanguages;
     return [
       {
         value: AUTO_SOURCE_LANGUAGE,
@@ -137,7 +131,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
         displayLabel: languageDisplayName(AUTO_SOURCE_LANGUAGE),
         badge: "AUTO",
       },
-      ...translateLanguages.map((code) => ({
+      ...list.map((code) => ({
         value: code,
         label: languageLabel(code),
         displayLabel: languageDisplayName(code),
@@ -915,6 +909,12 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                 <>
                   <div className="analysis-metrics-grid">
                     <div className="analysis-metric">
+                      <span className="metric-label">Detected language</span>
+                      <span className="metric-value">
+                        {languageLabel(analysis.language)} ({Math.round(analysis.confidence * 100)}%)
+                      </span>
+                    </div>
+                    <div className="analysis-metric">
                       <span className="metric-label">Detected encoding</span>
                       <span className="metric-value">{analysis.encoding.toUpperCase()}</span>
                     </div>
@@ -934,7 +934,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                     </div>
                   </div>
 
-                  {(analysis.needs_confirmation || analysis.confidence < 0.7) && (
+                  {(analysis.needs_confirmation || analysis.confidence < 0.7) && confirmedCandidate !== sourceLanguage && (
                     <div role="alert" className="confidence-warning-banner">
                       <div className="warning-text">
                         Low language detection confidence ({Math.round(analysis.confidence * 100)}%). Please confirm the language:
@@ -946,7 +946,10 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                               key={cand.language}
                               type="button"
                               className="chip-btn candidate-chip"
-                              onClick={() => setSourceLanguage(cand.language)}
+                              onClick={() => {
+                                setSourceLanguage(cand.language);
+                                setConfirmedCandidate(cand.language);
+                              }}
                             >
                               {languageDisplayName(cand.language)} ({Math.round(cand.confidence * 100)}%)
                             </button>
