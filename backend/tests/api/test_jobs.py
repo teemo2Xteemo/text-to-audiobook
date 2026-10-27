@@ -587,6 +587,12 @@ def test_decode_source_text_encodings():
     assert text_utf16_be == "Hello world"
     assert "utf-16" in enc_utf16_be.lower()
 
+    # Korean EUC-KR with Hanja (mixed script)
+    sample_kr_hanja = "大韓民國의 憲法은 國民의 自由와 權利를 保障한다.".encode("euc-kr")
+    text_kr_hanja, enc_kr_hanja = _decode_source_text(sample_kr_hanja)
+    assert text_kr_hanja == "大韓民國의 憲法은 國民의 自由와 權利를 保障한다."
+    assert any(k in enc_kr_hanja.lower() for k in ("kr", "949"))
+
     # Newline normalization
     text_newlines, _ = _decode_source_text(b"Line 1\r\nLine 2\rLine 3\n")
     assert text_newlines == "Line 1\nLine 2\nLine 3\n"

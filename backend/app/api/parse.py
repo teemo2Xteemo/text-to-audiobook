@@ -46,21 +46,36 @@ _ALLOWED_ENCODINGS = frozenset(
         "iso8859-1",
     }
 )
+_CHINESE_ENCODINGS = frozenset({"gb18030", "gbk", "gb2312", "big5", "big5hkscs", "cp950"})
 
 
-def _is_match_allowed(m: charset_normalizer.CharsetMatch) -> bool:
-    enc = m.encoding.lower().replace("-", "_")
-    if enc not in _ALLOWED_ENCODINGS and m.encoding.lower() not in _ALLOWED_ENCODINGS:
-        return False
-    # Reject CP949 if it unnaturally mixes Hangul and CJK ideographs
-    # (typical of Chinese GBK decoded as Korean).
-    if (
-        enc in ("cp949", "euc_kr")
-        and "Hangul Syllables" in m.alphabets
+def _select_charset_match(
+    matches: charset_normalizer.CharsetMatches,
+) -> charset_normalizer.CharsetMatch | None:
+    # If an alternative candidate in Chinese encodings has pure CJK ideographs
+    # and zero Hangul syllables, disambiguate against false-positive CP949 collisions
+    # on tiny Chinese snippets. Otherwise, legitimate Korean mixed script (국한문혼용 /
+    # Hangul + Hanja) is allowed.
+    has_pure_cjk_candidate = any(
+        m.encoding.lower().replace("-", "_") in _CHINESE_ENCODINGS
         and "CJK Unified Ideographs" in m.alphabets
-    ):
-        return False
-    return True
+        and "Hangul Syllables" not in m.alphabets
+        for m in matches
+    )
+
+    for m in matches:
+        enc = m.encoding.lower().replace("-", "_")
+        if enc not in _ALLOWED_ENCODINGS and m.encoding.lower() not in _ALLOWED_ENCODINGS:
+            continue
+        if (
+            enc in ("cp949", "euc_kr")
+            and "Hangul Syllables" in m.alphabets
+            and "CJK Unified Ideographs" in m.alphabets
+            and has_pure_cjk_candidate
+        ):
+            continue
+        return m
+    return None
 
 
 async def parse_create_job(request: Request, settings: Settings) -> CreateJobCommand:
@@ -188,11 +203,7 @@ def _decode_source_text(raw: bytes, max_upload_bytes: int | None = None) -> tupl
             encoding = "utf-8"
         except UnicodeDecodeError:
             matches = charset_normalizer.from_bytes(raw)
-            selected_match = None
-            for m in matches:
-                if _is_match_allowed(m):
-                    selected_match = m
-                    break
+            selected_match = _select_charset_match(matches)
             if selected_match is None:
                 raise DomainError(ErrorType.INVALID_INPUT, "source text has unsupported encoding")
             try:
