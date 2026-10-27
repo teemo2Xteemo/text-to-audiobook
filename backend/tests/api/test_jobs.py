@@ -671,3 +671,25 @@ def test_post_narrate_job_multipart(jobs_client: TestClient) -> None:
     assert body["mode"] == "narrate"
     assert body["source_language"] == "en-US"
     assert body["target_language"] == "en-US"
+
+
+def test_post_json_translate_missing_languages_raises_invalid_input(
+    jobs_client: TestClient,
+) -> None:
+    # Missing source_language
+    res_src = jobs_client.post(
+        "/api/jobs",
+        json={"text": "Story", "target_language": "ja-JP"},
+    )
+    assert res_src.status_code == 400
+    assert res_src.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "source_language is required" in res_src.json()["message"]
+
+    # Missing target_language
+    res_tgt = jobs_client.post(
+        "/api/jobs",
+        json={"text": "Story", "source_language": "en-US"},
+    )
+    assert res_tgt.status_code == 400
+    assert res_tgt.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "target_language is required" in res_tgt.json()["message"]

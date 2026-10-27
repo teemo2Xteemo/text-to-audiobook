@@ -71,7 +71,7 @@ class JobStatusResponse(BaseModel):
 
 class CreateJobJsonBody(BaseModel):
     text: str
-    source_language: str = "auto"
+    source_language: str = ""
     target_language: str = ""
     voice: str | None = None
     speed: float = Field(default=SPEED_DEFAULT, ge=SPEED_MIN, le=SPEED_MAX)

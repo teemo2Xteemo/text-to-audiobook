@@ -120,8 +120,8 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
     except ValidationError as exc:
         raise DomainError(ErrorType.INVALID_INPUT, validation_message(list(exc.errors()))) from exc
     text, _ = _decode_source_text(parsed.text.encode("utf-8"), max_upload_bytes)
-    source_language = parsed.source_language
-    target_language = parsed.target_language
+    source_language = parsed.source_language.strip()
+    target_language = parsed.target_language.strip()
     if parsed.mode == JobMode.TRANSLATE:
         if not source_language:
             raise DomainError(ErrorType.INVALID_INPUT, "source_language is required")
