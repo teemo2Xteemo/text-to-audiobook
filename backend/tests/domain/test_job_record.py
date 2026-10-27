@@ -138,3 +138,58 @@ def test_negative_recovery_attempts_rejected() -> None:
     payload["recovery_attempts"] = -1
     with pytest.raises(ValueError, match="recovery_attempts"):
         Job.from_dict(payload)
+
+
+def test_job_mode_serialization_and_validation() -> None:
+    from app.domain.jobs import Job, JobMode, OutputFormat
+
+    job = Job(
+        job_id="test-1",
+        source_language="vi-VN",
+        target_language="vi-VN",
+        output_format=OutputFormat.MP3,
+        mode=JobMode.NARRATE,
+    )
+    d = job.to_dict()
+    assert d["mode"] == "narrate"
+
+    restored = Job.from_dict(d)
+    assert restored.mode == JobMode.NARRATE
+
+    # Default fallback for missing mode
+    d_no_mode = d.copy()
+    del d_no_mode["mode"]
+    assert Job.from_dict(d_no_mode).mode == JobMode.TRANSLATE
+
+    # Unknown mode fallback
+    d_invalid = d.copy()
+    d_invalid["mode"] = "unsupported_mode"
+    assert Job.from_dict(d_invalid).mode == JobMode.UNKNOWN
+
+
+def test_job_narrate_rejects_translation_profile_id() -> None:
+    from app.domain.jobs import Job, JobMode, OutputFormat
+
+    with pytest.raises(ValueError, match="translation_profile_id"):
+        Job(
+            job_id="test-1",
+            source_language="vi-VN",
+            target_language="vi-VN",
+            output_format=OutputFormat.MP3,
+            mode=JobMode.NARRATE,
+            translation_profile_id="some-profile",
+        )
+
+
+@pytest.mark.anyio
+async def test_null_translation_provider() -> None:
+    from app.domain.ports import NullTranslationProvider
+
+    provider = NullTranslationProvider()
+    assert provider.languages() == set()
+    assert provider.supported_languages() == ()
+
+    with pytest.raises(DomainError) as exc:
+        await provider.translate("hello", "en-US", "vi-VN")
+    assert exc.value.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert "translation is not supported in narrate mode" in str(exc.value)
