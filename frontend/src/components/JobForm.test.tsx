@@ -296,4 +296,151 @@ describe("JobForm", () => {
     expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it("renders Narrate mode toggle with No model cost label", () => {
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={vi.fn()} />);
+    expect(screen.getByText(/Narrate/i)).toBeInTheDocument();
+    expect(screen.getByText(/No model cost/i)).toBeInTheDocument();
+  });
+
+  it("shows switch banner when source equals target in translate mode", async () => {
+    const user = userEvent.setup();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={vi.fn()} />);
+    await user.selectOptions(screen.getByLabelText("Source language"), "ja-JP");
+    await user.selectOptions(screen.getByLabelText("Target language"), "ja-JP");
+    expect(
+      screen.getByText(/Same language — switch to Narrate directly\?/i),
+    ).toBeInTheDocument();
+
+    const switchBtn = screen.getByRole("button", { name: /switch to narrate/i });
+    await user.click(switchBtn);
+    expect(screen.getByText(/No translation needed/i)).toBeInTheDocument();
+  });
+
+  it("switches to Narrate mode and retains selected language", async () => {
+    const user = userEvent.setup();
+    const mockCaps = {
+      ...capabilitiesFixture,
+      narrate_languages: ["en-US", "ja-JP"],
+    };
+    render(<JobForm capabilities={mockCaps} disabled={false} onSubmit={vi.fn()} />);
+    await user.selectOptions(screen.getByLabelText("Target language"), "ja-JP");
+    const narrateTab = screen.getByRole("tab", { name: /Narrate/i });
+    await user.click(narrateTab);
+
+    expect(screen.queryByLabelText("Target language")).toBeNull();
+    expect(screen.getByText(/No translation needed/i)).toBeInTheDocument();
+    const voiceSelect = screen.getByLabelText("Voice");
+    expect(within(voiceSelect).getByText("Japanese A")).toBeInTheDocument();
+  });
+
+  it("submits job with mode in payload", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    const narrateTab = screen.getByRole("tab", { name: /Narrate/i });
+    await user.click(narrateTab);
+
+    await user.type(screen.getByLabelText("Paste story"), "A short narration.");
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "narrate",
+        text: "A short narration.",
+      }),
+    );
+  });
+
+  it("displays analysis panel and handles preview tts", async () => {
+    const user = userEvent.setup();
+    const fakeAudio = { audio_base64: "AAAA", mime_type: "audio/mpeg" };
+    const fakeAnalyze = {
+      encoding: "UTF-8",
+      language: "en-US",
+      confidence: 0.95,
+      needs_confirmation: false,
+      candidates: [{ language: "en-US", confidence: 0.95 }],
+      chapters_count: 3,
+      chapters_preview: [{ index: 0, title: "Ch 1", char_count: 50 }],
+      duration_estimate_seconds: 120,
+      process_time_estimate_seconds: 18,
+      preview_lines: ["Line 1", "Line 2"],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/analyze")) {
+          return new Response(JSON.stringify(fakeAnalyze), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/api/tts/preview")) {
+          return new Response(JSON.stringify(fakeAudio), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={vi.fn()} />);
+    await user.type(screen.getByLabelText("Paste story"), "Chapter 1 text here.");
+
+    expect(await screen.findByText(/3 chapters/i)).toBeInTheDocument();
+    expect(screen.getByText(/Detected encoding/i)).toBeInTheDocument();
+    expect(screen.getByText(/2m/i)).toBeInTheDocument();
+
+    const listenBtn = screen.getByRole("button", { name: /Listen/i });
+    expect(listenBtn).toBeInTheDocument();
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    await user.click(listenBtn);
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/tts/preview"),
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+  });
+
+  it("shows confirmation banner when detection confidence is low or needs confirmation", async () => {
+    const user = userEvent.setup();
+    const fakeAnalyze = {
+      encoding: "UTF-8",
+      language: "ja-JP",
+      confidence: 0.55,
+      needs_confirmation: true,
+      candidates: [
+        { language: "ja-JP", confidence: 0.55 },
+        { language: "en-US", confidence: 0.45 },
+      ],
+      chapters_count: 1,
+      chapters_preview: [],
+      duration_estimate_seconds: 30,
+      process_time_estimate_seconds: 4,
+      preview_lines: ["Snippet"],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/analyze")) {
+          return new Response(JSON.stringify(fakeAnalyze), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={vi.fn()} />);
+    await user.type(screen.getByLabelText("Paste story"), "Ambiguous text snippet");
+
+    expect(await screen.findByText(/confirm the language/i)).toBeInTheDocument();
+  });
 });

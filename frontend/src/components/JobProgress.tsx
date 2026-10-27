@@ -2,6 +2,7 @@ import type { JobStatusResponse } from "../api/types";
 import {
   PIPELINE_STEPS,
   computeProgressPercent,
+  friendlyError,
   progressCopy,
   stepVisualState,
 } from "../lib/jobUi";
@@ -98,12 +99,20 @@ export function JobProgress({ job }: JobProgressProps) {
         ) : null}
       </div>
 
-      {job.status === "failed" && (job.error_type || job.message) ? (
-        <p role="alert" className="alert-banner alert-error">
-          {job.error_type}
-          {job.message ? `: ${job.message}` : ""}
-        </p>
-      ) : null}
+      {job.status === "failed" && (job.error_type || job.message) ? (() => {
+        const { summary, details } = friendlyError(job.error_type, job.message);
+        return (
+          <div role="alert" className="alert-banner alert-error">
+            <p className="alert-summary">{summary}</p>
+            {details ? (
+              <details className="text-xs mt-1 text-slate-500 cursor-pointer">
+                <summary>Technical details</summary>
+                <span>{details}</span>
+              </details>
+            ) : null}
+          </div>
+        );
+      })() : null}
     </section>
   );
 }

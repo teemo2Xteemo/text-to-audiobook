@@ -33,4 +33,20 @@ describe("JobProgress", () => {
     );
     expect(screen.getByRole("alert")).toHaveTextContent("TTS_FAILED: provider unavailable");
   });
+
+  it("shows friendly error summary with expandable technical details", () => {
+    render(
+      <JobProgress
+        job={queuedJob({
+          status: "failed",
+          stage: "failed",
+          error_type: "PROVIDER_RATE_LIMIT",
+          message: "Too many requests",
+        })}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("The service is temporarily busy");
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
+    expect(screen.getByText("PROVIDER_RATE_LIMIT: Too many requests")).toBeInTheDocument();
+  });
 });

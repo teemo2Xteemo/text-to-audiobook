@@ -1,5 +1,15 @@
 import { apiBaseUrl } from "../lib/env";
-import { ApiError, type CreateJobInput, type Capabilities, type JobCreated, type JobStatusResponse } from "./types";
+import {
+  ApiError,
+  type AnalyzeResponse,
+  type Capabilities,
+  type CreateJobInput,
+  type DetectLanguageResponse,
+  type JobCreated,
+  type JobStatusResponse,
+  type TTSPreviewPayload,
+  type TTSPreviewResponse,
+} from "./types";
 
 function requestUrl(path: string): string {
   const base = apiBaseUrl().replace(/\/$/, "");
@@ -119,6 +129,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
     if (input.translation_profile_id) {
       form.set("translation_profile_id", input.translation_profile_id);
     }
+    if (input.mode) {
+      form.set("mode", input.mode);
+    }
     form.set("file", input.file);
     const response = await fetch(requestUrl("/api/jobs"), {
       method: "POST",
@@ -140,10 +153,49 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
   if (input.translation_profile_id) {
     body.translation_profile_id = input.translation_profile_id;
   }
+  if (input.mode) {
+    body.mode = input.mode;
+  }
   const response = await fetch(requestUrl("/api/jobs"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   return parseJson<JobCreated>(response);
+}
+
+export async function detectLanguage(text: string): Promise<DetectLanguageResponse> {
+  const response = await fetch(requestUrl("/api/detect-language"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  return parseJson<DetectLanguageResponse>(response);
+}
+
+export async function analyze(input: { text?: string; file?: File }): Promise<AnalyzeResponse> {
+  if (input.file) {
+    const form = new FormData();
+    form.set("file", input.file);
+    const response = await fetch(requestUrl("/api/analyze"), {
+      method: "POST",
+      body: form,
+    });
+    return parseJson<AnalyzeResponse>(response);
+  }
+  const response = await fetch(requestUrl("/api/analyze"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: input.text ?? "" }),
+  });
+  return parseJson<AnalyzeResponse>(response);
+}
+
+export async function previewTts(payload: TTSPreviewPayload): Promise<TTSPreviewResponse> {
+  const response = await fetch(requestUrl("/api/tts/preview"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJson<TTSPreviewResponse>(response);
 }
