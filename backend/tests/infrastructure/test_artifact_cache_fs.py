@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -76,3 +77,24 @@ def test_unknown_operation_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(DomainError) as exc:
         cache.put("narration", "e" * 64, source)
     assert exc.value.error_type is ErrorType.INVALID_INPUT
+
+
+def test_put_uses_uuid_named_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = FilesystemArtifactCache(tmp_path / "cache")
+    source = tmp_path / "in.txt"
+    source.write_text("test-data", encoding="utf-8")
+    copied_targets: list[Path] = []
+    real_copyfile = shutil.copyfile
+
+    def spy_copyfile(src: Path | str, dst: Path | str) -> str:
+        copied_targets.append(Path(dst))
+        return real_copyfile(src, dst)
+
+    monkeypatch.setattr("shutil.copyfile", spy_copyfile)
+    cache.put("translation", "f" * 64, source)
+    assert len(copied_targets) == 1
+    temp_target = copied_targets[0]
+    # Temp file should be hidden with dot prefix and end with .tmp
+    assert temp_target.name.startswith("." + ("f" * 64) + ".")
+    assert temp_target.name.endswith(".tmp")
+    assert len(temp_target.name) > 64 + 5

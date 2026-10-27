@@ -75,6 +75,10 @@ def _nllb_available() -> bool:
 
 
 def _languages_for_provider(provider: str) -> tuple[str, ...]:
+    if provider in ("groq", "openrouter"):
+        from app.providers.translation.openai_compatible import SUPPORTED_LANGUAGES
+
+        return SUPPORTED_LANGUAGES
     if provider == "gemini":
         from app.providers.translation.gemini import SUPPORTED_LANGUAGES
 
@@ -139,6 +143,66 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
             )
         )
 
+    groq_key = (
+        settings.groq_api_key.get_secret_value().strip()
+        if settings.groq_api_key is not None
+        else ""
+    )
+    if groq_key:
+        groq_langs = _languages_for_provider("groq")
+        profiles.append(
+            TranslationProfile(
+                id="groq-qwen",
+                provider="groq",
+                model="qwen/qwen3.8-27b",
+                label="Groq (Qwen 27B / Chinese-Vietnamese Specialist)",
+                badge="ONLINE",
+                description="Specialized for literary Asian stories · Fast",
+                supported_languages=groq_langs,
+            )
+        )
+        profiles.append(
+            TranslationProfile(
+                id="groq-llama-70b",
+                provider="groq",
+                model="llama-3.3-70b-versatile",
+                label="Groq (Llama 3.3 70B)",
+                badge="ONLINE",
+                description="High capability · Natural flow",
+                supported_languages=groq_langs,
+            )
+        )
+        profiles.append(
+            TranslationProfile(
+                id="groq-llama-8b",
+                provider="groq",
+                model="llama-3.1-8b-instant",
+                label="Groq (Llama 3.1 8B Instant)",
+                badge="ONLINE",
+                description="Ultra fast · High daily limit",
+                supported_languages=groq_langs,
+            )
+        )
+
+    openrouter_key = (
+        settings.openrouter_api_key.get_secret_value().strip()
+        if settings.openrouter_api_key is not None
+        else ""
+    )
+    if openrouter_key:
+        openrouter_langs = _languages_for_provider("openrouter")
+        profiles.append(
+            TranslationProfile(
+                id="openrouter-auto",
+                provider="openrouter",
+                model="openrouter/auto",
+                label="OpenRouter (Auto / Best Available)",
+                badge="ONLINE",
+                description="Auto-routes to active model",
+                supported_languages=openrouter_langs,
+            )
+        )
+
     if _nllb_available():
         model_id = settings.nllb_model_id
         is_distilled_600m = "600M" in model_id or "600m" in model_id
@@ -181,7 +245,7 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
         default_id = slug if slug.startswith(default_provider) else f"{default_provider}-{slug}"
         badge = (
             "ONLINE"
-            if default_provider == "gemini"
+            if default_provider in ("gemini", "groq", "openrouter")
             else ("OFFLINE" if default_provider == "nllb" else "LOCAL")
         )
         configured_profile = TranslationProfile(
@@ -200,6 +264,16 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
         logger.warning(
             "configured_default_provider_gemini_missing_api_key",
             extra={"provider": "gemini", "model": default_model},
+        )
+    elif default_provider == "groq" and not groq_key:
+        logger.warning(
+            "configured_default_provider_groq_missing_api_key",
+            extra={"provider": "groq", "model": default_model},
+        )
+    elif default_provider == "openrouter" and not openrouter_key:
+        logger.warning(
+            "configured_default_provider_openrouter_missing_api_key",
+            extra={"provider": "openrouter", "model": default_model},
         )
     elif default_provider == "nllb" and not _nllb_available():
         logger.warning(
@@ -286,6 +360,42 @@ def build_translation_provider(settings: Settings) -> TranslationProvider:
             base_url=settings.gemini_base_url,
             timeout_seconds=settings.gemini_http_timeout_seconds,
         )
+    if name == "groq":
+        api_key = (
+            settings.groq_api_key.get_secret_value().strip()
+            if settings.groq_api_key is not None
+            else ""
+        )
+        if not api_key:
+            raise ProviderConfigurationError(
+                "GROQ_API_KEY is required when TRANSLATION_PROVIDER=groq"
+            )
+        from app.providers.translation.openai_compatible import GroqTranslationProvider
+
+        return GroqTranslationProvider(
+            api_key=api_key,
+            model=settings.groq_translation_model,
+            base_url=settings.groq_base_url,
+            timeout_seconds=settings.groq_http_timeout_seconds,
+        )
+    if name == "openrouter":
+        api_key = (
+            settings.openrouter_api_key.get_secret_value().strip()
+            if settings.openrouter_api_key is not None
+            else ""
+        )
+        if not api_key:
+            raise ProviderConfigurationError(
+                "OPENROUTER_API_KEY is required when TRANSLATION_PROVIDER=openrouter"
+            )
+        from app.providers.translation.openai_compatible import OpenRouterTranslationProvider
+
+        return OpenRouterTranslationProvider(
+            api_key=api_key,
+            model=settings.openrouter_translation_model,
+            base_url=settings.openrouter_base_url,
+            timeout_seconds=settings.openrouter_http_timeout_seconds,
+        )
     raise UnknownProviderError(f"unknown TRANSLATION_PROVIDER: {settings.translation_provider}")
 
 
@@ -338,6 +448,10 @@ def translation_pin_from_settings(settings: Settings) -> tuple[str, str]:
         return name, settings.ollama_translation_model
     if name == "gemini":
         return name, settings.gemini_translation_model
+    if name == "groq":
+        return name, settings.groq_translation_model
+    if name == "openrouter":
+        return name, settings.openrouter_translation_model
     if name == "fake":
         return "fake", "fake"
     raise UnknownProviderError(f"unknown TRANSLATION_PROVIDER: {settings.translation_provider}")
@@ -359,6 +473,14 @@ def settings_for_translation_pin(settings: Settings, job: Job) -> Settings:
         return settings.model_copy(
             update={"translation_provider": "gemini", "gemini_translation_model": model}
         )
+    if provider == "groq":
+        return settings.model_copy(
+            update={"translation_provider": "groq", "groq_translation_model": model}
+        )
+    if provider == "openrouter":
+        return settings.model_copy(
+            update={"translation_provider": "openrouter", "openrouter_translation_model": model}
+        )
     if provider == "fake":
         return settings.model_copy(update={"translation_provider": "fake"})
     raise UnknownProviderError(f"unknown translation pin: {provider}")
@@ -373,6 +495,10 @@ def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
         translation_model = settings.ollama_translation_model
     elif translation == "gemini":
         translation_model = settings.gemini_translation_model
+    elif translation == "groq":
+        translation_model = settings.groq_translation_model
+    elif translation == "openrouter":
+        translation_model = settings.openrouter_translation_model
     else:
         translation_model = "fake"
     return CacheIdentity(

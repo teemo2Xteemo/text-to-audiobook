@@ -130,6 +130,41 @@ describe("api client", () => {
     await expect(getJob(JOB_ID)).rejects.toBeInstanceOf(ApiError);
   });
 
+  it("extracts FastAPI detail string as error message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ detail: "Not found" }, 404),
+      ),
+    );
+    await expect(getJob(JOB_ID)).rejects.toEqual(
+      expect.objectContaining({
+        error_type: "INVALID_INPUT",
+        message: "Not found",
+        status: 404,
+      }),
+    );
+  });
+
+  it("handles non-JSON 500 error without masking as INVALID_INPUT", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("Internal Server Error", {
+          status: 500,
+          headers: { "Content-Type": "text/plain" },
+        }),
+      ),
+    );
+    await expect(getJob(JOB_ID)).rejects.toEqual(
+      expect.objectContaining({
+        error_type: "STORAGE_FAILED",
+        message: "Internal Server Error",
+        status: 500,
+      }),
+    );
+  });
+
   it("returns job status for polling", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(queuedJob())));
     await expect(getJob(JOB_ID)).resolves.toMatchObject({

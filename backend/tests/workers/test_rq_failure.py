@@ -132,3 +132,32 @@ def test_handle_rq_failure_provider_configuration_error_maps_correctly(
     assert failed.status is JobStatus.FAILED
     assert failed.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
     assert "GEMINI_API_KEY" in (failed.message or "")
+
+
+def test_handle_rq_failure_domain_error_preserves_error_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.errors import DomainError
+
+    job_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    asyncio.run(FilesystemJobStorage(tmp_path).save_job(_job(job_id, JobStatus.TRANSLATING)))
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        "app.workers.rq_failure.Settings",
+        lambda **_: Settings(_env_file=None, storage_path=tmp_path),
+    )
+    monkeypatch.setattr("app.workers.rq_failure.build_job_service", lambda settings: service)
+
+    handle_rq_failure(
+        SimpleNamespace(args=(job_id,)),
+        None,
+        DomainError,
+        DomainError(ErrorType.UNSUPPORTED_LANGUAGE, "source language not supported"),
+        None,
+    )
+
+    failed = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job_id))
+    assert failed is not None
+    assert failed.status is JobStatus.FAILED
+    assert failed.error_type is ErrorType.UNSUPPORTED_LANGUAGE
+    assert failed.message == "source language not supported"

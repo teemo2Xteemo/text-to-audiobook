@@ -46,6 +46,14 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.gemini_translation_model == "gemini-3.5-flash"
     assert settings.gemini_base_url == "https://generativelanguage.googleapis.com"
     assert settings.gemini_http_timeout_seconds == 60.0
+    assert settings.groq_api_key is None
+    assert settings.groq_translation_model == "qwen/qwen3.8-27b"
+    assert settings.groq_base_url == "https://api.groq.com/openai/v1"
+    assert settings.groq_http_timeout_seconds == 60.0
+    assert settings.openrouter_api_key is None
+    assert settings.openrouter_translation_model == "openrouter/auto"
+    assert settings.openrouter_base_url == "https://openrouter.ai/api/v1"
+    assert settings.openrouter_http_timeout_seconds == 60.0
     assert settings.chunk_translation_concurrency == 2
     assert settings.chunk_tts_concurrency == 2
 
@@ -142,3 +150,21 @@ def test_gemini_api_key_secret_str() -> None:
     assert settings.gemini_api_key is not None
     assert settings.gemini_api_key.get_secret_value() == "super-secret-key"
     assert "super-secret-key" not in str(settings.gemini_api_key)
+
+
+def test_groq_settings_and_validation() -> None:
+    with pytest.raises(ValidationError, match="GROQ_BASE_URL"):
+        Settings(_env_file=None, groq_base_url="ftp://invalid.com")
+    settings = Settings(_env_file=None, groq_api_key="gsk_secret_key")
+    assert settings.groq_api_key is not None
+    assert settings.groq_api_key.get_secret_value() == "gsk_secret_key"
+    assert "gsk_secret_key" not in str(settings.groq_api_key)
+
+
+def test_openrouter_settings_and_validation() -> None:
+    with pytest.raises(ValidationError, match="OPENROUTER_BASE_URL"):
+        Settings(_env_file=None, openrouter_base_url="ftp://invalid.com")
+    settings = Settings(_env_file=None, openrouter_api_key="sk-or-secret_key")
+    assert settings.openrouter_api_key is not None
+    assert settings.openrouter_api_key.get_secret_value() == "sk-or-secret_key"
+    assert "sk-or-secret_key" not in str(settings.openrouter_api_key)

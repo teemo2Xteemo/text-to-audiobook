@@ -78,6 +78,17 @@ def test_voices_for_unknown_language_is_empty(tmp_path: Path) -> None:
     assert list(provider.voices_for("xx-XX")) == []
 
 
+def test_voices_for_indexes_by_language(tmp_path: Path) -> None:
+    provider, _client = _provider(tmp_path)
+    assert getattr(provider, "_voices_by_language", None) is None
+    voices_vi = provider.voices_for("vi-VN")
+    assert len(voices_vi) == 2
+    indexed = getattr(provider, "_voices_by_language", None)
+    assert indexed is not None
+    assert "vi-VN" in indexed
+    assert "ja-JP" in indexed
+
+
 def test_default_voice_is_reordered_first(tmp_path: Path) -> None:
     provider, _client = _provider(tmp_path, defaults={"vi-VN": _VI_B})
     ids = [voice.id for voice in provider.voices_for("vi-VN")]
@@ -187,6 +198,30 @@ def test_edge_synthesize_cleans_up_empty_or_failed_temp_file(tmp_path: Path) -> 
         asyncio.run(provider.synthesize("hello", "en-US", _EN, TTSSettings(speed=1.0)))
     assert exc.value.error_type is ErrorType.TTS_FAILED
     assert list(out_dir.glob("*.mp3")) == []
+
+
+def test_sdk_edge_client_timeout_raises_timeout_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.providers.tts.edge import SdkEdgeTtsClient
+
+    class _HangingCommunicate:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def save(self, path: str) -> None:
+            await asyncio.sleep(10)
+
+    import sys
+    import types
+
+    fake_edge_tts = types.ModuleType("edge_tts")
+    fake_edge_tts.Communicate = _HangingCommunicate  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge_tts)
+
+    client = SdkEdgeTtsClient(timeout_seconds=0.01)
+    with pytest.raises(TimeoutError):
+        asyncio.run(client.synthesize("test", "voice", "+0%", tmp_path / "out.mp3"))
 
 
 @pytest.mark.integration

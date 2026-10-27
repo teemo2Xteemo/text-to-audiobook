@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createJob, getJob, toApiError } from "../api/client";
 import { ApiError, type CreateJobInput, type JobStatusResponse } from "../api/types";
@@ -26,6 +26,7 @@ export function useJob(): JobView & {
   submit: (input: CreateJobInput) => Promise<void>;
 } {
   const [view, setView] = useState<JobView>({ status: "idle" });
+  const failureCountRef = useRef(0);
 
   const applyJob = useCallback((job: JobStatusResponse) => {
     if (job.status === "completed") {
@@ -42,6 +43,7 @@ export function useJob(): JobView & {
   const pollOnce = useCallback(
     async (jobId: string) => {
       const job = await getJob(jobId);
+      failureCountRef.current = 0;
       applyJob(job);
     },
     [applyJob],
@@ -54,11 +56,16 @@ export function useJob(): JobView & {
     const jobId = view.job.job_id;
     const timer = window.setTimeout(() => {
       void pollOnce(jobId).catch((error: unknown) => {
-        setView((current) => ({
-          status: "error",
-          error: toApiError(error),
-          job: current.status === "idle" ? undefined : current.job,
-        }));
+        failureCountRef.current += 1;
+        if (failureCountRef.current >= 3) {
+          setView((current) => ({
+            status: "error",
+            error: toApiError(error),
+            job: current.status === "idle" ? undefined : current.job,
+          }));
+        } else {
+          setView((current) => ({ ...current }));
+        }
       });
     }, POLL_INTERVAL_MS);
     return () => window.clearTimeout(timer);
@@ -69,9 +76,11 @@ export function useJob(): JobView & {
     if (!stored) {
       return;
     }
+    failureCountRef.current = 0;
     setView({ status: "loading" });
     void getJob(stored)
       .then((job) => {
+        failureCountRef.current = 0;
         applyJob(job);
       })
       .catch((error: unknown) => {
@@ -87,11 +96,13 @@ export function useJob(): JobView & {
 
   const submit = useCallback(
     async (input: CreateJobInput) => {
+      failureCountRef.current = 0;
       setView({ status: "loading" });
       try {
         const created = await createJob(input);
         sessionStorage.setItem(LAST_JOB_STORAGE_KEY, created.job_id);
         const job = await getJob(created.job_id);
+        failureCountRef.current = 0;
         applyJob(job);
       } catch (error) {
         setView({ status: "error", error: toApiError(error) });

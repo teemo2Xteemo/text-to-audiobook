@@ -116,3 +116,11 @@ def test_get_capabilities_service_caches_instance_on_app_state(
         assert client.get("/api/capabilities").status_code == 200
     assert calls == 1
     assert app.state.capabilities_service is service
+
+
+def test_security_headers_present(capabilities_client: TestClient) -> None:
+    response = capabilities_client.get("/api/capabilities")
+    assert response.status_code == 200
+    assert response.headers.get("x-content-type-options") == "nosniff"
+    assert response.headers.get("x-frame-options") == "DENY"
+    assert response.headers.get("referrer-policy") == "strict-origin-when-cross-origin"

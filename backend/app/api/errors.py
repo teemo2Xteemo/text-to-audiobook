@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from fastapi import Request
@@ -5,6 +6,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.errors import DomainError, ErrorType
+
+logger = logging.getLogger(__name__)
 
 _STATUS_BY_ERROR = {
     ErrorType.INVALID_INPUT: 400,
@@ -44,6 +47,14 @@ async def http_exception_handler(_request: Request, exc: StarletteHTTPException)
     return JSONResponse(
         status_code=exc.status_code,
         content=envelope(error_type, message),
+    )
+
+
+async def unhandled_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("unhandled_server_error", exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content=envelope(ErrorType.STORAGE_FAILED, "internal server error"),
     )
 
 

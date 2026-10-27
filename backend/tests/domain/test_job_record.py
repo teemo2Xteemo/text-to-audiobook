@@ -14,6 +14,12 @@ def test_speed_bounds() -> None:
     assert exc.value.error_type is ErrorType.INVALID_INPUT
     with pytest.raises(DomainError):
         ensure_valid_speed(2.01)
+    with pytest.raises(DomainError):
+        ensure_valid_speed(float("nan"))
+    with pytest.raises(DomainError):
+        ensure_valid_speed(float("inf"))
+    with pytest.raises(DomainError):
+        ensure_valid_speed(float("-inf"))
 
 
 def test_job_dict_roundtrip() -> None:
@@ -78,6 +84,16 @@ def test_half_pin_is_treated_as_missing(key: str) -> None:
     job = Job.from_dict(payload)
     assert job.translation_provider is None
     assert job.translation_model is None
+
+
+@pytest.mark.parametrize("provider", ["fake", "nllb", "ollama", "gemini", "groq", "openrouter"])
+def test_all_registered_pin_providers_accepted(provider: str) -> None:
+    payload = _legacy_job_payload()
+    payload["translation_provider"] = provider
+    payload["translation_model"] = "test-model"
+    job = Job.from_dict(payload)
+    assert job.translation_provider == provider
+    assert job.translation_model == "test-model"
 
 
 def test_pin_provider_must_be_registered() -> None:

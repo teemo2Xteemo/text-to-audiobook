@@ -545,3 +545,76 @@ def test_build_available_translation_profiles_omits_nllb_when_packages_missing(
     profiles = build_available_translation_profiles(settings)
     ids = [p.id for p in profiles]
     assert not any("nllb" in pid for pid in ids)
+
+
+def test_build_translation_provider_groq_missing_and_present_key() -> None:
+    from app.config.factory import ProviderConfigurationError
+    from app.providers.translation.openai_compatible import GroqTranslationProvider
+
+    settings_no_key = Settings(_env_file=None, translation_provider="groq", groq_api_key=None)
+    with pytest.raises(ProviderConfigurationError, match="GROQ_API_KEY is required"):
+        build_translation_provider(settings_no_key)
+
+    settings_with_key = Settings(
+        _env_file=None, translation_provider="groq", groq_api_key="gsk_valid_key"
+    )
+    provider = build_translation_provider(settings_with_key)
+    assert isinstance(provider, GroqTranslationProvider)
+
+
+def test_build_translation_provider_openrouter_missing_and_present_key() -> None:
+    from app.config.factory import ProviderConfigurationError
+    from app.providers.translation.openai_compatible import OpenRouterTranslationProvider
+
+    settings_no_key = Settings(
+        _env_file=None, translation_provider="openrouter", openrouter_api_key=None
+    )
+    with pytest.raises(ProviderConfigurationError, match="OPENROUTER_API_KEY is required"):
+        build_translation_provider(settings_no_key)
+
+    settings_with_key = Settings(
+        _env_file=None, translation_provider="openrouter", openrouter_api_key="sk-or-valid_key"
+    )
+    provider = build_translation_provider(settings_with_key)
+    assert isinstance(provider, OpenRouterTranslationProvider)
+
+
+def test_translation_pin_from_settings_groq_and_openrouter() -> None:
+    settings_groq = Settings(
+        _env_file=None,
+        translation_provider="groq",
+        groq_translation_model="qwen/qwen3.8-27b",
+    )
+    assert translation_pin_from_settings(settings_groq) == ("groq", "qwen/qwen3.8-27b")
+
+    settings_or = Settings(
+        _env_file=None,
+        translation_provider="openrouter",
+        openrouter_translation_model="openrouter/auto",
+    )
+    assert translation_pin_from_settings(settings_or) == (
+        "openrouter",
+        "openrouter/auto",
+    )
+
+
+def test_build_available_translation_profiles_with_groq_and_openrouter() -> None:
+    from app.config.factory import build_available_translation_profiles
+
+    settings = Settings(
+        _env_file=None,
+        translation_provider="groq",
+        groq_api_key="gsk_key",
+        openrouter_api_key="sk-or-key",
+    )
+    profiles = build_available_translation_profiles(settings)
+    ids = [p.id for p in profiles]
+    assert "groq-qwen" in ids
+    assert "groq-llama-70b" in ids
+    assert "groq-llama-8b" in ids
+    assert "openrouter-auto" in ids
+
+    # Default profile matches configured translation_provider
+    default_p = next(p for p in profiles if p.is_default)
+    assert default_p.provider == "groq"
+    assert default_p.model == "qwen/qwen3.8-27b"

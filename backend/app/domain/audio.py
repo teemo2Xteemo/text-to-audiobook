@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,7 +15,13 @@ class TTSSettings:
 
 
 def ensure_valid_speed(speed: float) -> None:
-    if speed < SPEED_MIN or speed > SPEED_MAX:
+    if (
+        not isinstance(speed, (int, float))
+        or math.isnan(speed)
+        or math.isinf(speed)
+        or speed < SPEED_MIN
+        or speed > SPEED_MAX
+    ):
         raise DomainError(
             ErrorType.INVALID_INPUT,
             f"speed must be between {SPEED_MIN} and {SPEED_MAX}",

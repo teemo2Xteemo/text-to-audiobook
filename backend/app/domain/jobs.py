@@ -83,7 +83,7 @@ class OutputFormat(StrEnum):
     WAV = "wav"
 
 
-_PIN_PROVIDERS = frozenset({"fake", "nllb", "ollama", "gemini"})
+_PIN_PROVIDERS = frozenset({"fake", "nllb", "ollama", "gemini", "groq", "openrouter"})
 
 
 def _optional_pin_value(data: Mapping[str, Any], key: str) -> str | None:
