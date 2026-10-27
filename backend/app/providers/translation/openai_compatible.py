@@ -65,6 +65,20 @@ _BCP47_TO_OPENAI: dict[str, tuple[str, str]] = {
 SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(sorted(_BCP47_TO_OPENAI))
 
 _MAX_INPUT_CHARS = 10000
+# Output budget for one chunk. Groq's default max_completion_tokens is 1024,
+# and gpt-oss reasoning tokens come out of that same budget.
+_GROQ_MAX_COMPLETION_TOKENS = 8192
+GROQ_QWEN_MODEL = "qwen/qwen3.8-27b"
+GROQ_GPT_OSS_120B = "openai/gpt-oss-120b"
+GROQ_GPT_OSS_20B = "openai/gpt-oss-20b"
+# Free/developer tiers shut these down on 2026-08-16. Saved job pins and
+# GROQ_TRANSLATION_MODEL may still name them.
+_RETIRED_GROQ_MODELS = {
+    "llama-3.3-70b-versatile": GROQ_GPT_OSS_120B,
+    "llama-3.1-8b-instant": GROQ_GPT_OSS_20B,
+}
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_THINK_OPEN = re.compile(r"<think>.*\Z", re.IGNORECASE | re.DOTALL)
 _ERROR_BODY_LIMIT = 2048
 _DETAIL_LIMIT = 200
 _CLIENT_MESSAGE_LIMIT = 300
@@ -90,6 +104,39 @@ def bcp47_to_openai_lang(language: str) -> tuple[str, str]:
     if mapped is None:
         raise DomainError(ErrorType.UNSUPPORTED_LANGUAGE, "language is not supported")
     return mapped
+
+
+def canonical_groq_model(model: str) -> str:
+    """Map a retired Groq model id onto the current replacement."""
+    return _RETIRED_GROQ_MODELS.get(model.strip(), model.strip())
+
+
+def groq_completion_options(model: str) -> dict[str, Any]:
+    """Groq chat fields that keep reasoning out of the spoken translation.
+
+    gpt-oss always reasons. ``reasoning_effort`` is only ``low``/``medium``/
+    ``high``. ``include_reasoning`` false omits the trace. Do not also send
+    ``reasoning_format``. Qwen3 preview puts ``<think>`` in ``content`` unless
+    ``reasoning_effort`` is ``none``.
+    """
+    if model.startswith("openai/gpt-oss"):
+        return {
+            "reasoning_effort": "low",
+            "include_reasoning": False,
+            "max_completion_tokens": _GROQ_MAX_COMPLETION_TOKENS,
+        }
+    if model.startswith("qwen/qwen3"):
+        return {
+            "reasoning_effort": "none",
+            "max_completion_tokens": _GROQ_MAX_COMPLETION_TOKENS,
+        }
+    return {}
+
+
+def _visible_translation(content: str) -> str:
+    """Drop reasoning markup. Never reads a separate reasoning field."""
+    without_blocks = _THINK_BLOCK.sub("", content)
+    return _THINK_OPEN.sub("", without_blocks).strip()
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -374,6 +421,9 @@ class OpenAICompatibleTranslationProvider:
     def supported_languages(self) -> Sequence[str]:
         return list(_BCP47_TO_OPENAI)
 
+    def _completion_options(self) -> dict[str, Any]:
+        return {}
+
     async def translate(self, text: str, source_language: str, target_language: str) -> str:
         if not self._api_key:
             raise DomainError(
@@ -416,6 +466,7 @@ class OpenAICompatibleTranslationProvider:
             ],
             "temperature": 0.3,
         }
+        payload.update(self._completion_options())
 
         try:
             data = await self._http.create_chat_completion(
@@ -453,7 +504,7 @@ class OpenAICompatibleTranslationProvider:
         if not isinstance(translated, str):
             raise DomainError(ErrorType.TRANSLATION_FAILED, "empty translation content received")
 
-        cleaned = _strip_markdown_fences(translated)
+        cleaned = _strip_markdown_fences(_visible_translation(translated))
         if not cleaned:
             raise DomainError(ErrorType.TRANSLATION_FAILED, "translation output is empty")
         return cleaned
@@ -466,20 +517,29 @@ class GroqTranslationProvider(OpenAICompatibleTranslationProvider):
         self,
         *,
         api_key: str | None,
-        model: str = "qwen/qwen3.8-27b",
+        model: str = GROQ_QWEN_MODEL,
         base_url: str = "https://api.groq.com/openai/v1",
         timeout_seconds: float = 60.0,
         http: OpenAICompatibleHttpClient | None = None,
     ) -> None:
+        resolved = canonical_groq_model(model)
+        if resolved != model.strip():
+            logger.warning(
+                "groq_retired_model_rewritten",
+                extra={"model": model, "replacement": resolved},
+            )
         super().__init__(
             api_key=api_key,
-            model=model,
+            model=resolved,
             base_url=base_url,
             timeout_seconds=timeout_seconds,
             extra_headers=None,
             http=http,
             provider_name="groq",
         )
+
+    def _completion_options(self) -> dict[str, Any]:
+        return groq_completion_options(self._model)
 
 
 class OpenRouterTranslationProvider(OpenAICompatibleTranslationProvider):

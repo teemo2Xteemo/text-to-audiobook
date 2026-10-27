@@ -17,7 +17,12 @@ function failedJobError(job: JobStatusResponse): ApiError {
 
 function isTransientPollError(error: unknown): boolean {
   const apiError = toApiError(error);
-  return apiError.status === 0 || apiError.status >= 500;
+  return (
+    apiError.status === 0 ||
+    apiError.status === 408 ||
+    apiError.status === 429 ||
+    apiError.status >= 500
+  );
 }
 
 export function jobFromView(view: JobView): JobStatusResponse | undefined {

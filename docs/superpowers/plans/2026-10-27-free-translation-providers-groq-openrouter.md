@@ -164,7 +164,7 @@ Create/extend factory tests testing:
 - `build_translation_provider` raises `ProviderConfigurationError` if `GROQ_API_KEY` missing when `TRANSLATION_PROVIDER=groq`.
 - `build_translation_provider` returns `GroqTranslationProvider` when key is supplied.
 - Same for `openrouter` with `OPENROUTER_API_KEY`.
-- `build_available_translation_profiles` adds `groq-qwen`, `groq-llama-70b`, `groq-llama-8b` when `groq_api_key` is present.
+- `build_available_translation_profiles` adds `groq-qwen`, `groq-gpt-oss-120b`, `groq-gpt-oss-20b` when `groq_api_key` is present. Retired Llama ids are rewritten to the gpt-oss models.
 - `build_available_translation_profiles` adds `openrouter-qwen-72b` when `openrouter_api_key` is present.
 - Languages supported by Groq and OpenRouter are correctly reported.
 

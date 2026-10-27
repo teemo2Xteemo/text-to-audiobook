@@ -22,7 +22,7 @@ To solve this, the operator requires:
 
 ### Goals
 - Implement a reusable, standard OpenAI-compatible translation provider adapter (`OpenAITranslationProvider` or specific Groq/OpenRouter adapters) in `backend/app/providers/translation/` using Python stdlib `urllib` (zero new external dependencies).
-- Support **Groq** as an opt-in provider (`TRANSLATION_PROVIDER=groq`) with default models `qwen/qwen3.8-27b` and `llama-3.3-70b-versatile` / `llama-3.1-8b-instant`.
+- Support **Groq** as an opt-in provider (`TRANSLATION_PROVIDER=groq`) with default model `qwen/qwen3.8-27b` and profiles `openai/gpt-oss-120b` / `openai/gpt-oss-20b` (Groq's replacements for the Llama 3.3 70B and Llama 3.1 8B Instant ids shut down on 2026-08-16).
 - Support **OpenRouter** as an opt-in provider (`TRANSLATION_PROVIDER=openrouter`) with free models such as `qwen/qwen-2.5-72b-instruct:free`.
 - Expose corresponding profiles in `build_available_translation_profiles()` so users can switch between Groq and OpenRouter seamlessly from the UI.
 - Preserve domain error mapping (HTTP 429 → `PROVIDER_RATE_LIMIT`, 401/403 → `PROVIDER_CONFIGURATION_ERROR`, 5xx → `TRANSLATION_FAILED`, timeout → `TIMEOUT`).
@@ -81,7 +81,7 @@ Create `backend/app/providers/translation/openai_compatible.py` containing:
 Provide convenience subclasses or factory instances:
 - `GroqTranslationProvider`:
   - Default `base_url`: `https://api.groq.com/openai/v1`
-  - Default `model`: `qwen/qwen3.8-27b` (or `llama-3.3-70b-versatile`)
+  - Default `model`: `qwen/qwen3.8-27b` (profiles also offer `openai/gpt-oss-120b` and `openai/gpt-oss-20b`)
 - `OpenRouterTranslationProvider`:
   - Default `base_url`: `https://openrouter.ai/api/v1`
   - Default `model`: `qwen/qwen-2.5-72b-instruct:free`
@@ -102,8 +102,8 @@ In `backend/app/config/factory.py`:
 - Register translation profiles in `build_available_translation_profiles(settings)`:
   - If `groq_api_key` is present:
     - `groq-qwen`: "Groq (Qwen 27B / Chinese-Vietnamese Specialist)", badge `ONLINE`
-    - `groq-llama-70b`: "Groq (Llama 3.3 70B)", badge `ONLINE`
-    - `groq-llama-8b`: "Groq (Llama 3.1 8B Instant)", badge `ONLINE`
+    - `groq-gpt-oss-120b`: "Groq (GPT-OSS 120B)", badge `ONLINE`, model `openai/gpt-oss-120b`
+    - `groq-gpt-oss-20b`: "Groq (GPT-OSS 20B)", badge `ONLINE`, model `openai/gpt-oss-20b`
   - If `openrouter_api_key` is present:
     - `openrouter-qwen-72b`: "OpenRouter (Qwen 2.5 72B Free)", badge `ONLINE`
 

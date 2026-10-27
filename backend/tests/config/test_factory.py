@@ -624,11 +624,51 @@ def test_build_available_translation_profiles_with_groq_and_openrouter() -> None
     profiles = build_available_translation_profiles(settings)
     ids = [p.id for p in profiles]
     assert "groq-qwen" in ids
-    assert "groq-llama-70b" in ids
-    assert "groq-llama-8b" in ids
+    assert "groq-gpt-oss-120b" in ids
+    assert "groq-gpt-oss-20b" in ids
+    assert "groq-llama-70b" not in ids
+    assert "groq-llama-8b" not in ids
     assert "openrouter-auto" in ids
+    by_id = {profile.id: profile for profile in profiles}
+    assert by_id["groq-qwen"].model == "qwen/qwen3.8-27b"
+    assert by_id["groq-gpt-oss-120b"].model == "openai/gpt-oss-120b"
+    assert by_id["groq-gpt-oss-120b"].label == "Groq (GPT-OSS 120B)"
+    assert by_id["groq-gpt-oss-20b"].model == "openai/gpt-oss-20b"
+    assert by_id["groq-gpt-oss-20b"].label == "Groq (GPT-OSS 20B)"
+    assert all("llama-3" not in profile.model for profile in profiles)
 
     # Default profile matches configured translation_provider
     default_p = next(p for p in profiles if p.is_default)
     assert default_p.provider == "groq"
     assert default_p.model == "qwen/qwen3.8-27b"
+
+
+def test_retired_groq_model_pin_is_rewritten() -> None:
+    settings = Settings(
+        _env_file=None,
+        translation_provider="groq",
+        groq_api_key="gsk_key",
+        groq_translation_model="llama-3.3-70b-versatile",
+    )
+    assert translation_pin_from_settings(settings) == ("groq", "openai/gpt-oss-120b")
+    assert cache_identity_from_settings(settings).translation_model == "openai/gpt-oss-120b"
+
+    job = Job(
+        id="11111111-1111-4111-8111-111111111111",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="vi-VN",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        translation_provider="groq",
+        translation_model="llama-3.1-8b-instant",
+    )
+    pinned = settings_for_translation_pin(settings, job)
+    assert pinned.groq_translation_model == "openai/gpt-oss-20b"
+    provider = build_translation_provider(pinned)
+    from app.providers.translation.openai_compatible import GroqTranslationProvider
+
+    assert isinstance(provider, GroqTranslationProvider)
+    assert provider._model == "openai/gpt-oss-20b"

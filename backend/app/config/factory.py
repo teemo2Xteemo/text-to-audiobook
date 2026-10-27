@@ -149,12 +149,18 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
         else ""
     )
     if groq_key:
+        from app.providers.translation.openai_compatible import (
+            GROQ_GPT_OSS_20B,
+            GROQ_GPT_OSS_120B,
+            GROQ_QWEN_MODEL,
+        )
+
         groq_langs = _languages_for_provider("groq")
         profiles.append(
             TranslationProfile(
                 id="groq-qwen",
                 provider="groq",
-                model="qwen/qwen3.8-27b",
+                model=GROQ_QWEN_MODEL,
                 label="Groq (Qwen 27B / Chinese-Vietnamese Specialist)",
                 badge="ONLINE",
                 description="Specialized for literary Asian stories · Fast",
@@ -163,10 +169,10 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
         )
         profiles.append(
             TranslationProfile(
-                id="groq-llama-70b",
+                id="groq-gpt-oss-120b",
                 provider="groq",
-                model="llama-3.3-70b-versatile",
-                label="Groq (Llama 3.3 70B)",
+                model=GROQ_GPT_OSS_120B,
+                label="Groq (GPT-OSS 120B)",
                 badge="ONLINE",
                 description="High capability · Natural flow",
                 supported_languages=groq_langs,
@@ -174,12 +180,12 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
         )
         profiles.append(
             TranslationProfile(
-                id="groq-llama-8b",
+                id="groq-gpt-oss-20b",
                 provider="groq",
-                model="llama-3.1-8b-instant",
-                label="Groq (Llama 3.1 8B Instant)",
+                model=GROQ_GPT_OSS_20B,
+                label="Groq (GPT-OSS 20B)",
                 badge="ONLINE",
-                description="Ultra fast · High daily limit",
+                description="Fast · Higher daily limit",
                 supported_languages=groq_langs,
             )
         )
@@ -451,7 +457,9 @@ def translation_pin_from_settings(settings: Settings) -> tuple[str, str]:
     if name == "gemini":
         return name, settings.gemini_translation_model
     if name == "groq":
-        return name, settings.groq_translation_model
+        from app.providers.translation.openai_compatible import canonical_groq_model
+
+        return name, canonical_groq_model(settings.groq_translation_model)
     if name == "openrouter":
         return name, settings.openrouter_translation_model
     if name == "fake":
@@ -476,8 +484,13 @@ def settings_for_translation_pin(settings: Settings, job: Job) -> Settings:
             update={"translation_provider": "gemini", "gemini_translation_model": model}
         )
     if provider == "groq":
+        from app.providers.translation.openai_compatible import canonical_groq_model
+
         return settings.model_copy(
-            update={"translation_provider": "groq", "groq_translation_model": model}
+            update={
+                "translation_provider": "groq",
+                "groq_translation_model": canonical_groq_model(model),
+            }
         )
     if provider == "openrouter":
         return settings.model_copy(
@@ -498,7 +511,9 @@ def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
     elif translation == "gemini":
         translation_model = settings.gemini_translation_model
     elif translation == "groq":
-        translation_model = settings.groq_translation_model
+        from app.providers.translation.openai_compatible import canonical_groq_model
+
+        translation_model = canonical_groq_model(settings.groq_translation_model)
     elif translation == "openrouter":
         # Cache key is the configured id. ``openrouter/auto`` stays that literal
         # while OpenRouter may route each request to a different model, so a hit

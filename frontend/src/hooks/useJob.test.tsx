@@ -105,6 +105,28 @@ describe("useJob poll retry", () => {
     }
   });
 
+  it("retries a 429 poll and keeps the job running", async () => {
+    const { hook } = await submitAndPoll([
+      createdJob(),
+      jsonResponse(queuedJob()),
+      jsonResponse({ error_type: "PROVIDER_RATE_LIMIT", message: "slow down" }, 429),
+      jsonResponse(queuedJob({ status: "translating", stage: "translating" })),
+    ]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(hook.result.current.status).toBe("loading");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(hook.result.current.status).toBe("loading");
+    if (hook.result.current.status === "loading") {
+      expect(hook.result.current.job?.status).toBe("translating");
+    }
+  });
+
   it("retries a network failure and keeps polling after it recovers", async () => {
     const queue: Array<Response | Error> = [
       createdJob(),

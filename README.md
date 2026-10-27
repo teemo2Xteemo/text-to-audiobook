@@ -37,7 +37,7 @@ make help          # Show all available make targets
 make setup         # Create .env and install backend/frontend deps into backend/.venv
 make up            # Start all Docker services in background
 make dev-hybrid    # Rebuild backend images with the dev source mount, then run Vite on the host
-make dev-hybrid-build  # Same as dev-hybrid
+make dev-hybrid-build  # Deprecated alias of dev-hybrid
 make test          # Run all unit tests (backend pytest + frontend vitest)
 make lint          # Run ruff check/format and TypeScript typecheck
 make check         # Run full pre-commit verification (lint + test + security/policy scans)
@@ -127,7 +127,7 @@ To get instant **Hot Module Replacement (HMR)** with sub-second feedback, run th
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build redis api worker
    ```
-   This rebuilds the api and worker images, so dependency changes in the image are installed, and boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker. The dev overlay bind-mounts `./backend/app` into those containers and starts uvicorn with `--reload`. `make dev-hybrid` and `make dev-hybrid-build` run this same Compose command, then `npm run dev` in `frontend/`.
+   This rebuilds the api and worker images, so dependency changes in the image are installed, and boots Redis, FastAPI (published on `127.0.0.1:8000`), and the RQ worker. The dev overlay bind-mounts `./backend/app` into those containers and starts uvicorn with `--reload`. `make dev-hybrid` runs this same Compose command, then `npm run dev` in `frontend/`. `make dev-hybrid-build` is a deprecated alias that prints a note and runs `dev-hybrid`.
 
    `make up` and `docker compose up` use `docker-compose.yml` alone and run the code baked into the image. Rebuild the dev stack when `pyproject.toml` or the Dockerfiles change. The RQ worker does not auto-reload; restart the worker container after worker code changes.
 

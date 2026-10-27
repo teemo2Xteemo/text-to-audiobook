@@ -22,6 +22,8 @@ from app.providers.translation.openai_compatible import (
     UrllibOpenAIHttpClient,
     _parse_retry_after,
     bcp47_to_openai_lang,
+    canonical_groq_model,
+    groq_completion_options,
 )
 
 
@@ -609,3 +611,107 @@ def test_urllib_client_non_json_body_raises_domain_error(monkeypatch: pytest.Mon
         )
     assert exc_info.value.error_type is ErrorType.TRANSLATION_FAILED
     assert "non-JSON" in exc_info.value.message
+
+
+def test_groq_completion_options_for_gpt_oss_and_qwen() -> None:
+    gpt = groq_completion_options("openai/gpt-oss-120b")
+    assert gpt["reasoning_effort"] == "low"
+    assert gpt["include_reasoning"] is False
+    assert gpt["max_completion_tokens"] >= 4096
+    assert "reasoning_format" not in gpt
+
+    qwen = groq_completion_options("qwen/qwen3.8-27b")
+    assert qwen["reasoning_effort"] == "none"
+    assert "include_reasoning" not in qwen
+    assert "reasoning_format" not in qwen
+    assert qwen["max_completion_tokens"] >= 4096
+
+    assert groq_completion_options("llama-3.3-70b-versatile") == {}
+    assert canonical_groq_model("llama-3.3-70b-versatile") == "openai/gpt-oss-120b"
+    assert canonical_groq_model("llama-3.1-8b-instant") == "openai/gpt-oss-20b"
+    assert canonical_groq_model("qwen/qwen3.8-27b") == "qwen/qwen3.8-27b"
+
+
+@pytest.mark.anyio
+async def test_groq_qwen_disables_reasoning_and_gpt_oss_hides_it() -> None:
+    qwen_http = FakeOpenAIHttp()
+    qwen = GroqTranslationProvider(api_key="gsk_test", http=qwen_http)
+    await qwen.translate("Hello", "en-US", "vi-VN")
+    qwen_payload = qwen_http.calls[-1]["payload"]
+    assert qwen_payload["model"] == "qwen/qwen3.8-27b"
+    assert qwen_payload["reasoning_effort"] == "none"
+    assert "reasoning_format" not in qwen_payload
+    assert "include_reasoning" not in qwen_payload
+
+    oss_http = FakeOpenAIHttp()
+    oss = GroqTranslationProvider(
+        api_key="gsk_test",
+        model="llama-3.3-70b-versatile",
+        http=oss_http,
+    )
+    assert oss._model == "openai/gpt-oss-120b"
+    await oss.translate("Hello", "en-US", "vi-VN")
+    oss_payload = oss_http.calls[-1]["payload"]
+    assert oss_payload["model"] == "openai/gpt-oss-120b"
+    assert oss_payload["reasoning_effort"] == "low"
+    assert oss_payload["include_reasoning"] is False
+    assert "reasoning_format" not in oss_payload
+
+    small = GroqTranslationProvider(api_key="gsk_test", model="llama-3.1-8b-instant")
+    assert small._model == "openai/gpt-oss-20b"
+
+    router_http = FakeOpenAIHttp()
+    router = OpenRouterTranslationProvider(api_key="sk-or-test", http=router_http)
+    await router.translate("Hello", "en-US", "vi-VN")
+    router_payload = router_http.calls[-1]["payload"]
+    assert "reasoning_effort" not in router_payload
+    assert "include_reasoning" not in router_payload
+    assert "reasoning_format" not in router_payload
+
+
+@pytest.mark.anyio
+async def test_reasoning_trace_is_not_used_as_the_translation() -> None:
+    fake_http = FakeOpenAIHttp(
+        {
+            "model": "openai/gpt-oss-120b",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "<think>internal plan</think>\nBản dịch sạch.",
+                        "reasoning": "internal plan that must not be spoken",
+                    }
+                }
+            ],
+        }
+    )
+    provider = GroqTranslationProvider(
+        api_key="gsk_test",
+        model="openai/gpt-oss-120b",
+        http=fake_http,
+    )
+    result = await provider.translate("Hello", "en-US", "vi-VN")
+    assert result == "Bản dịch sạch."
+    assert "internal plan" not in result
+    assert "<think>" not in result
+
+
+@pytest.mark.anyio
+async def test_reasoning_only_response_is_empty_translation() -> None:
+    fake_http = FakeOpenAIHttp(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "reasoning": "only the trace",
+                    }
+                }
+            ]
+        }
+    )
+    provider = GroqTranslationProvider(api_key="gsk_test", http=fake_http)
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Hello", "en-US", "vi-VN")
+    assert exc_info.value.error_type is ErrorType.TRANSLATION_FAILED
+    assert "only the trace" not in exc_info.value.message

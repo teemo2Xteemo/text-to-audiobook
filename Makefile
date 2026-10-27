@@ -54,10 +54,9 @@ dev-hybrid: ## Rebuild backend với mount code dev, rồi chạy Vite trên hos
 	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up -d --build redis api worker
 	cd frontend && $(NPM) run dev
 
-dev-hybrid-build: ## Giống dev-hybrid: rebuild api/worker với mount code dev, rồi Vite
-	@if [ ! -f .env ]; then cp -n .env.example .env && echo "Da khoi tao .env tu .env.example"; fi
-	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up -d --build redis api worker
-	cd frontend && $(NPM) run dev
+dev-hybrid-build: ## Alias cũ của dev-hybrid (in cảnh báo rồi chạy dev-hybrid)
+	@echo "note: dev-hybrid-build is a deprecated alias of dev-hybrid"
+	@$(MAKE) dev-hybrid
 
 test-backend: ## Chạy unit test backend với pytest
 	$(PYTEST) -m "not integration"
