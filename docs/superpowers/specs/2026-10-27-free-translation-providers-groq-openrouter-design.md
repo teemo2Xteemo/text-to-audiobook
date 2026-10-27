@@ -105,7 +105,8 @@ In `backend/app/config/factory.py`:
     - `groq-gpt-oss-120b`: "Groq (GPT-OSS 120B)", badge `ONLINE`, model `openai/gpt-oss-120b`
     - `groq-gpt-oss-20b`: "Groq (GPT-OSS 20B)", badge `ONLINE`, model `openai/gpt-oss-20b`
   - If `openrouter_api_key` is present:
-    - `openrouter-qwen-72b`: "OpenRouter (Qwen 2.5 72B Free)", badge `ONLINE`
+    - `openrouter-deepseek-v4-flash`: "OpenRouter (DeepSeek V4 Flash)", model `deepseek/deepseek-v4-flash`, default when `TRANSLATION_PROVIDER=openrouter`
+    - `openrouter-auto`: "OpenRouter (Auto / Best Available)", badge `ONLINE`
 
 ---
 

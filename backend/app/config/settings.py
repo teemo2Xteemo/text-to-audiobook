@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     groq_base_url: str = Field(default="https://api.groq.com/openai/v1")
     groq_http_timeout_seconds: float = Field(default=60.0, gt=0)
     openrouter_api_key: SecretStr | None = Field(default=None)
-    openrouter_translation_model: str = Field(default="openrouter/auto", min_length=1)
+    openrouter_translation_model: str = Field(default="deepseek/deepseek-v4-flash", min_length=1)
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_http_timeout_seconds: float = Field(default=60.0, gt=0)
     language_detect_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)

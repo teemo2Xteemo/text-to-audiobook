@@ -51,7 +51,7 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.groq_base_url == "https://api.groq.com/openai/v1"
     assert settings.groq_http_timeout_seconds == 60.0
     assert settings.openrouter_api_key is None
-    assert settings.openrouter_translation_model == "openrouter/auto"
+    assert settings.openrouter_translation_model == "deepseek/deepseek-v4-flash"
     assert settings.openrouter_base_url == "https://openrouter.ai/api/v1"
     assert settings.openrouter_http_timeout_seconds == 60.0
     assert settings.chunk_translation_concurrency == 2

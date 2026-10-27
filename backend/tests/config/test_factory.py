@@ -672,3 +672,41 @@ def test_retired_groq_model_pin_is_rewritten() -> None:
 
     assert isinstance(provider, GroqTranslationProvider)
     assert provider._model == "openai/gpt-oss-20b"
+
+
+def test_openrouter_deepseek_v4_flash_is_the_default_profile() -> None:
+    from app.config.factory import build_available_translation_profiles
+
+    settings = Settings(
+        _env_file=None,
+        translation_provider="openrouter",
+        openrouter_api_key="sk-or-key",
+    )
+    assert settings.openrouter_translation_model == "deepseek/deepseek-v4-flash"
+    assert translation_pin_from_settings(settings) == (
+        "openrouter",
+        "deepseek/deepseek-v4-flash",
+    )
+    profiles = build_available_translation_profiles(settings)
+    by_id = {profile.id: profile for profile in profiles}
+    deepseek = by_id["openrouter-deepseek-v4-flash"]
+    assert deepseek.model == "deepseek/deepseek-v4-flash"
+    assert deepseek.provider == "openrouter"
+    assert deepseek.label == "OpenRouter (DeepSeek V4 Flash)"
+    assert deepseek.is_default is True
+    assert by_id["openrouter-auto"].is_default is False
+
+    stored = Job(
+        id="11111111-1111-4111-8111-111111111111",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="vi-VN",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        translation_provider="openrouter",
+        translation_model="openrouter/auto",
+    )
+    pinned = settings_for_translation_pin(settings, stored)
+    assert pinned.openrouter_translation_model == "openrouter/auto"

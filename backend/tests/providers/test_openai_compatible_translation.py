@@ -330,7 +330,7 @@ async def test_groq_and_openrouter_subclasses() -> None:
 
     openrouter = OpenRouterTranslationProvider(api_key="sk-or-123", http=fake_http)
     assert openrouter._base_url == "https://openrouter.ai/api/v1"
-    assert openrouter._model == "openrouter/auto"
+    assert openrouter._model == "deepseek/deepseek-v4-flash"
     assert openrouter._extra_headers.get("HTTP-Referer") is not None
     assert openrouter._extra_headers.get("X-Title") is not None
 
@@ -661,9 +661,14 @@ async def test_groq_qwen_disables_reasoning_and_gpt_oss_hides_it() -> None:
     assert small._model == "openai/gpt-oss-20b"
 
     router_http = FakeOpenAIHttp()
-    router = OpenRouterTranslationProvider(api_key="sk-or-test", http=router_http)
+    router = OpenRouterTranslationProvider(
+        api_key="sk-or-test",
+        model="openrouter/auto",
+        http=router_http,
+    )
     await router.translate("Hello", "en-US", "vi-VN")
     router_payload = router_http.calls[-1]["payload"]
+    assert "reasoning" not in router_payload
     assert "reasoning_effort" not in router_payload
     assert "include_reasoning" not in router_payload
     assert "reasoning_format" not in router_payload
@@ -777,7 +782,8 @@ async def test_length_finish_reason_is_not_returned_or_cached(tmp_path) -> None:
     err = exc_info.value
     assert err.error_type is ErrorType.INVALID_INPUT
     assert not is_retryable(err.error_type)
-    assert "finish_reason length" in err.message
+    assert "model output was cut off" in err.message
+    assert "invalid" not in err.message.lower()
     assert "openai/gpt-oss-120b" in err.message
     assert partial not in err.message
     assert calls == 1
@@ -870,3 +876,79 @@ async def test_http_503_honors_retry_after() -> None:
     assert result
     assert calls == 2
     assert slept == [12.0]
+
+
+@pytest.mark.anyio
+async def test_openrouter_deepseek_disables_reasoning_only_for_that_model() -> None:
+    from app.providers.translation.openai_compatible import OPENROUTER_DEEPSEEK_V4_FLASH
+
+    deepseek_http = FakeOpenAIHttp()
+    deepseek = OpenRouterTranslationProvider(
+        api_key="sk-or-test",
+        model=OPENROUTER_DEEPSEEK_V4_FLASH,
+        http=deepseek_http,
+    )
+    await deepseek.translate("Hello", "en-US", "vi-VN")
+    payload = deepseek_http.calls[-1]["payload"]
+    assert payload["model"] == OPENROUTER_DEEPSEEK_V4_FLASH
+    assert payload["reasoning"] == {"effort": "none"}
+    assert payload["reasoning_effort"] == "none"
+    assert payload["max_completion_tokens"] >= 4096
+    assert "provider" not in payload
+
+    other_http = FakeOpenAIHttp()
+    other = OpenRouterTranslationProvider(
+        api_key="sk-or-test",
+        model="openrouter/auto",
+        http=other_http,
+    )
+    await other.translate("Hello", "en-US", "vi-VN")
+    other_payload = other_http.calls[-1]["payload"]
+    assert "reasoning" not in other_payload
+    assert "reasoning_effort" not in other_payload
+
+
+@pytest.mark.anyio
+async def test_openrouter_error_finish_reason_is_retried() -> None:
+    from app.application.pipeline.retry import with_chunk_retry
+    from app.domain.retry import RetryPolicy, is_retryable
+
+    fake_http = FakeOpenAIHttp(_completion("upstream glitch", "error"))
+    provider = OpenRouterTranslationProvider(
+        api_key="sk-or-test",
+        model="deepseek/deepseek-v4-flash",
+        http=fake_http,
+    )
+    calls = 0
+
+    async def _op() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await provider.translate("Hello", "en-US", "vi-VN")
+        fake_http.response_data = _completion("Bản dịch đủ.", "stop")
+        return await provider.translate("Hello", "en-US", "vi-VN")
+
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    with pytest.raises(DomainError) as first:
+        await provider.translate("Hello", "en-US", "vi-VN")
+    assert first.value.error_type is ErrorType.TRANSLATION_FAILED
+    assert is_retryable(first.value.error_type)
+    assert "upstream glitch" not in first.value.message
+
+    calls = 0
+    result = await with_chunk_retry(
+        _op,
+        policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
+        sleep=_sleep,
+        job_id="job-1",
+        chunk_id="chunk-1",
+        stage="translated",
+    )
+    assert result == "Bản dịch đủ."
+    assert calls == 2
+    assert slept == [1.0]

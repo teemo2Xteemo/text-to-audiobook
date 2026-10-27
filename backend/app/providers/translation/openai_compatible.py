@@ -74,6 +74,7 @@ _GROQ_MAX_COMPLETION_TOKENS = 8192
 GROQ_QWEN_MODEL = "qwen/qwen3.8-27b"
 GROQ_GPT_OSS_120B = "openai/gpt-oss-120b"
 GROQ_GPT_OSS_20B = "openai/gpt-oss-20b"
+OPENROUTER_DEEPSEEK_V4_FLASH = "deepseek/deepseek-v4-flash"
 # Free/developer tiers shut these down on 2026-08-16. Saved job pins and
 # GROQ_TRANSLATION_MODEL may still name them.
 _RETIRED_GROQ_MODELS = {
@@ -137,6 +138,23 @@ def groq_completion_options(model: str) -> dict[str, Any]:
     return {}
 
 
+def openrouter_completion_options(model: str) -> dict[str, Any]:
+    """Extra chat fields for one OpenRouter model.
+
+    DeepSeek V4 Flash thinks unless reasoning is disabled. Scope that to this
+    exact id. ``reasoning`` is OpenRouter's unified parameter; ``reasoning_effort``
+    matches the Groq-style field DeepSeek also accepts. No ``provider`` routing
+    preference is set; add one here if a specific upstream should be pinned.
+    """
+    if model != OPENROUTER_DEEPSEEK_V4_FLASH:
+        return {}
+    return {
+        "reasoning": {"effort": "none"},
+        "reasoning_effort": "none",
+        "max_completion_tokens": _GROQ_MAX_COMPLETION_TOKENS,
+    }
+
+
 def _reject_incomplete_choice(choice: dict[str, Any], *, model: str) -> None:
     """Refuse a completion that is not a finished answer.
 
@@ -153,6 +171,16 @@ def _reject_incomplete_choice(choice: dict[str, Any], *, model: str) -> None:
     if isinstance(reason, str) and reason.strip().lower() in {"", "stop"}:
         return
     shown = reason.strip().lower() if isinstance(reason, str) else str(reason)
+    if shown == "error":
+        raise DomainError(
+            ErrorType.TRANSLATION_FAILED,
+            f"translation failed: model {model} finish_reason error",
+        )
+    if shown == "length":
+        raise DomainError(
+            ErrorType.INVALID_INPUT,
+            f"model output was cut off ({model})",
+        )
     raise DomainError(
         ErrorType.INVALID_INPUT,
         f"translation incomplete: model {model} finish_reason {shown}",
@@ -586,7 +614,7 @@ class OpenRouterTranslationProvider(OpenAICompatibleTranslationProvider):
         self,
         *,
         api_key: str | None,
-        model: str = "openrouter/auto",
+        model: str = OPENROUTER_DEEPSEEK_V4_FLASH,
         base_url: str = "https://openrouter.ai/api/v1",
         timeout_seconds: float = 60.0,
         http: OpenAICompatibleHttpClient | None = None,
@@ -604,3 +632,6 @@ class OpenRouterTranslationProvider(OpenAICompatibleTranslationProvider):
             http=http,
             provider_name="openrouter",
         )
+
+    def _completion_options(self) -> dict[str, Any]:
+        return openrouter_completion_options(self._model)

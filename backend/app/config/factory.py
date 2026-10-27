@@ -196,7 +196,20 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
         else ""
     )
     if openrouter_key:
+        from app.providers.translation.openai_compatible import OPENROUTER_DEEPSEEK_V4_FLASH
+
         openrouter_langs = _languages_for_provider("openrouter")
+        profiles.append(
+            TranslationProfile(
+                id="openrouter-deepseek-v4-flash",
+                provider="openrouter",
+                model=OPENROUTER_DEEPSEEK_V4_FLASH,
+                label="OpenRouter (DeepSeek V4 Flash)",
+                badge="ONLINE",
+                description="Fast · Reasoning off · Default when OpenRouter is selected",
+                supported_languages=openrouter_langs,
+            )
+        )
         profiles.append(
             TranslationProfile(
                 id="openrouter-auto",
