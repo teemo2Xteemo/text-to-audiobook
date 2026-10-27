@@ -23,15 +23,30 @@ class FakeTTSProvider:
         voices: Sequence[Voice] | None = None,
         output_dir: Path | None = None,
     ) -> None:
-        if output_dir is None:
-            raise TypeError("output_dir is required")
         self._voices = list(voices) if voices is not None else list(_DEFAULT_VOICES)
         self._output_dir = output_dir
         self.calls: list[tuple[str, str, str, TTSSettings]] = []
         self._count = 0
 
+    @property
+    def voices_list(self) -> list[Voice]:
+        return self._voices
+
+    @voices_list.setter
+    def voices_list(self, voices: Sequence[Voice]) -> None:
+        self._voices = list(voices)
+
+    def all_voices(self) -> list[Voice]:
+        return list(self._voices)
+
+    def list_voices(self) -> list[Voice]:
+        return list(self._voices)
+
     def voices_for(self, language: str) -> Sequence[Voice]:
         return [voice for voice in self._voices if voice.language == language]
+
+    def languages(self) -> set[str]:
+        return {v.language for v in self._voices}
 
     async def synthesize(
         self, text: str, language: str, voice: str, settings: TTSSettings
@@ -41,8 +56,9 @@ class FakeTTSProvider:
             await asyncio.sleep(delay)
         self.calls.append((text, language, voice, settings))
         self._count += 1
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-        path = self._output_dir / f"synth-{self._count:03d}.bin"
+        out_dir = self._output_dir if self._output_dir is not None else Path("/tmp/fake-tts")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"synth-{self._count:03d}.bin"
         path.write_bytes(b"FAKEAUDIO")
         return AudioArtifact(path=path)
 

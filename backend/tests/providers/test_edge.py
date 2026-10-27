@@ -73,6 +73,11 @@ def test_voices_for_demo_and_another_language_differ(tmp_path: Path) -> None:
     assert vi_ids.isdisjoint(ja_ids)
 
 
+def test_languages_returns_distinct_locales(tmp_path: Path) -> None:
+    provider, _client = _provider(tmp_path)
+    assert provider.languages() == {"vi-VN", "ja-JP", "en-US"}
+
+
 def test_voices_for_unknown_language_is_empty(tmp_path: Path) -> None:
     provider, _client = _provider(tmp_path)
     assert list(provider.voices_for("xx-XX")) == []

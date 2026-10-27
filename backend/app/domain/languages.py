@@ -10,6 +10,20 @@ if TYPE_CHECKING:
 
 AUTO_SOURCE_LANGUAGE = "auto"
 
+FAMILY_PREFERENCES: dict[str, list[str]] = {
+    "en": ["en-US", "en-GB", "en-AU", "en-CA", "en-IN", "en-IE", "en-NZ", "en-ZA"],
+    "es": ["es-ES", "es-MX", "es-US", "es-AR", "es-CO", "es-CL"],
+    "pt": ["pt-BR", "pt-PT"],
+    "zh": ["zh-CN", "zh-TW", "zh-SG"],
+    "zh-cn": ["zh-CN", "zh-TW", "zh-SG"],
+    "zh-tw": ["zh-TW", "zh-CN", "zh-SG"],
+    "fr": ["fr-FR", "fr-CA", "fr-BE", "fr-CH"],
+    "de": ["de-DE", "de-AT", "de-CH"],
+    "ar": ["ar-SA", "ar-EG", "ar-AE"],
+    "it": ["it-IT", "it-CH"],
+    "nl": ["nl-NL", "nl-BE"],
+}
+
 
 @dataclass(frozen=True)
 class LanguageDetection:

@@ -57,6 +57,9 @@ class EdgeTTSProvider:
         rest = [voice for voice in matched if voice.id != preferred_id]
         return preferred + rest
 
+    def languages(self) -> set[str]:
+        return {v.language for v in self._all_voices()}
+
     async def synthesize(
         self, text: str, language: str, voice: str, settings: TTSSettings
     ) -> AudioArtifact:

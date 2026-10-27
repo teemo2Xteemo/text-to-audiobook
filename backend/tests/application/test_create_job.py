@@ -768,3 +768,133 @@ class _MemoryJobCache:
 
     async def delete(self, job_id: str) -> None:
         self.jobs.pop(job_id, None)
+
+
+def test_resolve_voice_family_fallback_and_cantonese_guard() -> None:
+    from app.application.pipeline.tts import resolve_voice
+    from app.domain.audio import Voice
+    from app.domain.errors import DomainError, ErrorType
+    from app.providers.fake import FakeTTSProvider
+
+    fake_tts = FakeTTSProvider()
+    fake_tts.voices_list = [
+        Voice(id="en-GB-SoniaNeural", name="Sonia", language="en-GB", gender="female"),
+        Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female"),
+        Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female"),
+    ]
+
+    # Family fallback: en-US falls back to en-GB
+    voice = resolve_voice(fake_tts, "en-US", None)
+    assert voice == "en-GB-SoniaNeural"
+
+    # Cantonese guard: zh-HK never falls back to zh-CN
+    fake_cantonese_only = FakeTTSProvider()
+    fake_cantonese_only.voices_list = [
+        Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female")
+    ]
+    with pytest.raises(DomainError) as exc_info:
+        resolve_voice(fake_cantonese_only, "zh-CN", None)
+    assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+
+def test_resolve_voice_cantonese_text_does_not_fall_back_to_mandarin() -> None:
+    from app.application.pipeline.tts import resolve_voice
+    from app.domain.audio import Voice
+    from app.domain.errors import DomainError, ErrorType
+    from app.providers.fake import FakeTTSProvider
+
+    fake_mandarin_only = FakeTTSProvider()
+    fake_mandarin_only.voices_list = [
+        Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female")
+    ]
+    with pytest.raises(DomainError) as exc_info:
+        resolve_voice(fake_mandarin_only, "zh-HK", None)
+    assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+
+def test_resolve_voice_explicit_cross_cantonese_mandarin_rejected() -> None:
+    from app.application.pipeline.tts import resolve_voice
+    from app.domain.audio import Voice
+    from app.domain.errors import DomainError, ErrorType
+    from app.providers.fake import FakeTTSProvider
+
+    fake_tts = FakeTTSProvider()
+    fake_tts.voices_list = [
+        Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female"),
+        Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female"),
+    ]
+    with pytest.raises(DomainError) as exc_info:
+        resolve_voice(fake_tts, "zh-CN", "zh-HK-HiuGaaiNeural")
+    assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+    with pytest.raises(DomainError) as exc_info:
+        resolve_voice(fake_tts, "zh-HK", "zh-CN-XiaoxiaoNeural")
+    assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+
+def test_resolve_voice_explicit_voice_selection_and_invalid() -> None:
+    from app.application.pipeline.tts import resolve_voice, select_voice
+    from app.domain.audio import Voice
+    from app.domain.errors import DomainError, ErrorType
+    from app.providers.fake import FakeTTSProvider
+
+    fake_tts = FakeTTSProvider()
+    fake_tts.voices_list = [
+        Voice(id="en-GB-SoniaNeural", name="Sonia", language="en-GB", gender="female"),
+        Voice(id="en-US-JennyNeural", name="Jenny", language="en-US", gender="female"),
+    ]
+
+    # Exact selection
+    assert resolve_voice(fake_tts, "en-US", "en-US-JennyNeural") == "en-US-JennyNeural"
+    # Same family explicit selection
+    assert resolve_voice(fake_tts, "en-US", "en-GB-SoniaNeural") == "en-GB-SoniaNeural"
+    # Missing voice
+    with pytest.raises(DomainError) as exc_info:
+        resolve_voice(fake_tts, "en-US", "missing-voice")
+    assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+    # Incompatible family
+    with pytest.raises(DomainError) as exc_info:
+        resolve_voice(fake_tts, "ja-JP", "en-US-JennyNeural")
+    assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
+
+    # select_voice alias compatibility with 2 and 3 args
+    assert select_voice(fake_tts, "en-CA") == "en-US-JennyNeural"
+    assert select_voice(fake_tts, "en-CA", "en-GB-SoniaNeural") == "en-GB-SoniaNeural"
+
+
+def test_resolve_voice_skips_mandarin_dialects_in_auto_fallback_unless_explicit() -> None:
+    from app.application.pipeline.tts import resolve_voice
+    from app.domain.audio import Voice
+    from app.providers.fake import FakeTTSProvider
+
+    fake_tts = FakeTTSProvider()
+    fake_tts.voices_list = [
+        Voice(id="zh-CN-liaoning-XiaobeiNeural", language="zh-CN-liaoning"),
+        Voice(id="zh-TW-HsiaoChenNeural", language="zh-TW"),
+    ]
+
+    # Automatic fallback skips liaoning dialect and picks zh-TW
+    assert resolve_voice(fake_tts, "zh-CN", None) == "zh-TW-HsiaoChenNeural"
+
+    # Explicit selection allows the dialect voice
+    assert (
+        resolve_voice(fake_tts, "zh-CN", "zh-CN-liaoning-XiaobeiNeural")
+        == "zh-CN-liaoning-XiaobeiNeural"
+    )
+
+
+def test_fake_tts_languages_and_voice_inspection() -> None:
+    from app.domain.audio import Voice
+    from app.providers.fake import FakeTTSProvider
+
+    fake_tts = FakeTTSProvider()
+    assert len(fake_tts.languages()) > 0
+    assert len(fake_tts.all_voices()) > 0
+    assert len(fake_tts.list_voices()) > 0
+
+    fake_tts.voices_list = [
+        Voice(id="v1", language="en-US"),
+        Voice(id="v2", language="en-GB"),
+    ]
+    assert fake_tts.languages() == {"en-US", "en-GB"}
+    assert [v.id for v in fake_tts.voices_list] == ["v1", "v2"]
