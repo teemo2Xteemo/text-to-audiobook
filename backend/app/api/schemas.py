@@ -107,3 +107,50 @@ class CapabilitiesResponse(BaseModel):
     translation_profiles: list[TranslationProfileResponse] = Field(default_factory=list)
     narrate_languages: list[str] = Field(default_factory=list)
     estimate_defaults: dict[str, float] = Field(default_factory=dict)
+
+
+class LanguageCandidate(BaseModel):
+    language: str
+    confidence: float
+
+
+class DetectLanguageRequest(BaseModel):
+    text: str
+
+
+class DetectLanguageResponse(BaseModel):
+    language: str
+    confidence: float
+    needs_confirmation: bool
+    candidates: list[LanguageCandidate]
+    preview_lines: list[str]
+
+
+class ChapterSummary(BaseModel):
+    index: int
+    title: str
+    char_count: int
+
+
+class AnalyzeResponse(BaseModel):
+    encoding: str
+    language: str
+    confidence: float
+    needs_confirmation: bool
+    candidates: list[LanguageCandidate]
+    chapters_count: int
+    chapters_preview: list[ChapterSummary]
+    duration_estimate_seconds: float
+    process_time_estimate_seconds: float
+    preview_lines: list[str]
+
+
+class TTSPreviewRequest(BaseModel):
+    text: str
+    voice: str
+    speed: float = 1.0
+
+
+class TTSPreviewResponse(BaseModel):
+    audio_base64: str
+    mime_type: str = "audio/mpeg"

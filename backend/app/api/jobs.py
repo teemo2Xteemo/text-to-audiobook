@@ -1,18 +1,36 @@
 from __future__ import annotations
 
+import base64
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from app.api.deps import get_job_service, get_settings
+from app.api.deps import (
+    get_job_service,
+    get_language_detector,
+    get_settings,
+    get_tts_provider,
+)
 from app.api.errors import envelope
-from app.api.parse import parse_create_job
-from app.api.schemas import JobCreatedResponse, JobStatusResponse
+from app.api.parse import parse_analyze, parse_create_job, parse_detect_language
+from app.api.schemas import (
+    AnalyzeResponse,
+    ChapterSummary,
+    DetectLanguageResponse,
+    JobCreatedResponse,
+    JobStatusResponse,
+    LanguageCandidate,
+    TTSPreviewRequest,
+    TTSPreviewResponse,
+)
 from app.application.jobs import JobService
+from app.application.pipeline.chapters import split_chapters
 from app.config.settings import Settings
+from app.domain.audio import TTSSettings, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import JobStatus, OutputFormat
+from app.domain.ports import LanguageDetector, TTSProvider
 
 router = APIRouter()
 
@@ -136,6 +154,130 @@ async def retry_job(
             ) from exc
         raise
     return JobCreatedResponse(job_id=retried.id, status=retried.status)
+
+
+@router.post("/api/detect-language", response_model=DetectLanguageResponse)
+async def detect_language(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    detector: LanguageDetector = Depends(get_language_detector),
+) -> DetectLanguageResponse:
+    text = await parse_detect_language(request, settings.max_upload_bytes)
+    slice_text = text[:8192]
+    candidates_raw = await detector.detect_candidates(slice_text)
+    if not candidates_raw:
+        try:
+            detected = await detector.detect(slice_text)
+            candidates_raw = [(detected.language_code, detected.confidence)]
+        except DomainError:
+            candidates_raw = []
+
+    candidates = [
+        LanguageCandidate(language=lang, confidence=conf) for lang, conf in candidates_raw
+    ]
+    if candidates:
+        top_lang = candidates[0].language
+        top_conf = candidates[0].confidence
+        needs_confirmation = top_conf < settings.language_confirm_threshold
+    else:
+        top_lang = "unknown"
+        top_conf = 0.0
+        needs_confirmation = True
+
+    preview_lines = [line.strip() for line in slice_text.splitlines() if line.strip()][:5]
+    return DetectLanguageResponse(
+        language=top_lang,
+        confidence=top_conf,
+        needs_confirmation=needs_confirmation,
+        candidates=candidates,
+        preview_lines=preview_lines,
+    )
+
+
+@router.post("/api/analyze", response_model=AnalyzeResponse)
+async def analyze_text(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    detector: LanguageDetector = Depends(get_language_detector),
+) -> AnalyzeResponse:
+    text, encoding = await parse_analyze(request, settings)
+    slice_text = text[:8192]
+    candidates_raw = await detector.detect_candidates(slice_text)
+    if not candidates_raw:
+        try:
+            detected = await detector.detect(slice_text)
+            candidates_raw = [(detected.language_code, detected.confidence)]
+        except DomainError:
+            candidates_raw = []
+
+    candidates = [
+        LanguageCandidate(language=lang, confidence=conf) for lang, conf in candidates_raw
+    ]
+    if candidates:
+        top_lang = candidates[0].language
+        top_conf = candidates[0].confidence
+        needs_confirmation = top_conf < settings.language_confirm_threshold
+    else:
+        top_lang = "unknown"
+        top_conf = 0.0
+        needs_confirmation = True
+
+    chapters = split_chapters(text)
+    chapters_count = len(chapters)
+    chapters_preview = [
+        ChapterSummary(index=c.index, title=c.title, char_count=c.char_count) for c in chapters[:10]
+    ]
+
+    char_len = len(text)
+    duration_estimate_seconds = round(
+        char_len / max(1.0, float(settings.estimate_chars_per_second)), 1
+    )
+    process_time_estimate_seconds = round(duration_estimate_seconds * 0.15, 1)
+    preview_lines = [line.strip() for line in text.splitlines() if line.strip()][:5]
+
+    return AnalyzeResponse(
+        encoding=encoding,
+        language=top_lang,
+        confidence=top_conf,
+        needs_confirmation=needs_confirmation,
+        candidates=candidates,
+        chapters_count=chapters_count,
+        chapters_preview=chapters_preview,
+        duration_estimate_seconds=duration_estimate_seconds,
+        process_time_estimate_seconds=process_time_estimate_seconds,
+        preview_lines=preview_lines,
+    )
+
+
+@router.post("/api/tts/preview", response_model=TTSPreviewResponse)
+async def tts_preview(
+    req: TTSPreviewRequest,
+    tts: TTSProvider = Depends(get_tts_provider),
+) -> TTSPreviewResponse:
+    if not req.text.strip():
+        raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+    if not req.voice.strip():
+        raise DomainError(ErrorType.INVALID_INPUT, "voice is required")
+    if len(req.text) > 300:
+        raise DomainError(ErrorType.INVALID_INPUT, "preview text must be at most 300 characters")
+    ensure_valid_speed(req.speed)
+
+    artifact = await tts.synthesize(
+        req.text,
+        language="",
+        voice=req.voice,
+        settings=TTSSettings(speed=req.speed),
+    )
+    if not artifact.path.is_file():
+        raise DomainError(ErrorType.STORAGE_FAILED, "synthesized audio artifact missing")
+
+    try:
+        audio_bytes = artifact.path.read_bytes()
+    finally:
+        artifact.path.unlink(missing_ok=True)
+
+    audio_base64 = base64.b64encode(audio_bytes).decode("ascii")
+    return TTSPreviewResponse(audio_base64=audio_base64, mime_type="audio/mpeg")
 
 
 def _require_uuid(job_id: str) -> None:

@@ -63,15 +63,22 @@ class EdgeTTSProvider:
     async def synthesize(
         self, text: str, language: str, voice: str, settings: TTSSettings
     ) -> AudioArtifact:
-        available = {item.id for item in self.voices_for(language)}
-        if voice not in available:
-            lang_prefix = language.split("-")[0].lower()
-            family_voices = {
-                item.id
-                for item in self._all_voices()
-                if item.language.split("-")[0].lower() == lang_prefix
-            }
-            if voice not in family_voices:
+        if language:
+            available = {item.id for item in self.voices_for(language)}
+            if voice not in available:
+                lang_prefix = language.split("-")[0].lower()
+                family_voices = {
+                    item.id
+                    for item in self._all_voices()
+                    if item.language.split("-")[0].lower() == lang_prefix
+                }
+                if voice not in family_voices:
+                    raise DomainError(
+                        ErrorType.UNSUPPORTED_LANGUAGE, "voice is not available for language"
+                    )
+        else:
+            all_voice_ids = {item.id for item in self._all_voices()}
+            if voice not in all_voice_ids:
                 raise DomainError(
                     ErrorType.UNSUPPORTED_LANGUAGE, "voice is not available for language"
                 )

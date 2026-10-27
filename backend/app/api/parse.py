@@ -187,7 +187,9 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
     )
 
 
-async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_bytes: int) -> str:
+async def _read_upload_raw(
+    upload: UploadFile | StarletteUploadFile, max_upload_bytes: int
+) -> bytes:
     _assert_safe_txt_filename(upload.filename)
     _assert_text_mime(upload.content_type)
     chunks: list[bytes] = []
@@ -200,8 +202,92 @@ async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_byte
         if total > max_upload_bytes:
             raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
         chunks.append(piece)
-    text, _ = _decode_source_text(b"".join(chunks), max_upload_bytes)
+    return b"".join(chunks)
+
+
+async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_bytes: int) -> str:
+    raw = await _read_upload_raw(upload, max_upload_bytes)
+    text, _ = _decode_source_text(raw, max_upload_bytes)
     return text
+
+
+async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
+    content_type = (request.headers.get("content-type") or "").lower()
+    _assert_content_length(request, max_upload_bytes)
+    body = await request.body()
+    if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
+        raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+    if content_type.startswith(_JSON_CONTENT):
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise DomainError(ErrorType.INVALID_INPUT, "invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise DomainError(ErrorType.INVALID_INPUT, "JSON body must be an object")
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        return text
+    # Otherwise treat as raw text
+    try:
+        text, _ = _decode_source_text(body, max_upload_bytes)
+    except Exception:
+        text = body.decode("utf-8", errors="replace")
+    if not text.strip():
+        raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+    return text
+
+
+async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]:
+    content_type = (request.headers.get("content-type") or "").lower()
+    _assert_content_length(request, settings.max_upload_bytes)
+    if content_type.startswith(_JSON_CONTENT):
+        body = await request.body()
+        if len(body) > settings.max_upload_bytes + _MULTIPART_OVERHEAD:
+            raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise DomainError(ErrorType.INVALID_INPUT, "invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise DomainError(ErrorType.INVALID_INPUT, "JSON body must be an object")
+        text_val = payload.get("text")
+        if not isinstance(text_val, str) or not text_val.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        text, encoding = _decode_source_text(text_val.encode("utf-8"), settings.max_upload_bytes)
+        if not text.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        return text, encoding
+
+    if content_type.startswith(_MULTIPART_CONTENT):
+        form = await request.form()
+        text_value = form.get("text")
+        upload = form.get("file")
+        text_present = isinstance(text_value, str) and text_value.strip() != ""
+        file_present = isinstance(upload, StarletteUploadFile) and bool(upload.filename)
+        if not text_present and not file_present:
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        if text_present and file_present:
+            raise DomainError(ErrorType.INVALID_INPUT, "provide exactly one of text or file")
+
+        if file_present:
+            assert isinstance(upload, StarletteUploadFile)
+            raw = await _read_upload_raw(upload, settings.max_upload_bytes)
+            text, encoding = _decode_source_text(raw, settings.max_upload_bytes)
+        else:
+            assert isinstance(text_value, str)
+            text, encoding = _decode_source_text(
+                text_value.encode("utf-8"), settings.max_upload_bytes
+            )
+
+        if not text.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        return text, encoding
+
+    raise DomainError(
+        ErrorType.INVALID_INPUT,
+        "content type must be application/json or multipart/form-data",
+    )
 
 
 def _decode_source_text(raw: bytes, max_upload_bytes: int | None = None) -> tuple[str, str]:
