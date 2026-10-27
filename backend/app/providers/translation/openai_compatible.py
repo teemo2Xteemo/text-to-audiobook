@@ -65,8 +65,11 @@ _BCP47_TO_OPENAI: dict[str, tuple[str, str]] = {
 SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(sorted(_BCP47_TO_OPENAI))
 
 _MAX_INPUT_CHARS = 10000
-# Output budget for one chunk. Groq's default max_completion_tokens is 1024,
-# and gpt-oss reasoning tokens come out of that same budget.
+# Completion budget for one Groq call. Pipeline chunks are at most 1200
+# characters, so 8192 tokens covers a full translation plus low-effort
+# gpt-oss reasoning (several tokens per source character). Inputs above
+# _MAX_INPUT_CHARS are rejected before the request. A completion that still
+# hits this cap is refused via finish_reason, not cached.
 _GROQ_MAX_COMPLETION_TOKENS = 8192
 GROQ_QWEN_MODEL = "qwen/qwen3.8-27b"
 GROQ_GPT_OSS_120B = "openai/gpt-oss-120b"
@@ -125,12 +128,35 @@ def groq_completion_options(model: str) -> dict[str, Any]:
             "include_reasoning": False,
             "max_completion_tokens": _GROQ_MAX_COMPLETION_TOKENS,
         }
-    if model.startswith("qwen/qwen3"):
+    # Only the pinned preview id. A future Qwen3 id may not accept "none".
+    if model == GROQ_QWEN_MODEL:
         return {
             "reasoning_effort": "none",
             "max_completion_tokens": _GROQ_MAX_COMPLETION_TOKENS,
         }
     return {}
+
+
+def _reject_incomplete_choice(choice: dict[str, Any], *, model: str) -> None:
+    """Refuse a completion that is not a finished answer.
+
+    A missing finish_reason is left alone. ``stop`` is success. Anything else,
+    including ``length`` and ``content_filter``, is not retryable: the same
+    request and budget would fail the same way, and a partial ``content`` must
+    not be cached or spoken.
+    """
+    if "finish_reason" not in choice:
+        return
+    reason = choice.get("finish_reason")
+    if reason is None:
+        return
+    if isinstance(reason, str) and reason.strip().lower() in {"", "stop"}:
+        return
+    shown = reason.strip().lower() if isinstance(reason, str) else str(reason)
+    raise DomainError(
+        ErrorType.INVALID_INPUT,
+        f"translation incomplete: model {model} finish_reason {shown}",
+    )
 
 
 def _visible_translation(content: str) -> str:
@@ -269,7 +295,9 @@ def _map_openai_error(
     mapped: DomainError
     if isinstance(exc, urllib.error.HTTPError):
         detail = _provider_detail(exc)
-        retry_after = _parse_retry_after(_retry_after_header(exc)) if exc.code == 429 else None
+        retry_after = (
+            _parse_retry_after(_retry_after_header(exc)) if exc.code in (429, 503) else None
+        )
         if exc.code == 429:
             message = _http_client_message(exc.code, detail or "rate limit exceeded", model=None)
             mapped = DomainError(
@@ -286,6 +314,7 @@ def _map_openai_error(
             mapped = DomainError(
                 ErrorType.TRANSLATION_FAILED,
                 _http_client_message(exc.code, detail, model=None),
+                retry_after_seconds=retry_after,
             )
     elif _is_timeout_failure(exc):
         mapped = DomainError(ErrorType.TIMEOUT, "request timed out")
@@ -479,6 +508,13 @@ class OpenAICompatibleTranslationProvider:
         except Exception as exc:
             raise _map_openai_error(exc, model=self._model, provider=self._provider_name) from exc
 
+        choices = data.get("choices")
+        if not choices or not isinstance(choices, list):
+            raise DomainError(ErrorType.TRANSLATION_FAILED, "empty or invalid choices in response")
+
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        _reject_incomplete_choice(first_choice, model=self._model)
+
         served_model = data.get("model") if isinstance(data, dict) else None
         logger.info(
             "openai_compatible_translated",
@@ -492,11 +528,6 @@ class OpenAICompatibleTranslationProvider:
             },
         )
 
-        choices = data.get("choices")
-        if not choices or not isinstance(choices, list):
-            raise DomainError(ErrorType.TRANSLATION_FAILED, "empty or invalid choices in response")
-
-        first_choice = choices[0] if isinstance(choices[0], dict) else {}
         message = first_choice.get("message") or {}
         if not isinstance(message, dict):
             message = {}

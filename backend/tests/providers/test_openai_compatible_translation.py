@@ -715,3 +715,158 @@ async def test_reasoning_only_response_is_empty_translation() -> None:
         await provider.translate("Hello", "en-US", "vi-VN")
     assert exc_info.value.error_type is ErrorType.TRANSLATION_FAILED
     assert "only the trace" not in exc_info.value.message
+
+
+def test_groq_completion_budget_covers_a_max_chunk() -> None:
+    from app.domain.chunking import CHUNK_MAX_CHARS
+
+    budget = groq_completion_options("openai/gpt-oss-120b")["max_completion_tokens"]
+    # Several tokens per source character: translation expansion plus low reasoning.
+    assert budget >= CHUNK_MAX_CHARS * 4
+    assert groq_completion_options("qwen/qwen3-future") == {}
+
+
+def _completion(
+    content: str,
+    finish_reason: object = "stop",
+    *,
+    include_reason: bool = True,
+) -> dict:
+    choice: dict[str, object] = {"message": {"role": "assistant", "content": content}}
+    if include_reason:
+        choice["finish_reason"] = finish_reason
+    return {"choices": [choice]}
+
+
+@pytest.mark.anyio
+async def test_length_finish_reason_is_not_returned_or_cached(tmp_path) -> None:
+    from app.application.pipeline.artifact_cache import CacheIdentity, PipelineArtifactCache
+    from app.application.pipeline.retry import with_chunk_retry
+    from app.domain.retry import RetryPolicy, is_retryable
+    from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
+
+    partial = "partial translation that must not be spoken"
+    fake_http = FakeOpenAIHttp(_completion(partial, "length"))
+    provider = GroqTranslationProvider(
+        api_key="gsk_test",
+        model="openai/gpt-oss-120b",
+        http=fake_http,
+    )
+    calls = 0
+
+    async def _op() -> str:
+        nonlocal calls
+        calls += 1
+        return await provider.translate("A long chunk of story text.", "en-US", "vi-VN")
+
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    with pytest.raises(DomainError) as exc_info:
+        await with_chunk_retry(
+            _op,
+            policy=RetryPolicy(max_attempts=3, backoff_seconds=1.0),
+            sleep=_sleep,
+            job_id="job-1",
+            chunk_id="chunk-001",
+            stage="translated",
+        )
+
+    err = exc_info.value
+    assert err.error_type is ErrorType.INVALID_INPUT
+    assert not is_retryable(err.error_type)
+    assert "finish_reason length" in err.message
+    assert "openai/gpt-oss-120b" in err.message
+    assert partial not in err.message
+    assert calls == 1
+    assert slept == []
+
+    cache = PipelineArtifactCache(
+        FilesystemArtifactCache(tmp_path / "cache"),
+        CacheIdentity(
+            translation_provider="groq",
+            translation_model="openai/gpt-oss-120b",
+            tts_provider="fake",
+            tts_model="fake",
+        ),
+    )
+    destination = tmp_path / "chunk-001.translated.txt"
+    assert (
+        cache.fill_translation(
+            text="A long chunk of story text.",
+            source_language="en-US",
+            target_language="vi-VN",
+            destination=destination,
+            job_id="job-1",
+            chunk_id="chunk-001",
+        )
+        is False
+    )
+    assert not destination.exists()
+
+
+@pytest.mark.anyio
+async def test_stop_finish_reason_returns_content() -> None:
+    fake_http = FakeOpenAIHttp(_completion("Bản dịch đủ.", "stop"))
+    provider = _provider(http=fake_http)
+    assert await provider.translate("Hello", "en-US", "vi-VN") == "Bản dịch đủ."
+
+
+@pytest.mark.anyio
+async def test_missing_finish_reason_still_returns_content() -> None:
+    fake_http = FakeOpenAIHttp(_completion("Bản dịch cũ.", include_reason=False))
+    provider = _provider(http=fake_http)
+    assert await provider.translate("Hello", "en-US", "vi-VN") == "Bản dịch cũ."
+
+    null_reason = FakeOpenAIHttp(_completion("Vẫn đủ.", None))
+    provider_null = _provider(http=null_reason)
+    assert await provider_null.translate("Hello", "en-US", "vi-VN") == "Vẫn đủ."
+
+
+@pytest.mark.anyio
+async def test_content_filter_finish_reason_is_not_a_translation() -> None:
+    fake_http = FakeOpenAIHttp(_completion("blocked fragment", "content_filter"))
+    provider = _provider(http=fake_http, model="openai/gpt-oss-20b")
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Hello", "en-US", "vi-VN")
+    assert exc_info.value.error_type is ErrorType.INVALID_INPUT
+    assert "content_filter" in exc_info.value.message
+    assert "blocked fragment" not in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_http_503_honors_retry_after() -> None:
+    from app.application.pipeline.retry import with_chunk_retry
+    from app.domain.retry import RetryPolicy
+
+    fake_http = FakeOpenAIHttp()
+    fake_http.fail = _http_error(503, b'{"error": {"message": "upstream busy"}}', retry_after="12")
+    provider = _provider(http=fake_http)
+    calls = 0
+
+    async def _op() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await provider.translate("Text", "en-US", "vi-VN")
+        fake_http.fail = None
+        return await provider.translate("Text", "en-US", "vi-VN")
+
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    result = await with_chunk_retry(
+        _op,
+        policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
+        sleep=_sleep,
+        job_id="job-1",
+        chunk_id="chunk-1",
+        stage="translated",
+    )
+    assert result
+    assert calls == 2
+    assert slept == [12.0]
