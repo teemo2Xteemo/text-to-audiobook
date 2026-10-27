@@ -142,16 +142,18 @@ def openrouter_completion_options(model: str) -> dict[str, Any]:
     """Extra chat fields for one OpenRouter model.
 
     DeepSeek V4 Flash thinks unless reasoning is disabled. Scope that to this
-    exact id. ``reasoning`` is OpenRouter's unified parameter; ``reasoning_effort``
-    matches the Groq-style field DeepSeek also accepts. No ``provider`` routing
-    preference is set; add one here if a specific upstream should be pinned.
+    exact id. OpenRouter's unified ``reasoning`` object is the only reasoning
+    field sent: ``reasoning_effort`` is a shorthand for ``reasoning.effort`` and
+    must not be sent beside it. The output cap is ``max_tokens`` because
+    ``max_completion_tokens`` is not reliable on OpenRouter routes. No
+    ``provider`` routing preference is set; add one here if a specific
+    upstream should be pinned.
     """
     if model != OPENROUTER_DEEPSEEK_V4_FLASH:
         return {}
     return {
         "reasoning": {"effort": "none"},
-        "reasoning_effort": "none",
-        "max_completion_tokens": _GROQ_MAX_COMPLETION_TOKENS,
+        "max_tokens": _GROQ_MAX_COMPLETION_TOKENS,
     }
 
 

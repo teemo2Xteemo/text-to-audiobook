@@ -640,6 +640,8 @@ async def test_groq_qwen_disables_reasoning_and_gpt_oss_hides_it() -> None:
     qwen_payload = qwen_http.calls[-1]["payload"]
     assert qwen_payload["model"] == "qwen/qwen3.8-27b"
     assert qwen_payload["reasoning_effort"] == "none"
+    assert "max_completion_tokens" in qwen_payload
+    assert "max_tokens" not in qwen_payload
     assert "reasoning_format" not in qwen_payload
     assert "include_reasoning" not in qwen_payload
 
@@ -655,6 +657,8 @@ async def test_groq_qwen_disables_reasoning_and_gpt_oss_hides_it() -> None:
     assert oss_payload["model"] == "openai/gpt-oss-120b"
     assert oss_payload["reasoning_effort"] == "low"
     assert oss_payload["include_reasoning"] is False
+    assert "max_completion_tokens" in oss_payload
+    assert "max_tokens" not in oss_payload
     assert "reasoning_format" not in oss_payload
 
     small = GroqTranslationProvider(api_key="gsk_test", model="llama-3.1-8b-instant")
@@ -892,8 +896,9 @@ async def test_openrouter_deepseek_disables_reasoning_only_for_that_model() -> N
     payload = deepseek_http.calls[-1]["payload"]
     assert payload["model"] == OPENROUTER_DEEPSEEK_V4_FLASH
     assert payload["reasoning"] == {"effort": "none"}
-    assert payload["reasoning_effort"] == "none"
-    assert payload["max_completion_tokens"] >= 4096
+    assert "reasoning_effort" not in payload
+    assert payload["max_tokens"] == 8192
+    assert "max_completion_tokens" not in payload
     assert "provider" not in payload
 
     other_http = FakeOpenAIHttp()

@@ -16,14 +16,18 @@ Chinese → Vietnamese is a common example, not the only supported pair. Languag
 **MVP & Extended Capabilities in place:**
 - **Core Pipeline (M1–M13):** FastAPI async jobs, Redis/RQ queue, domain ports, chunking with retry & checkpoint resume, translation/TTS caching, conservative narration, NLLB CPU adapter, Edge TTS + FFmpeg audio normalization, Docker Compose ([ADR 0010](docs/adr/0010-stack-and-project-layout.md)).
 - **Translation Adapters:** NLLB (CPU distilled), Ollama/TranslateGemma ([ADR 0011](docs/adr/0011-ollama-translategemma-optional-translation.md)), Google Gemini API (`TRANSLATION_PROVIDER=gemini`), OpenRouter, Groq, and offline fakes. A clean clone still boots with `fake`. When `TRANSLATION_PROVIDER=openrouter`, the default profile is DeepSeek V4 Flash.
-
-| Profile | Model | When it is the default |
-| --- | --- | --- |
-| `openrouter-deepseek-v4-flash` | `deepseek/deepseek-v4-flash` | `TRANSLATION_PROVIDER=openrouter` (settings default model) |
-| `openrouter-auto` | `openrouter/auto` | Only if `OPENROUTER_TRANSLATION_MODEL` is set to that id |
 - **High-Throughput Parallel Chunks:** Asynchronous parallel chunk processing with configurable concurrency limits for rapid translation and audio generation.
 - **Audio & Subtitle Sync:** Timed SRT subtitle generation, automatic timestamp alignment, and synchronized timeline merging.
 - **Studio UI & Hot Reload:** Modernized React Studio UI, translation profile selector, SRT timestamp cleaner, and hybrid host-Vite HMR dev mode.
+
+### OpenRouter profiles
+
+| Profile | Model | When it is the default |
+| --- | --- | --- |
+| `openrouter-deepseek-v4-flash` | `deepseek/deepseek-v4-flash` (paid) | `TRANSLATION_PROVIDER=openrouter` and `OPENROUTER_TRANSLATION_MODEL` is unset or set to this id |
+| `openrouter-auto` | `openrouter/auto` | `OPENROUTER_TRANSLATION_MODEL=openrouter/auto` |
+
+**Upgrade:** installs that used OpenRouter without setting `OPENROUTER_TRANSLATION_MODEL` previously defaulted to `openrouter/auto`. They now default to `deepseek/deepseek-v4-flash`. Jobs that already stored a translation pin keep that model. To keep auto-routing for new jobs, set `OPENROUTER_TRANSLATION_MODEL=openrouter/auto`.
 
 ## For coding agents
 

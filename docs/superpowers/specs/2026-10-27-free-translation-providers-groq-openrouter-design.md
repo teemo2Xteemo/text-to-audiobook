@@ -23,7 +23,7 @@ To solve this, the operator requires:
 ### Goals
 - Implement a reusable, standard OpenAI-compatible translation provider adapter (`OpenAITranslationProvider` or specific Groq/OpenRouter adapters) in `backend/app/providers/translation/` using Python stdlib `urllib` (zero new external dependencies).
 - Support **Groq** as an opt-in provider (`TRANSLATION_PROVIDER=groq`) with default model `qwen/qwen3.8-27b` and profiles `openai/gpt-oss-120b` / `openai/gpt-oss-20b` (Groq's replacements for the Llama 3.3 70B and Llama 3.1 8B Instant ids shut down on 2026-08-16).
-- Support **OpenRouter** as an opt-in provider (`TRANSLATION_PROVIDER=openrouter`) with free models such as `qwen/qwen-2.5-72b-instruct:free`.
+- Support **OpenRouter** as an opt-in provider (`TRANSLATION_PROVIDER=openrouter`). The default model is `deepseek/deepseek-v4-flash`, which is a **paid** OpenRouter route, not a free-tier model. `openrouter/auto` remains available when `OPENROUTER_TRANSLATION_MODEL` is set to that id.
 - Expose corresponding profiles in `build_available_translation_profiles()` so users can switch between Groq and OpenRouter seamlessly from the UI.
 - Preserve domain error mapping (HTTP 429 → `PROVIDER_RATE_LIMIT`, 401/403 → `PROVIDER_CONFIGURATION_ERROR`, 5xx → `TRANSLATION_FAILED`, timeout → `TIMEOUT`).
 - Maintain cache keys including `provider` and `model` (per ADR 0006).
@@ -105,7 +105,7 @@ In `backend/app/config/factory.py`:
     - `groq-gpt-oss-120b`: "Groq (GPT-OSS 120B)", badge `ONLINE`, model `openai/gpt-oss-120b`
     - `groq-gpt-oss-20b`: "Groq (GPT-OSS 20B)", badge `ONLINE`, model `openai/gpt-oss-20b`
   - If `openrouter_api_key` is present:
-    - `openrouter-deepseek-v4-flash`: "OpenRouter (DeepSeek V4 Flash)", model `deepseek/deepseek-v4-flash`, default when `TRANSLATION_PROVIDER=openrouter`
+    - `openrouter-deepseek-v4-flash`: "OpenRouter (DeepSeek V4 Flash)", model `deepseek/deepseek-v4-flash` (paid), default when `TRANSLATION_PROVIDER=openrouter`
     - `openrouter-auto`: "OpenRouter (Auto / Best Available)", badge `ONLINE`
 
 ---
