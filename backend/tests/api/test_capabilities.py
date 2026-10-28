@@ -51,6 +51,35 @@ def test_capabilities_unfiltered_includes_voices_for_tts_only_languages(
     assert zh_voices[0]["id"] == "extra-zh"
 
 
+def test_capabilities_unfiltered_preserves_default_voice_ordering(tmp_path: Path) -> None:
+    from app.providers.tts.edge import EdgeTTSProvider
+
+    records = [
+        {"ShortName": "vi-VN-AdapterANeural", "Locale": "vi-VN", "FriendlyName": "A"},
+        {"ShortName": "vi-VN-AdapterBNeural", "Locale": "vi-VN", "FriendlyName": "B"},
+    ]
+
+    class _Client:
+        def list_voices(self) -> list[dict[str, str]]:
+            return records
+
+    tts = EdgeTTSProvider(
+        tmp_path,
+        default_voice_by_language={"vi-VN": "vi-VN-AdapterBNeural"},
+        client=_Client(),
+    )
+    translation = FakeTranslationProvider(languages=["vi-VN"])
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.capabilities_service = CapabilitiesService(translation=translation, tts=tts)
+
+    with TestClient(app) as client:
+        res = client.get("/api/capabilities")
+        assert res.status_code == 200
+        vi_voices = [v for v in res.json()["voices"] if v["language"] == "vi-VN"]
+        assert len(vi_voices) == 2
+        assert vi_voices[0]["id"] == "vi-VN-AdapterBNeural"
+
+
 def test_capabilities_returns_translation_profiles(tmp_path: Path) -> None:
     settings = Settings(_env_file=None, storage_path=tmp_path)
     app = create_app(settings)
