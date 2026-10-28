@@ -808,6 +808,20 @@ def test_analyze_multipart_file(client: TestClient) -> None:
     assert data["chapters_preview"][0]["title"] == "第一章 开篇"
 
 
+def test_analyze_preface_and_volume_does_not_inflate_chapters_count(client: TestClient) -> None:
+    # R4: Preface and volume headings should not inflate the chapters_count
+    content = "序言\n前言内容。\n第一卷 少年\n第一章 开端\n正文一。\n第二章 发展\n正文二。"
+    res = client.post("/api/analyze", json={"text": content})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["chapters_count"] == 2
+    # Chapters preview includes preface/volume with index=0, but chapters_count is 2
+    assert data["chapters_preview"][0]["index"] == 0
+    assert data["chapters_preview"][1]["index"] == 0
+    assert data["chapters_preview"][2]["index"] == 1
+    assert data["chapters_preview"][2]["title"] == "第一章 开端"
+
+
 def test_analyze_empty_text(client: TestClient) -> None:
     res = client.post("/api/analyze", json={"text": ""})
     assert res.status_code == 400

@@ -123,7 +123,7 @@ Concrete problems in the current code:
 ### 5.5 `POST /api/tts/preview` (Phase 1)
 - Body: `{ "text": "<≤ 300 chars>", "language": "vi-VN", "voice": "…", "speed": 1.0, "tts_engine": "edge" }`. The response is `audio/mpeg`, about 10 s long.
 - The server cuts the text at the first sentence end within 300 chars, then synthesizes through the same `TTSProvider` and `normalize` path as jobs. Results go into `PipelineArtifactCache` (`fill_tts` / `store_tts`), so repeated clicks are free.
-- Guarded by a small in-process token bucket (`TTS_PREVIEW_RATE_PER_MINUTE`, default 20) so it can't be used as a free bulk TTS API. Errors use the same friendly mapping.
+- Guarded by a small in-process token bucket (`TTS_PREVIEW_RATE_PER_MINUTE`, default 30) so it can't be used as a free bulk TTS API. Errors use the same friendly mapping.
 
 ### 5.6 Error codes (existing `ErrorType`, no new enum values)
 

@@ -407,6 +407,58 @@ describe("JobForm", () => {
     );
   });
 
+  it("displays friendly error message when preview tts times out", async () => {
+    const user = userEvent.setup();
+    const fakeAnalyze = {
+      encoding: "UTF-8",
+      language: "en-US",
+      confidence: 0.95,
+      needs_confirmation: false,
+      candidates: [{ language: "en-US", confidence: 0.95 }],
+      chapters_count: 1,
+      chapters_preview: [],
+      duration_estimate_seconds: 30,
+      process_time_estimate_seconds: 4,
+      preview_lines: ["Snippet"],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/analyze")) {
+          return new Response(JSON.stringify(fakeAnalyze), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/api/tts/preview")) {
+          return new Response(
+            JSON.stringify({
+              error_type: "TIMEOUT",
+              message: "Preview generation timed out after 15s",
+            }),
+            {
+              status: 504,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        return new Response("{}", { status: 404 });
+      }),
+    );
+
+    render(
+      <JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={() => undefined} />,
+    );
+
+    await user.type(screen.getByLabelText("Paste story"), "Chapter 1 text here.");
+    const listenBtn = await screen.findByRole("button", { name: /Listen/i });
+    await user.click(listenBtn);
+    expect(
+      await screen.findByText("The request timed out. Please try again with shorter text."),
+    ).toBeInTheDocument();
+  });
+
   it("shows confirmation banner when detection confidence is low or needs confirmation", async () => {
     const user = userEvent.setup();
     const fakeAnalyze = {

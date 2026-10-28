@@ -278,7 +278,7 @@ curl -sS -X POST http://127.0.0.1:8000/api/tts/preview \
 
 > [!NOTE]
 > **Rate Limiting & Reverse Proxy Configuration:**
-> To protect upstream TTS providers against quota exhaustion, the preview endpoint enforces a sliding-window rate limit (default: 10 requests per minute per client host, configured via `TTS_PREVIEW_RATE_PER_MINUTE`). Rate limiting tracks `request.client.host` to prevent spoofing. When running behind a reverse proxy (e.g. Caddy, Nginx, or Traefik), configure Uvicorn with `--forwarded-allow-ips` or ensure proxy headers middleware is enabled so the client IP is accurately forwarded from `X-Forwarded-For` instead of attributing all traffic to the proxy gateway.
+> To protect upstream TTS providers against quota exhaustion, the preview endpoint enforces a sliding-window rate limit (default: 30 requests per minute per client host, configured via `TTS_PREVIEW_RATE_PER_MINUTE`). Rate limiting tracks `request.client.host` to prevent spoofing. When running behind a reverse proxy (e.g. Caddy, Nginx, or Traefik), configure Uvicorn with `--forwarded-allow-ips` or ensure proxy headers middleware is enabled so the client IP is accurately forwarded from `X-Forwarded-For` instead of attributing all traffic to the proxy gateway.
 
 ---
 

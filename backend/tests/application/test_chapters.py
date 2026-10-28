@@ -194,7 +194,82 @@ def test_chunk_by_chapter_full_text_title_not_prepended():
 
 def test_chunk_by_chapter_empty_and_whitespace():
     assert chunk_by_chapter([]) == []
-    chapters = [
-        Chapter(index=1, title="Empty Chapter", body="   \n\t  ", char_count=0),
+    chapters_blank = [
+        Chapter(index=1, title="", body="   \n\t  ", char_count=0),
     ]
-    assert chunk_by_chapter(chapters) == []
+    assert chunk_by_chapter(chapters_blank) == []
+    chapters_full_text_empty = [
+        Chapter(index=1, title="Full text", body="   \n\t  ", char_count=0),
+    ]
+    assert chunk_by_chapter(chapters_full_text_empty) == []
+
+    # Non-empty heading without body (e.g. volume or standalone section) is emitted
+    chapters_heading = [
+        Chapter(index=1, title="Heading Only", body="   \n\t  ", char_count=0),
+    ]
+    chunks = chunk_by_chapter(chapters_heading)
+    assert len(chunks) == 1
+    assert chunks[0].text == "Heading Only"
+
+
+def test_split_chapters_and_chunk_volume_heading_with_empty_body():
+    # R1: Xianxia novels commonly have volume lines immediately preceding chapters:
+    # 第一卷 少年出山
+    # 第一章 天才少年
+    # 正文……
+    text = "第一卷 少年出山\n第一章 天才少年\n正文内容在这里。"
+    chapters = split_chapters(text)
+    assert len(chapters) == 2
+
+    # Volume division has index=0 so Chapter 1 keeps index=1
+    assert chapters[0].index == 0
+    assert chapters[0].title == "第一卷 少年出山"
+    assert chapters[0].body == ""
+
+    assert chapters[1].index == 1
+    assert chapters[1].title == "第一章 天才少年"
+    assert chapters[1].body == "正文内容在这里。"
+
+    # Chunks must preserve both volume heading and chapter title in narration
+    chunks = chunk_by_chapter(chapters)
+    assert len(chunks) == 2
+    assert chunks[0].text == "第一卷 少年出山"
+    assert "第一章 天才少年" in chunks[1].text
+    assert "正文内容在这里。" in chunks[1].text
+
+
+def test_split_chapters_regression_cases_from_review():
+    # R2: Hard-wrapped prose without punctuation must NOT trigger heading split
+    wrapped_vi = "Hồi 3 tuổi tôi ở quê với bà\nMột buổi trưa hè oi ả."
+    chapters_vi = split_chapters(wrapped_vi)
+    assert len(chapters_vi) == 1
+    assert chapters_vi[0].title == "Full text"
+
+    wrapped_en = "Chapter 3 was the best part of the\nbook according to the reviewer."
+    chapters_en = split_chapters(wrapped_en)
+    assert len(chapters_en) == 1
+    assert chapters_en[0].title == "Full text"
+
+    wrapped_zh = "第一回见到他时他很紧张\n在场的人都看出来了。"
+    chapters_zh = split_chapters(wrapped_zh)
+    assert len(chapters_zh) == 1
+    assert chapters_zh[0].title == "Full text"
+
+    # R2: Legitimate titles containing commas or quotes MUST be accepted
+    text_en_comma = "Chapter 1: Hello, World\nContent starts here."
+    ch_en_comma = split_chapters(text_en_comma)
+    assert len(ch_en_comma) == 1
+    assert ch_en_comma[0].title == "Chapter 1: Hello, World"
+    assert ch_en_comma[0].body == "Content starts here."
+
+    text_vi_comma = "Chương 5: Gió, mưa và lửa\nNội dung diễn biến."
+    ch_vi_comma = split_chapters(text_vi_comma)
+    assert len(ch_vi_comma) == 1
+    assert ch_vi_comma[0].title == "Chương 5: Gió, mưa và lửa"
+    assert ch_vi_comma[0].body == "Nội dung diễn biến."
+
+    text_en_quote = 'Chapter 3: "The Return"\nContent begins.'
+    ch_en_quote = split_chapters(text_en_quote)
+    assert len(ch_en_quote) == 1
+    assert ch_en_quote[0].title == 'Chapter 3: "The Return"'
+    assert ch_en_quote[0].body == "Content begins."

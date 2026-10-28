@@ -222,7 +222,7 @@ async def analyze_text(
     )
 
     chapters = split_chapters(text)
-    chapters_count = len(chapters)
+    chapters_count = sum(1 for c in chapters if c.index > 0)
     chapters_preview = [
         ChapterSummary(index=c.index, title=c.title, char_count=c.char_count) for c in chapters[:10]
     ]

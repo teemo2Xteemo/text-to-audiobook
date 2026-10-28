@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import { analyze, previewTts } from "../api/client";
+import { analyze, previewTts, toApiError } from "../api/client";
 import type {
   AnalyzeResponse,
   Capabilities,
@@ -22,6 +22,7 @@ import {
   canGenerate,
   estimateTextMetrics,
   formatDuration,
+  friendlyError,
   languageDisplayName,
   languageLabel,
   resolveSourceDefault,
@@ -111,6 +112,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   function handleModeChange(nextMode: JobMode) {
@@ -412,6 +414,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     ).slice(0, 200);
 
     setPreviewLoading(true);
+    setPreviewError(null);
     try {
       const res = await previewTts({
         text: sample,
@@ -431,8 +434,11 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
           setPreviewPlaying(false);
         }
       }
-    } catch {
+    } catch (err) {
       setPreviewPlaying(false);
+      const apiErr = toApiError(err);
+      const { summary } = friendlyError(apiErr.error_type, apiErr.message);
+      setPreviewError(summary);
     } finally {
       setPreviewLoading(false);
     }
@@ -1011,6 +1017,11 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                       </svg>
                       {previewLoading ? "Loading preview..." : previewPlaying ? "Playing..." : "Listen"}
                     </button>
+                    {previewError && (
+                      <span className="preview-error-text text-xs text-rose-500" role="alert">
+                        {previewError}
+                      </span>
+                    )}
                     <audio
                       ref={previewAudioRef}
                       onEnded={() => setPreviewPlaying(false)}

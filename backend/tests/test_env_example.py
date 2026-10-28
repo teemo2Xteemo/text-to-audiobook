@@ -41,6 +41,7 @@ def test_env_example_lists_locked_names() -> None:
         assert name in text, name
     assert "HF_HOME" in text
     assert "CACHE_PATH" not in text
+    assert "TTS_PREVIEW_RATE_PER_MINUTE=30" in text
 
 
 def _compose_without_comments(text: str) -> str:
