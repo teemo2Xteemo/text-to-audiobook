@@ -1,5 +1,5 @@
 import { AUTO_SOURCE_LANGUAGE, SPEED_MAX, SPEED_MIN } from "./constants";
-import type { JobStatus, Voice } from "../api/types";
+import type { JobMode, JobStatus, Voice } from "../api/types";
 
 export function voicesForTarget(voices: readonly Voice[], targetLanguage: string): Voice[] {
   return voices.filter((voice) => voice.language === targetLanguage);
@@ -58,6 +58,7 @@ export function progressCopy(
   status: JobStatus,
   chunkCurrent: number,
   chunkTotal: number,
+  mode?: JobMode,
 ): string {
   switch (status) {
     case "queued":
@@ -65,6 +66,9 @@ export function progressCopy(
     case "parsing":
       return "Reading story";
     case "translating":
+      if (mode === "narrate") {
+        return chunkTotal > 0 ? `Preparing text ${chunkCurrent}/${chunkTotal}` : "Preparing text";
+      }
       return chunkTotal > 0 ? `Translating ${chunkCurrent}/${chunkTotal}` : "Translating";
     case "preparing_tts":
       return "Preparing narration";
@@ -260,6 +264,18 @@ export const PIPELINE_STEPS: readonly PipelineStep[] = [
   { key: "completed", label: "Ready" },
 ];
 
+export function pipelineStepsForMode(mode?: JobMode): readonly PipelineStep[] {
+  return [
+    { key: "queued", label: "Queue" },
+    { key: "parsing", label: "Parse" },
+    { key: "translating", label: mode === "narrate" ? "Prepare" : "Translate" },
+    { key: "preparing_tts", label: "Narrate" },
+    { key: "generating_audio", label: "Synthesize" },
+    { key: "merging", label: "Master" },
+    { key: "completed", label: "Ready" },
+  ];
+}
+
 export type StepVisualState = "done" | "active" | "upcoming" | "error";
 
 export function stepVisualState(
@@ -319,4 +335,61 @@ export function computeProgressPercent(
     case "failed":
       return chunkTotal > 0 ? Math.max(10, Math.round(ratio * 85)) : 10;
   }
+}
+
+export type FriendlyErrorResult = {
+  summary: string;
+  details?: string;
+};
+
+const ERROR_SUMMARY_MAP: Record<string, string> = {
+  PROVIDER_CONFIGURATION_ERROR:
+    "Service configuration issue. The service encountered a configuration error.",
+  UNSUPPORTED_LANGUAGE: "This language or voice is currently not supported.",
+  TIMEOUT: "The request timed out. Please try again with shorter text.",
+  PROVIDER_RATE_LIMIT: "The service is temporarily busy. Please try again shortly.",
+  TTS_FAILED: "Speech synthesis failed. Please try again or choose a different voice.",
+  TRANSLATION_FAILED: "Translation failed. Please try again or select a different engine.",
+  INVALID_INPUT: "The provided input is invalid. Please check your text or file.",
+  STORAGE_FAILED: "Failed to store or retrieve audio file.",
+};
+
+export function friendlyError(
+  errorType: string | null | undefined,
+  message: string | null | undefined,
+): FriendlyErrorResult {
+  const normType = (errorType ?? "").trim();
+  const normMessage = (message ?? "").trim();
+
+  const summary =
+    ERROR_SUMMARY_MAP[normType] ||
+    "An unexpected error occurred while processing the request.";
+
+  let details: string | undefined;
+  if (normType && normMessage) {
+    details = `${normType}: ${normMessage}`;
+  } else if (normType) {
+    details = normType;
+  } else if (normMessage) {
+    details = normMessage;
+  }
+
+  return { summary, details };
+}
+
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "0s";
+  }
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (minutes > 0) {
+    return secs > 0 ? `${minutes}m ${secs}s` : `${minutes}m`;
+  }
+  return `${secs}s`;
 }

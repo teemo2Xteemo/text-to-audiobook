@@ -32,7 +32,15 @@ def ensure_valid_speed(speed: float) -> None:
 class Voice:
     id: str
     language: str
-    label: str
+    label: str = ""
+    name: str = ""
+    gender: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.label:
+            object.__setattr__(self, "label", self.name or self.id)
+        if not self.name:
+            object.__setattr__(self, "name", self.label or self.id)
 
 
 @dataclass(frozen=True)

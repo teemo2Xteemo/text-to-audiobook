@@ -19,6 +19,10 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OLLAMA_TRANSLATION_MODEL", raising=False)
     monkeypatch.delenv("OLLAMA_HTTP_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("LANGUAGE_DETECT_MIN_CONFIDENCE", raising=False)
+    monkeypatch.delenv("LANGUAGE_CONFIRM_THRESHOLD", raising=False)
+    monkeypatch.delenv("TTS_PREVIEW_RATE_PER_MINUTE", raising=False)
+    monkeypatch.delenv("ESTIMATE_CHARS_PER_SECOND", raising=False)
+    monkeypatch.delenv("ESTIMATE_TRANSLATION_EXPANSION", raising=False)
     monkeypatch.delenv("TTS_DEFAULT_VOICE_BY_LANGUAGE", raising=False)
     monkeypatch.delenv("RETRY_MAX_ATTEMPTS", raising=False)
     monkeypatch.delenv("RETRY_BACKOFF_SECONDS", raising=False)
@@ -38,6 +42,13 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.ollama_translation_model == "translategemma:4b"
     assert settings.ollama_http_timeout_seconds == 120.0
     assert settings.language_detect_min_confidence == 0.5
+    assert settings.language_confirm_threshold == 0.70
+    assert settings.tts_preview_wpm == 150.0
+    assert settings.tts_preview_rate_per_minute == 30
+    assert settings.tts_preview_timeout_seconds == 15.0
+    assert settings.estimate_chars_per_second == 15.0
+    assert settings.estimate_translation_expansion == 1.2
+    assert settings.estimate_process_time_ratio == 0.15
     assert settings.tts_default_voice_by_language == ""
     assert settings.retry_max_attempts == 3
     assert settings.retry_backoff_seconds == 1.0
@@ -71,6 +82,10 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.setenv("OLLAMA_TRANSLATION_MODEL", "translategemma:12b")
     monkeypatch.setenv("OLLAMA_HTTP_TIMEOUT_SECONDS", "90")
     monkeypatch.setenv("LANGUAGE_DETECT_MIN_CONFIDENCE", "0.7")
+    monkeypatch.setenv("LANGUAGE_CONFIRM_THRESHOLD", "0.85")
+    monkeypatch.setenv("TTS_PREVIEW_RATE_PER_MINUTE", "180")
+    monkeypatch.setenv("ESTIMATE_CHARS_PER_SECOND", "20.0")
+    monkeypatch.setenv("ESTIMATE_TRANSLATION_EXPANSION", "1.5")
     monkeypatch.setenv(
         "TTS_DEFAULT_VOICE_BY_LANGUAGE",
         "ja-JP=ja-JP-AdapterANeural,en-US=en-US-AdapterANeural",
@@ -93,6 +108,10 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.ollama_translation_model == "translategemma:12b"
     assert settings.ollama_http_timeout_seconds == 90.0
     assert settings.language_detect_min_confidence == 0.7
+    assert settings.language_confirm_threshold == 0.85
+    assert settings.tts_preview_rate_per_minute == 180
+    assert settings.estimate_chars_per_second == 20.0
+    assert settings.estimate_translation_expansion == 1.5
     assert settings.tts_default_voice_by_language == (
         "ja-JP=ja-JP-AdapterANeural,en-US=en-US-AdapterANeural"
     )

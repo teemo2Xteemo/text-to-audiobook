@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,7 +14,7 @@ from app.application.pipeline.passthrough import (
 )
 from app.config.factory import build_job_service, build_orchestrator
 from app.config.settings import Settings
-from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
 from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.fs_storage import FilesystemJobStorage
@@ -68,7 +69,7 @@ def test_process_job_completes_with_fakes(tmp_path: Path, monkeypatch: pytest.Mo
     )
 
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
-    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _: orchestrator)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
 
     process_job(job.id)
 
@@ -102,7 +103,7 @@ def test_process_job_completed_is_noop(tmp_path: Path, monkeypatch: pytest.Monke
             return captured
 
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
-    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _: _Capture())
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: _Capture())
 
     process_job(job.id)
     assert runs == []
@@ -133,7 +134,7 @@ def test_process_job_failed_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             return captured
 
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
-    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _: _Capture())
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: _Capture())
 
     process_job(job.id)
     assert runs == []
@@ -204,7 +205,7 @@ def test_process_job_resumes_generating_audio(
         max_chars=20,
     )
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
-    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _: orchestrator)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
 
     process_job(job.id)
 
@@ -309,8 +310,8 @@ def _capture_pin(
 
     monkeypatch.setattr(NllbTranslationProvider, "__init__", _spy_nllb)
 
-    def _build(effective: Settings) -> PipelineOrchestrator:
-        orchestrator = build_orchestrator(effective)
+    def _build(effective: Settings, **_kw: Any) -> PipelineOrchestrator:
+        orchestrator = build_orchestrator(effective, **_kw)
         captured["provider"] = effective.translation_provider
         captured["model"] = effective.ollama_translation_model
         captured["nllb_model"] = effective.nllb_model_id
@@ -461,8 +462,8 @@ def test_process_job_skips_when_workspace_lock_is_held(
     settings = Settings(_env_file=None, storage_path=tmp_path)
     ran: list[str] = []
 
-    def _unexpected_build(effective: Settings) -> PipelineOrchestrator:
-        del effective
+    def _unexpected_build(effective: Settings, **_kw: Any) -> PipelineOrchestrator:
+        del effective, _kw
         ran.append("built")
         raise AssertionError("orchestrator should not be built when job lock is held")
 
@@ -497,8 +498,8 @@ def test_process_job_rereads_job_after_acquiring_lock(
             await self.save_job(replace(job, status=JobStatus.COMPLETED))
         return loaded
 
-    def _unexpected_build(effective: Settings) -> PipelineOrchestrator:
-        del effective
+    def _unexpected_build(effective: Settings, **_kw: Any) -> PipelineOrchestrator:
+        del effective, _kw
         built.append("built")
         raise AssertionError("orchestrator must not be built for a job completed before lock")
 
@@ -532,6 +533,113 @@ def test_process_job_fails_with_provider_configuration_error_when_worker_missing
     assert updated.status == JobStatus.FAILED
     assert updated.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
     assert "GEMINI_API_KEY" in (updated.message or "")
+
+    filesystem = FilesystemJobStorage(tmp_path)
+    fs_job = asyncio.run(filesystem.get_job(job.id))
+    assert fs_job is not None
+    assert fs_job.status == JobStatus.FAILED
+    assert fs_job.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+
+
+def test_process_job_narrate_mode_succeeds_without_translation_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = Job(
+        id="aaaa1111-2222-3333-4444-555566667777",
+        status=JobStatus.QUEUED,
+        source_language="vi-VN",
+        target_language="vi-VN",
+        voice="fake-vi-VN-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    _persist_job(tmp_path, job, "Văn bản thử nghiệm.")
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="gemini",
+        gemini_api_key=None,
+        tts_provider="fake",
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+
+    process_job(job.id)
+
+    service = build_job_service(settings)
+    updated = asyncio.run(service.get(job.id))
+    assert updated is not None
+    assert updated.status == JobStatus.COMPLETED
+
+    filesystem = FilesystemJobStorage(tmp_path)
+    fs_job = asyncio.run(filesystem.get_job(job.id))
+    assert fs_job is not None
+    assert fs_job.status == JobStatus.COMPLETED
+
+
+def test_process_job_fails_cleanly_when_job_mode_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.errors import ErrorType
+
+    job = Job(
+        id="bbbb1111-2222-3333-4444-555566667777",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="en-US",
+        voice="fake-en-US-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.UNKNOWN,
+    )
+    _persist_job(tmp_path, job, "Unknown mode text.")
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+
+    process_job(job.id)
+
+    service = build_job_service(settings)
+    updated = asyncio.run(service.get(job.id))
+    assert updated is not None
+    assert updated.status == JobStatus.FAILED
+    assert updated.error_type == ErrorType.INVALID_INPUT
+    assert "Unknown job mode" in (updated.message or "")
+
+
+def test_process_job_narrate_mode_fails_cleanly_when_tts_provider_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.errors import ErrorType
+
+    job = Job(
+        id="cccc1111-2222-3333-4444-555566667777",
+        status=JobStatus.QUEUED,
+        source_language="vi-VN",
+        target_language="vi-VN",
+        voice="fake-vi-VN-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    _persist_job(tmp_path, job, "Văn bản thử nghiệm.")
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        tts_provider="invalid_tts",
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+
+    process_job(job.id)
+
+    service = build_job_service(settings)
+    updated = asyncio.run(service.get(job.id))
+    assert updated is not None
+    assert updated.status == JobStatus.FAILED
+    assert updated.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert "TTS_PROVIDER" in (updated.message or "")
 
     filesystem = FilesystemJobStorage(tmp_path)
     fs_job = asyncio.run(filesystem.get_job(job.id))

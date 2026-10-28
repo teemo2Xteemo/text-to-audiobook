@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
+from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, OutputFormat
 from app.domain.languages import LanguageDetection
 
@@ -13,12 +14,30 @@ class TranslationProvider(Protocol):
     def supported_languages(self) -> Sequence[str]: ...
 
 
+class NullTranslationProvider(TranslationProvider):
+    async def translate(self, text: str, source_language: str, target_language: str) -> str:
+        raise DomainError(
+            ErrorType.PROVIDER_CONFIGURATION_ERROR,
+            "translation is not supported in narrate mode",
+        )
+
+    def supported_languages(self) -> Sequence[str]:
+        return ()
+
+    def languages(self) -> set[str]:
+        return set()
+
+
 class TTSProvider(Protocol):
     async def synthesize(
         self, text: str, language: str, voice: str, settings: TTSSettings
     ) -> AudioArtifact: ...
 
     def voices_for(self, language: str) -> Sequence[Voice]: ...
+
+    def languages(self) -> set[str]: ...
+
+    def all_voices(self) -> Sequence[Voice]: ...
 
 
 class NarrationProcessor(Protocol):
@@ -27,6 +46,8 @@ class NarrationProcessor(Protocol):
 
 class LanguageDetector(Protocol):
     async def detect(self, text: str) -> LanguageDetection: ...
+
+    async def detect_candidates(self, text: str) -> list[tuple[str, float]]: ...
 
 
 class JobStore(Protocol):

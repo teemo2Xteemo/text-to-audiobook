@@ -57,12 +57,31 @@ class EdgeTTSProvider:
         rest = [voice for voice in matched if voice.id != preferred_id]
         return preferred + rest
 
+    def languages(self) -> set[str]:
+        return {v.language for v in self._all_voices()}
+
     async def synthesize(
         self, text: str, language: str, voice: str, settings: TTSSettings
     ) -> AudioArtifact:
-        available = {item.id for item in self.voices_for(language)}
-        if voice not in available:
-            raise DomainError(ErrorType.UNSUPPORTED_LANGUAGE, "voice is not available for language")
+        if language:
+            available = {item.id for item in self.voices_for(language)}
+            if voice not in available:
+                lang_prefix = language.split("-")[0].lower()
+                family_voices = {
+                    item.id
+                    for item in self._all_voices()
+                    if item.language.split("-")[0].lower() == lang_prefix
+                }
+                if voice not in family_voices:
+                    raise DomainError(
+                        ErrorType.UNSUPPORTED_LANGUAGE, "voice is not available for language"
+                    )
+        else:
+            all_voice_ids = {item.id for item in self._all_voices()}
+            if voice not in all_voice_ids:
+                raise DomainError(
+                    ErrorType.UNSUPPORTED_LANGUAGE, "voice is not available for language"
+                )
         rate = speed_to_edge_rate(settings.speed)
         self._output_dir.mkdir(parents=True, exist_ok=True)
         path = self._output_dir / f"edge-{uuid4().hex}.mp3"
@@ -83,10 +102,16 @@ class EdgeTTSProvider:
         except Exception as exc:
             path.unlink(missing_ok=True)
             raise _map_edge_error(exc) from exc
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
         if not path.is_file() or path.stat().st_size == 0:
             path.unlink(missing_ok=True)
             raise DomainError(ErrorType.TTS_FAILED, "tts failed")
         return AudioArtifact(path=path)
+
+    def all_voices(self) -> Sequence[Voice]:
+        return self._all_voices()
 
     def _all_voices(self) -> list[Voice]:
         if self._voices is None:

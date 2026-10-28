@@ -20,6 +20,12 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
+class JobMode(StrEnum):
+    TRANSLATE = "translate"
+    NARRATE = "narrate"
+    UNKNOWN = "unknown"
+
+
 class IllegalJobTransition(Exception):
     def __init__(self, current: JobStatus, target: JobStatus) -> None:
         self.current = current
@@ -121,10 +127,15 @@ class Job:
     translation_provider: str | None = None
     translation_model: str | None = None
     recovery_attempts: int = 0
+    mode: JobMode = JobMode.TRANSLATE
 
     def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError("id is required")
+
         if self.recovery_attempts < 0:
             raise ValueError("recovery_attempts must be >= 0")
+
         provider = self.translation_provider
         model = self.translation_model
         if provider is None and model is None:
@@ -143,6 +154,7 @@ class Job:
             "error_type": self.error_type.value if self.error_type is not None else None,
             "id": self.id,
             "message": self.message,
+            "mode": self.mode.value,
             "output_bitrate_kbps": self.output_bitrate_kbps,
             "output_format": self.output_format.value,
             "source_language": self.source_language,
@@ -164,6 +176,11 @@ class Job:
         message = data.get("message")
         voice = data.get("voice")
         provider, model = _pin_from_mapping(data)
+        raw_mode = data.get("mode", JobMode.TRANSLATE.value)
+        try:
+            mode = JobMode(str(raw_mode))
+        except ValueError:
+            mode = JobMode.UNKNOWN
         return cls(
             id=str(data["id"]),
             status=JobStatus(str(data["status"])),
@@ -180,4 +197,5 @@ class Job:
             translation_provider=provider,
             translation_model=model,
             recovery_attempts=int(data.get("recovery_attempts", 0)),
+            mode=mode,
         )

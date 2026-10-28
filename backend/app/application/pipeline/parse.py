@@ -4,7 +4,7 @@ from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import resolve_source_language
 from app.domain.ports import LanguageDetector
 
-__all__ = ["is_srt_document", "parse_source", "strip_srt"]
+__all__ = ["is_srt_document", "parse_source", "prepare_narration_text", "strip_srt"]
 
 _SRT_TIMECODE_RE = re.compile(
     r"^\s*(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3}.*$",
@@ -12,6 +12,17 @@ _SRT_TIMECODE_RE = re.compile(
 )
 _SRT_INDEX_RE = re.compile(r"^\s*\d+\s*$")
 _SRT_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
+_DIVIDER_LINE_RE = re.compile(r"(?m)^\s*([*=-]\s*){3,}\s*$")
+_CONSECUTIVE_NEWLINES_RE = re.compile(r"\n{3,}")
+
+
+def prepare_narration_text(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.replace("\u3000", "  ")
+    normalized = _DIVIDER_LINE_RE.sub("", normalized)
+    normalized = "\n".join(line.rstrip() for line in normalized.split("\n"))
+    normalized = _CONSECUTIVE_NEWLINES_RE.sub("\n\n", normalized)
+    return normalized.strip()
 
 
 def _is_srt_cue_block(block: str) -> bool:

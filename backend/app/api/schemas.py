@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, model_serializer
 
 from app.domain.audio import SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, Voice
-from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
 
 
 class ErrorEnvelope(BaseModel):
@@ -33,6 +33,7 @@ class JobStatusResponse(BaseModel):
     subtitles_url: str | None = None
     translation_provider: str | None = None
     translation_model: str | None = None
+    mode: JobMode = JobMode.TRANSLATE
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -64,17 +65,19 @@ class JobStatusResponse(BaseModel):
             subtitles_url=subtitles_url,
             translation_provider=job.translation_provider,
             translation_model=job.translation_model,
+            mode=job.mode,
         )
 
 
 class CreateJobJsonBody(BaseModel):
     text: str
-    source_language: str
-    target_language: str
+    source_language: str = ""
+    target_language: str = ""
     voice: str | None = None
     speed: float = Field(default=SPEED_DEFAULT, ge=SPEED_MIN, le=SPEED_MAX)
     output_format: str = Field(default=OutputFormat.MP3.value)
     translation_profile_id: str | None = None
+    mode: JobMode = JobMode.TRANSLATE
 
 
 class VoiceResponse(BaseModel):
@@ -102,3 +105,52 @@ class CapabilitiesResponse(BaseModel):
     languages: list[str]
     voices: list[VoiceResponse]
     translation_profiles: list[TranslationProfileResponse] = Field(default_factory=list)
+    narrate_languages: list[str] = Field(default_factory=list)
+    estimate_defaults: dict[str, float] = Field(default_factory=dict)
+
+
+class LanguageCandidate(BaseModel):
+    language: str
+    confidence: float
+
+
+class DetectLanguageRequest(BaseModel):
+    text: str
+
+
+class DetectLanguageResponse(BaseModel):
+    language: str
+    confidence: float
+    needs_confirmation: bool
+    candidates: list[LanguageCandidate]
+    preview_lines: list[str]
+
+
+class ChapterSummary(BaseModel):
+    index: int
+    title: str
+    char_count: int
+
+
+class AnalyzeResponse(BaseModel):
+    encoding: str
+    language: str
+    confidence: float
+    needs_confirmation: bool
+    candidates: list[LanguageCandidate]
+    chapters_count: int
+    chapters_preview: list[ChapterSummary]
+    duration_estimate_seconds: float
+    process_time_estimate_seconds: float
+    preview_lines: list[str]
+
+
+class TTSPreviewRequest(BaseModel):
+    text: str
+    voice: str
+    speed: float = 1.0
+
+
+class TTSPreviewResponse(BaseModel):
+    audio_base64: str
+    mime_type: str = "audio/mpeg"

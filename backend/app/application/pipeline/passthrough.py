@@ -15,3 +15,7 @@ class FixedLanguageDetector:
     async def detect(self, text: str) -> LanguageDetection:
         del text
         return LanguageDetection(language_code=self.language_code, confidence=self.confidence)
+
+    async def detect_candidates(self, text: str) -> list[tuple[str, float]]:
+        del text
+        return [(self.language_code, self.confidence)]

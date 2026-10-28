@@ -105,3 +105,83 @@ def test_detect_runs_langdetect_in_worker_thread(monkeypatch: pytest.MonkeyPatch
     assert result.language_code == "en-US"
     assert len(seen) == 1
     assert seen[0] is not main_thread
+
+
+def test_detect_candidates_returns_sorted_probabilities() -> None:
+    detector = CpuLanguageDetector()
+    candidates = asyncio.run(
+        detector.detect_candidates(
+            "Đây là một đoạn văn bản tiếng Việt mẫu để kiểm tra phát hiện ngôn ngữ."
+        )
+    )
+    assert len(candidates) >= 1
+    lang, conf = candidates[0]
+    assert lang == "vi-VN"
+    assert conf > 0.7
+
+
+def test_detect_candidates_empty_and_whitespace_returns_empty_list() -> None:
+    detector = CpuLanguageDetector()
+    assert asyncio.run(detector.detect_candidates("")) == []
+    assert asyncio.run(detector.detect_candidates("   \n\t  ")) == []
+
+
+def test_detect_candidates_garbage_returns_empty_list() -> None:
+    detector = CpuLanguageDetector()
+    assert asyncio.run(detector.detect_candidates("???")) == []
+
+
+def test_detect_candidates_sorts_descending_and_caps_at_top_3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCandidate:
+        def __init__(self, lang: str, prob: float) -> None:
+            self.lang = lang
+            self.prob = prob
+
+    candidates = [
+        FakeCandidate("es", 0.15),
+        FakeCandidate("en", 0.40),
+        FakeCandidate("fr", 0.25),
+        FakeCandidate("de", 0.10),
+        FakeCandidate("zh", 0.05),
+        FakeCandidate("unknown_iso", 0.99),
+        FakeCandidate("en", 0.30),
+    ]
+
+    monkeypatch.setattr(
+        "app.providers.language_detection.cpu.detect_langs",
+        lambda _text: candidates,
+    )
+    detector = CpuLanguageDetector()
+    results = asyncio.run(detector.detect_candidates("some text"))
+    assert len(results) == 3
+    # en (0.40), fr (0.25), es (0.15)
+    assert results[0] == ("en-US", 0.40)
+    assert results[1] == ("fr-FR", 0.25)
+    assert results[2] == ("es-ES", 0.15)
+
+
+def test_detect_candidates_runs_in_worker_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    main_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+
+    class Candidate:
+        lang = "en"
+        prob = 0.99
+
+    def _fake_detect(text: str) -> list[Candidate]:
+        del text
+        seen.append(threading.current_thread())
+        return [Candidate()]
+
+    monkeypatch.setattr("app.providers.language_detection.cpu.detect_langs", _fake_detect)
+    detector = CpuLanguageDetector()
+    results = asyncio.run(detector.detect_candidates(ENGLISH))
+    assert results == [("en-US", 0.99)]
+    assert len(seen) == 1
+    assert seen[0] is not main_thread

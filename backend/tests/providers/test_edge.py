@@ -73,6 +73,11 @@ def test_voices_for_demo_and_another_language_differ(tmp_path: Path) -> None:
     assert vi_ids.isdisjoint(ja_ids)
 
 
+def test_languages_returns_distinct_locales(tmp_path: Path) -> None:
+    provider, _client = _provider(tmp_path)
+    assert provider.languages() == {"vi-VN", "ja-JP", "en-US"}
+
+
 def test_voices_for_unknown_language_is_empty(tmp_path: Path) -> None:
     provider, _client = _provider(tmp_path)
     assert list(provider.voices_for("xx-XX")) == []
@@ -197,6 +202,23 @@ def test_edge_synthesize_cleans_up_empty_or_failed_temp_file(tmp_path: Path) -> 
     with pytest.raises(DomainError) as exc:
         asyncio.run(provider.synthesize("hello", "en-US", _EN, TTSSettings(speed=1.0)))
     assert exc.value.error_type is ErrorType.TTS_FAILED
+    assert list(out_dir.glob("*.mp3")) == []
+
+
+def test_edge_synthesize_cleans_up_temp_file_on_cancelled_error(tmp_path: Path) -> None:
+    class _CancelledClient:
+        def list_voices(self) -> list[dict[str, str]]:
+            return [{"ShortName": _EN, "Locale": "en-US", "FriendlyName": "Adapter EN"}]
+
+        async def synthesize(self, text: str, voice: str, rate: str, output_path: Path) -> None:
+            del text, voice, rate
+            output_path.write_bytes(b"partial-audio-content")
+            raise asyncio.CancelledError()
+
+    out_dir = tmp_path / "edge-tmp-cancelled"
+    provider = EdgeTTSProvider(out_dir, client=_CancelledClient())
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(provider.synthesize("hello", "en-US", _EN, TTSSettings(speed=1.0)))
     assert list(out_dir.glob("*.mp3")) == []
 
 

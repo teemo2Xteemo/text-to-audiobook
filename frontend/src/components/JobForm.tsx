@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import type { Capabilities, CreateJobInput, OutputFormat, Voice } from "../api/types";
+import { analyze, previewTts, toApiError } from "../api/client";
+import type {
+  AnalyzeResponse,
+  Capabilities,
+  CreateJobInput,
+  JobMode,
+  OutputFormat,
+  Voice,
+} from "../api/types";
 import {
   ALLOWED_FILE_EXTENSIONS,
   AUTO_SOURCE_LANGUAGE,
@@ -13,6 +21,8 @@ import { envDefaultSourceLanguage, envDefaultTargetLanguage } from "../lib/env";
 import {
   canGenerate,
   estimateTextMetrics,
+  formatDuration,
+  friendlyError,
   languageDisplayName,
   languageLabel,
   resolveSourceDefault,
@@ -31,6 +41,23 @@ type JobFormProps = {
 
 const SPEED_PRESETS = [0.75, 1.0, 1.25, 1.5] as const;
 
+const SAMPLE_PREVIEWS: Record<string, string> = {
+  vi: "Xin chào, đây là giọng đọc thử nghiệm cho sách nói của bạn.",
+  en: "Hello, this is a sample preview of this voice for your audiobook.",
+  ja: "こんにちは、これはオーディオブックの音声プレビューです。",
+  zh: "你好，这是您的有声书语音试听示例。",
+  ko: "안녕하세요, 오디오북 음성 미리듣기 샘플입니다.",
+  fr: "Bonjour, ceci est un aperçu audio pour votre livre audio.",
+  de: "Hallo, dies ist eine Hörprobe für Ihr Hörbuch.",
+  es: "Hola, esta es una muestra de audio para su audiolibro.",
+  ru: "Здравствуйте, это образец озвучивания для вашей аудиокниги.",
+};
+
+function getVoicePreviewSample(lang: string, fallbackText: string): string {
+  const prefix = lang.split("-")[0]?.toLowerCase();
+  return SAMPLE_PREVIEWS[prefix] || fallbackText || "Hello, this is a voice sample preview.";
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -43,6 +70,18 @@ function formatFileSize(bytes: number): string {
 }
 
 export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
+  const [mode, setMode] = useState<JobMode>("translate");
+
+  const narrateLanguages = useMemo(
+    () =>
+      capabilities.narrate_languages && capabilities.narrate_languages.length > 0
+        ? capabilities.narrate_languages
+        : capabilities.languages,
+    [capabilities.narrate_languages, capabilities.languages],
+  );
+
+  const translateLanguages = capabilities.languages;
+
   const sourceDefault = resolveSourceDefault(
     envDefaultSourceLanguage(),
     capabilities.languages,
@@ -68,28 +107,62 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
+  const [confirmedCandidate, setConfirmedCandidate] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  function handleModeChange(nextMode: JobMode) {
+    if (nextMode === mode) return;
+    if (nextMode === "narrate") {
+      if (sourceLanguage !== AUTO_SOURCE_LANGUAGE && narrateLanguages.includes(sourceLanguage)) {
+        // Retain sourceLanguage
+      } else if (targetLanguage && narrateLanguages.includes(targetLanguage)) {
+        setSourceLanguage(targetLanguage);
+      } else {
+        setSourceLanguage(narrateLanguages[0] ?? "");
+      }
+    } else {
+      if (translateLanguages.includes(sourceLanguage)) {
+        // Retain sourceLanguage
+      } else {
+        setSourceLanguage(sourceDefault);
+      }
+    }
+    setMode(nextMode);
+  }
+
+  const activeVoiceLanguage =
+    mode === "narrate"
+      ? sourceLanguage === AUTO_SOURCE_LANGUAGE
+        ? analysis?.language || AUTO_SOURCE_LANGUAGE
+        : sourceLanguage
+      : targetLanguage;
   const targetVoices = useMemo(
-    () => voicesForTarget(capabilities.voices, targetLanguage),
-    [capabilities.voices, targetLanguage],
+    () => voicesForTarget(capabilities.voices, activeVoiceLanguage),
+    [capabilities.voices, activeVoiceLanguage],
   );
 
-  const sourceOptions = useMemo<StudioSelectOption[]>(
-    () => [
+  const sourceOptions = useMemo<StudioSelectOption[]>(() => {
+    const list = mode === "narrate" ? narrateLanguages : translateLanguages;
+    return [
       {
         value: AUTO_SOURCE_LANGUAGE,
         label: languageLabel(AUTO_SOURCE_LANGUAGE),
         displayLabel: languageDisplayName(AUTO_SOURCE_LANGUAGE),
         badge: "AUTO",
       },
-      ...capabilities.languages.map((code) => ({
+      ...list.map((code) => ({
         value: code,
         label: languageLabel(code),
         displayLabel: languageDisplayName(code),
         badge: code.toUpperCase(),
       })),
-    ],
-    [capabilities.languages],
-  );
+    ];
+  }, [mode, narrateLanguages, translateLanguages]);
 
   const targetOptions = useMemo<StudioSelectOption[]>(
     () =>
@@ -171,9 +244,71 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     });
   }, [targetVoices]);
 
+  useEffect(() => {
+    if (file) {
+      let active = true;
+      setIsAnalyzing(true);
+      analyze({ file })
+        .then((res) => {
+          if (active) {
+            setAnalysis(res);
+            setIsAnalyzing(false);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setIsAnalyzing(false);
+          }
+        });
+      return () => {
+        active = false;
+      };
+    }
+
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setAnalysis(null);
+      setIsAnalyzing(false);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(() => {
+      setIsAnalyzing(true);
+      const sampleText = trimmed.length > 20000 ? trimmed.slice(0, 20000) : trimmed;
+      analyze({ text: sampleText })
+        .then((res) => {
+          if (active) {
+            if (trimmed.length > 20000) {
+              const ratio = trimmed.length / sampleText.length;
+              setAnalysis({
+                ...res,
+                duration_estimate_seconds: Math.round(res.duration_estimate_seconds * ratio * 10) / 10,
+                process_time_estimate_seconds: Math.round(res.process_time_estimate_seconds * ratio * 10) / 10,
+              });
+            } else {
+              setAnalysis(res);
+            }
+            setIsAnalyzing(false);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setIsAnalyzing(false);
+          }
+        });
+    }, 400);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [text, file]);
+
+  const targetForCheck = mode === "narrate" ? sourceLanguage : targetLanguage;
   const ready = canGenerate({
     capabilitiesLoaded: true,
-    targetLanguage,
+    targetLanguage: targetForCheck,
     hasVoice: Boolean(voiceId),
     text,
     file,
@@ -268,6 +403,47 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     }
   }
 
+  async function handleListenPreview() {
+    if (!voiceId || previewLoading || previewPlaying) {
+      return;
+    }
+    const sample = (
+      mode === "narrate"
+        ? (text.trim() || analysis?.preview_lines?.join(" ") || getVoicePreviewSample(activeVoiceLanguage, "Audio preview"))
+        : getVoicePreviewSample(targetLanguage, "Audio preview")
+    ).slice(0, 200);
+
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const res = await previewTts({
+        text: sample,
+        voice: voiceId,
+        speed,
+      });
+      const dataUrl = `data:${res.mime_type};base64,${res.audio_base64}`;
+      if (previewAudioRef.current) {
+        previewAudioRef.current.src = dataUrl;
+        setPreviewPlaying(true);
+        try {
+          const playPromise = previewAudioRef.current.play?.();
+          if (playPromise && typeof playPromise.catch === "function") {
+            await playPromise.catch(() => setPreviewPlaying(false));
+          }
+        } catch {
+          setPreviewPlaying(false);
+        }
+      }
+    } catch (err) {
+      setPreviewPlaying(false);
+      const apiErr = toApiError(err);
+      const { summary } = friendlyError(apiErr.error_type, apiErr.message);
+      setPreviewError(summary);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!ready || disabled) {
@@ -275,11 +451,13 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     }
     const input: CreateJobInput = {
       source_language: sourceLanguage,
-      target_language: targetLanguage,
+      target_language: mode === "narrate" ? sourceLanguage : targetLanguage,
       voice: voiceId || undefined,
       speed,
       output_format: outputFormat,
-      translation_profile_id: translationProfileId || undefined,
+      translation_profile_id:
+        mode === "narrate" ? undefined : (translationProfileId || undefined),
+      mode,
     };
     if (file) {
       input.file = file;
@@ -302,7 +480,53 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
           </span>
         </div>
 
-        {/* Translation Route */}
+        {/* Mode Toggle */}
+        <div className="mode-toggle-container">
+          <div className="mode-toggle-group" role="tablist" aria-label="Job mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "translate"}
+              className={`mode-toggle-btn ${mode === "translate" ? "mode-toggle-btn-active" : ""}`}
+              onClick={() => handleModeChange("translate")}
+            >
+              Translate
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "narrate"}
+              className={`mode-toggle-btn ${mode === "narrate" ? "mode-toggle-btn-active" : ""}`}
+              onClick={() => handleModeChange("narrate")}
+            >
+              <span>Narrate</span>
+              <span className="mode-pill-free">No model cost</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Same-language Translate suggestion banner */}
+        {mode === "translate" &&
+          sourceLanguage !== AUTO_SOURCE_LANGUAGE &&
+          sourceLanguage === targetLanguage && (
+            <div className="same-language-banner" role="status">
+              <div className="same-language-info">
+                <span className="same-language-icon" aria-hidden="true">
+                  💡
+                </span>
+                <span>Same language — switch to Narrate directly?</span>
+              </div>
+              <button
+                type="button"
+                className="btn-ghost btn-xs switch-narrate-btn"
+                onClick={() => handleModeChange("narrate")}
+              >
+                Switch to Narrate
+              </button>
+            </div>
+          )}
+
+        {/* Translation Route / Narration Language */}
         <div className="form-section">
           <div className="section-label-row">
             <span className="section-title">
@@ -320,12 +544,16 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
                   d="m5 8 6 6m-7 0 6-6 2-3M2 5h12M7 2h1m14 20-5-10-5 10m2-4h6"
                 />
               </svg>
-              Translation Route
+              {mode === "narrate" ? "Narration Language" : "Translation Route"}
             </span>
-            <span className="section-hint">Auto-detect or lock source language</span>
+            <span className="section-hint">
+              {mode === "narrate"
+                ? "Direct speech synthesis without translation"
+                : "Auto-detect or lock source language"}
+            </span>
           </div>
 
-          <div className="language-route-grid">
+          <div className={mode === "narrate" ? "language-route-single" : "language-route-grid"}>
             <StudioSelect
               id="source-language"
               label="Source language"
@@ -344,86 +572,96 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
               }
             />
 
-            <button
-              type="button"
-              className={`route-connector ${
-                sourceLanguage !== AUTO_SOURCE_LANGUAGE ? "route-connector-swappable" : ""
-              }`}
-              title={
-                sourceLanguage !== AUTO_SOURCE_LANGUAGE
-                  ? "Click to swap source and target languages"
-                  : "Translation direction"
-              }
-              aria-label="Swap source and target languages"
-              disabled={disabled || sourceLanguage === AUTO_SOURCE_LANGUAGE}
-              onClick={() => {
-                if (!disabled && sourceLanguage !== AUTO_SOURCE_LANGUAGE) {
-                  const prevSource = sourceLanguage;
-                  setSourceLanguage(targetLanguage);
-                  setTargetLanguage(prevSource);
-                }
-              }}
-            >
-              <span className="route-connector-circle">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  className="route-arrow-icon"
+            {mode === "translate" && (
+              <>
+                <button
+                  type="button"
+                  className={`route-connector ${
+                    sourceLanguage !== AUTO_SOURCE_LANGUAGE ? "route-connector-swappable" : ""
+                  }`}
+                  title={
+                    sourceLanguage !== AUTO_SOURCE_LANGUAGE
+                      ? "Click to swap source and target languages"
+                      : "Translation direction"
+                  }
+                  aria-label="Swap source and target languages"
+                  disabled={disabled || sourceLanguage === AUTO_SOURCE_LANGUAGE}
+                  onClick={() => {
+                    if (!disabled && sourceLanguage !== AUTO_SOURCE_LANGUAGE) {
+                      const prevSource = sourceLanguage;
+                      setSourceLanguage(targetLanguage);
+                      setTargetLanguage(prevSource);
+                    }
+                  }}
                 >
-                  {sourceLanguage !== AUTO_SOURCE_LANGUAGE ? (
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M7 16V4m0 0L3 8m4-4 4 4m6 0v12m0 0 4-4m-4 4-4-4"
-                    />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14m-6-6 6 6-6 6" />
-                  )}
-                </svg>
-              </span>
-            </button>
+                  <span className="route-connector-circle">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      className="route-arrow-icon"
+                    >
+                      {sourceLanguage !== AUTO_SOURCE_LANGUAGE ? (
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M7 16V4m0 0L3 8m4-4 4 4m6 0v12m0 0 4-4m-4 4-4-4"
+                        />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14m-6-6 6 6-6 6" />
+                      )}
+                    </svg>
+                  </span>
+                </button>
 
-            <StudioSelect
-              id="target-language"
-              label="Target language"
-              value={targetLanguage}
-              options={targetOptions}
-              disabled={disabled}
-              onChange={setTargetLanguage}
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="m5 8 6 6m-7 0 6-6 2-3M2 5h12M7 2h1m14 20-5-10-5 10m2-4h6"
-                  />
-                </svg>
-              }
-            />
+                <StudioSelect
+                  id="target-language"
+                  label="Target language"
+                  value={targetLanguage}
+                  options={targetOptions}
+                  disabled={disabled}
+                  onChange={setTargetLanguage}
+                  icon={
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="m5 8 6 6m-7 0 6-6 2-3M2 5h12M7 2h1m14 20-5-10-5 10m2-4h6"
+                      />
+                    </svg>
+                  }
+                />
+              </>
+            )}
           </div>
 
-          {profileOptions.length > 0 && (
-            <div className="translation-profile-row">
-              <StudioSelect
-                id="translation-profile"
-                label="Translation engine"
-                value={translationProfileId}
-                options={profileOptions}
-                disabled={disabled}
-                onChange={setTranslationProfileId}
-                icon={
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"
-                    />
-                  </svg>
-                }
-              />
+          {mode === "narrate" ? (
+            <div className="narrate-mode-note">
+              <span className="muted italic text-sm">No translation needed</span>
             </div>
+          ) : (
+            profileOptions.length > 0 && (
+              <div className="translation-profile-row">
+                <StudioSelect
+                  id="translation-profile"
+                  label="Translation engine"
+                  value={translationProfileId}
+                  options={profileOptions}
+                  disabled={disabled}
+                  onChange={setTranslationProfileId}
+                  icon={
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"
+                      />
+                    </svg>
+                  }
+                />
+              </div>
+            )
           )}
         </div>
 
@@ -450,7 +688,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
             </span>
             <span className="section-hint">
               {targetVoices.length} {targetVoices.length === 1 ? "voice" : "voices"} for{" "}
-              {targetLanguage}
+              {activeVoiceLanguage}
             </span>
           </div>
 
@@ -680,6 +918,122 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
               </div>
             ) : null}
           </div>
+
+          {/* Analysis & Preview Panel */}
+          {(analysis || isAnalyzing) && (
+            <div className="analysis-panel" aria-label="Text analysis summary">
+              <div className="analysis-header">
+                <span className="analysis-title">
+                  <svg
+                    className="icon-inline"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    aria-hidden="true"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.5L19 7.5V19a2 2 0 0 1-2 2Z"
+                    />
+                  </svg>
+                  Script Analysis
+                </span>
+                {isAnalyzing ? <span className="analysis-loading muted">Analyzing…</span> : null}
+              </div>
+
+              {analysis && (
+                <>
+                  <div className="analysis-metrics-grid">
+                    <div className="analysis-metric">
+                      <span className="metric-label">Detected language</span>
+                      <span className="metric-value">
+                        {languageLabel(analysis.language)} ({Math.round(analysis.confidence * 100)}%)
+                      </span>
+                    </div>
+                    <div className="analysis-metric">
+                      <span className="metric-label">Detected encoding</span>
+                      <span className="metric-value">{analysis.encoding.toUpperCase()}</span>
+                    </div>
+                    <div className="analysis-metric">
+                      <span className="metric-label">Chapters</span>
+                      <span className="metric-value">
+                        {analysis.chapters_count} {analysis.chapters_count === 1 ? "chapter" : "chapters"}
+                      </span>
+                    </div>
+                    <div className="analysis-metric">
+                      <span className="metric-label">Est. audio duration</span>
+                      <span className="metric-value">{formatDuration(analysis.duration_estimate_seconds)}</span>
+                    </div>
+                    <div className="analysis-metric">
+                      <span className="metric-label">Est. processing time</span>
+                      <span className="metric-value">~{Math.round(analysis.process_time_estimate_seconds)}s</span>
+                    </div>
+                  </div>
+
+                  {(analysis.needs_confirmation || analysis.confidence < 0.7) && confirmedCandidate !== sourceLanguage && (
+                    <div role="alert" className="confidence-warning-banner">
+                      <div className="warning-text">
+                        Low language detection confidence ({Math.round(analysis.confidence * 100)}%). Please confirm the language:
+                      </div>
+                      {analysis.candidates && analysis.candidates.length > 0 && (
+                        <div className="candidate-language-chips">
+                          {analysis.candidates.map((cand) => (
+                            <button
+                              key={cand.language}
+                              type="button"
+                              className="chip-btn candidate-chip"
+                              onClick={() => {
+                                setSourceLanguage(cand.language);
+                                setConfirmedCandidate(cand.language);
+                              }}
+                            >
+                              {languageDisplayName(cand.language)} ({Math.round(cand.confidence * 100)}%)
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="preview-listen-row">
+                    <button
+                      type="button"
+                      className="btn-ghost btn-xs listen-preview-btn"
+                      disabled={disabled || previewLoading || previewPlaying || !voiceId}
+                      onClick={handleListenPreview}
+                    >
+                      <svg
+                        className="btn-icon"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden="true"
+                      >
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+                      </svg>
+                      {previewLoading ? "Loading preview..." : previewPlaying ? "Playing..." : "Listen"}
+                    </button>
+                    {previewError && (
+                      <span className="preview-error-text text-xs text-rose-500" role="alert">
+                        {previewError}
+                      </span>
+                    )}
+                    <audio
+                      ref={previewAudioRef}
+                      onEnded={() => setPreviewPlaying(false)}
+                      onError={() => setPreviewPlaying(false)}
+                      style={{ display: "none" }}
+                      aria-hidden="true"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <button type="submit" className="btn-generate" disabled={!ready}>

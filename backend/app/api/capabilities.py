@@ -32,4 +32,6 @@ async def get_capabilities(
             )
             for p in result.translation_profiles
         ],
+        narrate_languages=result.narrate_languages,
+        estimate_defaults=result.estimate_defaults,
     )

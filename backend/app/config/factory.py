@@ -14,11 +14,12 @@ from app.application.pipeline.artifact_cache import CacheIdentity, PipelineArtif
 from app.application.pipeline.conservative_narration import ConservativeNarrationProcessor
 from app.application.pipeline.orchestrator import PipelineOrchestrator
 from app.config.settings import Settings, parse_tts_default_voice_by_language
-from app.domain.jobs import Job
+from app.domain.jobs import Job, JobMode
 from app.domain.ports import (
     AudioProcessor,
     LanguageDetector,
     NarrationProcessor,
+    NullTranslationProvider,
     TranslationProvider,
     TTSProvider,
 )
@@ -50,6 +51,10 @@ def build_job_service(settings: Settings) -> JobService:
     filesystem, store, queue = _infrastructure(settings)
     provider, model = translation_pin_from_settings(settings)
     profiles = build_available_translation_profiles(settings)
+    try:
+        tts: TTSProvider | None = build_tts_provider(settings)
+    except ProviderConfigurationError:
+        tts = None
     return JobService(
         jobs=store,
         source_storage=filesystem,
@@ -61,6 +66,9 @@ def build_job_service(settings: Settings) -> JobService:
         translation_provider=provider,
         translation_model=model,
         available_profiles=profiles,
+        tts=tts,
+        detector=build_language_detector(settings),
+        language_confirm_threshold=settings.language_confirm_threshold,
     )
 
 
@@ -311,14 +319,29 @@ def build_capabilities_service(settings: Settings) -> CapabilitiesService:
         translation=translation,
         tts=tts,
         translation_profiles=profiles,
+        estimate_defaults={
+            "chars_per_second": float(settings.estimate_chars_per_second),
+            "preview_wpm": float(settings.tts_preview_wpm),
+        },
     )
 
 
-def build_orchestrator(settings: Settings) -> PipelineOrchestrator:
+def build_orchestrator(
+    settings: Settings,
+    *,
+    for_mode: JobMode | None = None,
+    translation_provider: TranslationProvider | None = None,
+) -> PipelineOrchestrator:
     filesystem, store, _queue = _infrastructure(settings)
     del filesystem
+    if translation_provider is not None:
+        translation = translation_provider
+    elif for_mode == JobMode.NARRATE:
+        translation = NullTranslationProvider()
+    else:
+        translation = build_translation_provider(settings)
     return PipelineOrchestrator(
-        translation=build_translation_provider(settings),
+        translation=translation,
         tts=build_tts_provider(settings),
         narration=build_narration_processor(),
         detector=build_language_detector(settings),

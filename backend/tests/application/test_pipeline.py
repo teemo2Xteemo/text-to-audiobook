@@ -21,7 +21,7 @@ from app.application.pipeline.orchestrator import PipelineOrchestrator
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
 from app.domain.chunking import chunk_text
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
 from app.domain.languages import AUTO_SOURCE_LANGUAGE
 from app.domain.ports import NarrationProcessor
 from app.domain.retry import RetryPolicy
@@ -222,13 +222,18 @@ def test_three_sentence_fixture_completes(tmp_path: Path) -> None:
 def test_fake_translator_threads_target_language(tmp_path: Path) -> None:
     outputs: dict[str, str] = {}
     for target in ("en-US", "ko-KR"):
-        job = _job(id=f"22222222-2222-2222-2222-22222222222{target[-1]}", target_language=target)
-        translation = FakeTranslationProvider(["en-US", "ko-KR"])
+        job = _job(
+            id=f"22222222-2222-2222-2222-22222222222{target[-1]}",
+            source_language="de-DE",
+            target_language=target,
+        )
+        translation = FakeTranslationProvider(["de-DE", "en-US", "ko-KR"])
         orchestrator, workspace, translation, _, _, _, _, _ = _orchestrator(
             tmp_path,
             job=job,
             translation=translation,
             voices=_voices_for(target),
+            languages=["de-DE", "en-US", "ko-KR"],
         )
         result = _run(orchestrator, job, workspace)
         assert result.status is JobStatus.COMPLETED
@@ -792,19 +797,23 @@ def test_target_language_change_misses_cache(tmp_path: Path) -> None:
     cache = _pipeline_cache(tmp_path)
     first = _job(target_language="ko-KR")
     first_orch, first_ws, translation, _, _, _, _, _ = _orchestrator(
-        tmp_path, job=first, artifact_cache=cache, voices=_voices_for("ko-KR")
+        tmp_path,
+        job=first,
+        artifact_cache=cache,
+        voices=_voices_for("ko-KR"),
+        languages=["en-US", "ko-KR", "de-DE"],
     )
     _run(first_orch, first, first_ws)
     after_first_t = len(translation.calls)
 
-    second = _job(id="22222222-2222-2222-2222-222222222222", target_language="en-US")
+    second = _job(id="22222222-2222-2222-2222-222222222222", target_language="de-DE")
     second_orch, second_ws, translation, _, tts_second, _, _, _ = _orchestrator(
         tmp_path,
         job=second,
         translation=translation,
         artifact_cache=cache,
-        voices=_voices_for("en-US"),
-        languages=["en-US", "ko-KR"],
+        voices=_voices_for("de-DE"),
+        languages=["en-US", "ko-KR", "de-DE"],
     )
     _run(second_orch, second, second_ws)
     assert len(translation.calls) > after_first_t
@@ -1042,3 +1051,132 @@ def test_pipeline_resets_recovery_attempts_when_chunk_progress_advances(tmp_path
     assert result.recovery_attempts == 0
     saved = asyncio.run(store.get(job.id))
     assert saved is not None and saved.recovery_attempts == 0
+
+
+def test_narrate_mode_executes_zero_translation_calls(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-1",
+        source_language="vi-VN",
+        target_language="vi-VN",
+        mode=JobMode.NARRATE,
+        voice="voice-vi-VN",
+    )
+    orchestrator, workspace, translation, _, _, _, _, jobs = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["vi-VN"],
+        voices=_voices_for("vi-VN"),
+    )
+    result = _run(orchestrator, job, workspace, text="Đây là văn bản thử nghiệm không cần dịch.")
+
+    assert len(translation.calls) == 0
+    assert result.status is JobStatus.COMPLETED
+    saved = asyncio.run(jobs.get(job.id))
+    assert saved is not None and saved.status is JobStatus.COMPLETED
+
+
+def test_narrate_mode_splits_chapters_and_preserves_titles(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-chapters-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, translation, _, _, tts, _, jobs = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=500,
+    )
+    story = (
+        "Chapter 1: The Beginning\n\n"
+        "It started on a cold winter morning.\n\n"
+        "Chapter 2: The Journey\n\n"
+        "They traveled across the mountains."
+    )
+    result = _run(orchestrator, job, workspace, text=story)
+    assert result.status is JobStatus.COMPLETED
+    assert result.chunk_total == 2
+    chunk_1_text = (workspace / "chunks" / "chunk-001.translated.txt").read_text(encoding="utf-8")
+    chunk_2_text = (workspace / "chunks" / "chunk-002.translated.txt").read_text(encoding="utf-8")
+    assert "Chapter 1: The Beginning" in chunk_1_text
+    assert "It started on a cold winter morning." in chunk_1_text
+    assert "Chapter 2: The Journey" in chunk_2_text
+    assert "They traveled across the mountains." in chunk_2_text
+
+
+def test_narrate_mode_empty_readable_text_raises_invalid_input(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-empty-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, _, jobs = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+    )
+    result = _run(orchestrator, job, workspace, text="***\n---\n===")
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.INVALID_INPUT
+    assert "No readable text found" in (result.message or "")
+
+
+def test_translate_same_language_bypasses_translation(tmp_path: Path) -> None:
+    job = _job(
+        id="test-trans-same-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.TRANSLATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, translation, _, _, _, _, jobs = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+    )
+    result = _run(orchestrator, job, workspace, text="English text with same source and target.")
+
+    assert len(translation.calls) == 0
+    assert result.status is JobStatus.COMPLETED
+    saved = asyncio.run(jobs.get(job.id))
+    assert saved is not None and saved.status is JobStatus.COMPLETED
+
+
+def test_unknown_job_mode_fails_pipeline(tmp_path: Path) -> None:
+    job = _job(
+        id="test-unknown-mode-1",
+        mode=JobMode.UNKNOWN,
+    )
+    orchestrator, workspace, _, _, _, _, _, jobs = _orchestrator(tmp_path, job=job)
+    result = _run(orchestrator, job, workspace)
+
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.INVALID_INPUT
+    assert "Unknown job mode" in (result.message or "")
+    saved = asyncio.run(jobs.get(job.id))
+    assert saved is not None and saved.status is JobStatus.FAILED
+
+
+def test_srt_with_narrate_mode_fails_with_coming_soon(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-srt-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+    )
+    orchestrator, workspace, _, _, _, _, _, jobs = _orchestrator(tmp_path, job=job)
+    srt_text = "1\n00:00:01,000 --> 00:00:04,000\nHello subtitle\n"
+    result = _run(orchestrator, job, workspace, text=srt_text)
+
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.INVALID_INPUT
+    assert "SRT narrate mode is coming in phase 2" in (result.message or "")
+    saved = asyncio.run(jobs.get(job.id))
+    assert saved is not None and saved.status is JobStatus.FAILED

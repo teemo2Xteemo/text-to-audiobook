@@ -516,6 +516,52 @@ def test_get_job_service_caches_instance_on_app_state(
     assert app.state.job_service is service
 
 
+def test_get_language_detector_caches_instance_on_app_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.providers.language_detection.cpu import CpuLanguageDetector
+
+    calls = 0
+    fake_detector = CpuLanguageDetector()
+
+    def _fake_build(settings: Settings) -> CpuLanguageDetector:
+        nonlocal calls
+        calls += 1
+        return fake_detector
+
+    monkeypatch.setattr("app.api.deps.build_language_detector", _fake_build)
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    with TestClient(app) as client:
+        client.post("/api/detect-language", json={"text": "hello world"})
+        client.post("/api/detect-language", json={"text": "another world"})
+    assert calls == 1
+    assert app.state.language_detector is fake_detector
+
+
+def test_get_tts_provider_caches_instance_on_app_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    calls = 0
+    fake_tts = FakeTTSProvider()
+
+    def _fake_build(settings: Settings) -> FakeTTSProvider:
+        nonlocal calls
+        calls += 1
+        return fake_tts
+
+    monkeypatch.setattr("app.api.deps.build_tts_provider", _fake_build)
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    with TestClient(app) as client:
+        client.post("/api/tts/preview", json={"text": "hello", "voice": "en-US-JennyNeural"})
+        client.post("/api/tts/preview", json={"text": "world", "voice": "en-US-JennyNeural"})
+    assert calls == 1
+    assert app.state.tts_provider is fake_tts
+
+
 def test_post_srt_upload_is_accepted(
     jobs_client: TestClient,
     memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
@@ -553,3 +599,445 @@ def test_post_vtt_upload_is_accepted(
     job_id = response.json()["job_id"]
     _, _, source, _ = memory
     assert "Hello WebVTT." in source.texts[job_id]
+
+
+def test_decode_source_text_encodings():
+    from app.api.parse import _decode_source_text
+
+    # UTF-8 with BOM
+    text_utf8, enc = _decode_source_text(b"\xef\xbb\xbfHello world")
+    assert text_utf8 == "Hello world"
+    assert "utf-8" in enc.lower()
+
+    # GBK Chinese
+    sample_gbk = "第一章 序幕".encode("gbk")
+    text_gbk, enc_gbk = _decode_source_text(sample_gbk)
+    assert text_gbk == "第一章 序幕"
+    assert "gb" in enc_gbk.lower()
+
+    # Big5 Traditional Chinese
+    sample_big5 = "第一章 序幕".encode("big5")
+    text_big5, enc_big5 = _decode_source_text(sample_big5)
+    assert text_big5 == "第一章 序幕"
+    assert "big5" in enc_big5.lower()
+
+    # UTF-16 LE with BOM
+    sample_utf16_le = b"\xff\xfe" + "Hello world".encode("utf-16le")
+    text_utf16_le, enc_utf16_le = _decode_source_text(sample_utf16_le)
+    assert text_utf16_le == "Hello world"
+    assert "utf-16" in enc_utf16_le.lower()
+
+    # UTF-16 BE with BOM
+    sample_utf16_be = b"\xfe\xff" + "Hello world".encode("utf-16be")
+    text_utf16_be, enc_utf16_be = _decode_source_text(sample_utf16_be)
+    assert text_utf16_be == "Hello world"
+    assert "utf-16" in enc_utf16_be.lower()
+
+    # Korean EUC-KR with Hanja (mixed script)
+    sample_kr_hanja = "大韓民國의 憲法은 國民의 自由와 權利를 保障한다.".encode("euc-kr")
+    text_kr_hanja, enc_kr_hanja = _decode_source_text(sample_kr_hanja)
+    assert text_kr_hanja == "大韓民國의 憲法은 國民의 自由와 權利를 保障한다."
+    assert any(k in enc_kr_hanja.lower() for k in ("kr", "949"))
+
+    # Newline normalization
+    text_newlines, _ = _decode_source_text(b"Line 1\r\nLine 2\rLine 3\n")
+    assert text_newlines == "Line 1\nLine 2\nLine 3\n"
+
+
+def test_decode_source_text_error_handling():
+    from app.api.parse import _decode_source_text
+    from app.domain.errors import DomainError
+
+    # Unsupported / undecodable binary bytes
+    with pytest.raises(DomainError) as exc_info:
+        _decode_source_text(bytes([0x80, 0x81, 0x82, 0x83, 0x84, 0x85]))
+    assert exc_info.value.error_type == ErrorType.INVALID_INPUT
+    assert "unsupported encoding" in exc_info.value.message
+
+    # Null bytes in decoded text
+    with pytest.raises(DomainError) as exc_info_null:
+        _decode_source_text(b"Hello\x00world")
+    assert exc_info_null.value.error_type == ErrorType.INVALID_INPUT
+    assert "null byte" in exc_info_null.value.message
+
+    # Size limit
+    with pytest.raises(DomainError) as exc_info_limit:
+        _decode_source_text(b"Hello world", max_upload_bytes=5)
+    assert exc_info_limit.value.error_type == ErrorType.INVALID_INPUT
+    assert "size limit" in exc_info_limit.value.message
+
+
+def test_post_txt_upload_gbk(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+) -> None:
+    sample_gbk = "第一章 序幕\n天地不仁以万物为刍狗".encode("gbk")
+    response = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "zh-CN", "target_language": "en-US"},
+        files={"file": ("story.txt", sample_gbk, "text/plain")},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    _, _, source, _ = memory
+    assert "第一章 序幕" in source.texts[job_id]
+
+
+def test_post_narrate_job_json_and_get_status(jobs_client: TestClient) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": "Once upon a time in a faraway kingdom",
+            "source_language": "en-US",
+            "mode": "narrate",
+        },
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    get_res = jobs_client.get(f"/api/jobs/{job_id}")
+    assert get_res.status_code == 200
+    body = get_res.json()
+    assert body["mode"] == "narrate"
+    assert body["source_language"] == "en-US"
+    assert body["target_language"] == "en-US"
+    assert "translation_provider" not in body
+
+
+def test_post_narrate_job_multipart(jobs_client: TestClient) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "mode": "narrate"},
+        files={"file": ("story.txt", b"Once upon a time in a kingdom", "text/plain")},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    get_res = jobs_client.get(f"/api/jobs/{job_id}")
+    assert get_res.status_code == 200
+    body = get_res.json()
+    assert body["mode"] == "narrate"
+    assert body["source_language"] == "en-US"
+    assert body["target_language"] == "en-US"
+
+
+def test_post_json_translate_missing_languages_raises_invalid_input(
+    jobs_client: TestClient,
+) -> None:
+    # Missing source_language
+    res_src = jobs_client.post(
+        "/api/jobs",
+        json={"text": "Story", "target_language": "ja-JP"},
+    )
+    assert res_src.status_code == 400
+    assert res_src.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "source_language is required" in res_src.json()["message"]
+
+    # Missing target_language
+    res_tgt = jobs_client.post(
+        "/api/jobs",
+        json={"text": "Story", "source_language": "en-US"},
+    )
+    assert res_tgt.status_code == 400
+    assert res_tgt.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "target_language is required" in res_tgt.json()["message"]
+
+
+def test_detect_language_endpoint(client: TestClient) -> None:
+    res = client.post(
+        "/api/detect-language", json={"text": "Xin chào thế giới, đây là tiếng Việt."}
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["language"] == "vi-VN"
+    assert "candidates" in data
+    assert "needs_confirmation" in data
+    assert "preview_lines" in data
+
+
+def test_analyze_endpoint(client: TestClient) -> None:
+    sample = "第一章 开篇\n这是中文测试。\n第二章 发展\n继续测试。"
+    res = client.post("/api/analyze", json={"text": sample})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["encoding"] == "utf-8"
+    assert data["chapters_count"] == 2
+    assert "duration_estimate_seconds" in data
+    assert "process_time_estimate_seconds" in data
+    assert "preview_lines" in data
+    assert len(data["chapters_preview"]) == 2
+
+
+def test_tts_preview_endpoint(client: TestClient) -> None:
+    res = client.post(
+        "/api/tts/preview", json={"text": "Hello world", "voice": "en-US-JennyNeural"}
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "audio_base64" in data
+    assert data["mime_type"] == "audio/mpeg"
+
+
+def test_detect_language_empty_text(client: TestClient) -> None:
+    res = client.post("/api/detect-language", json={"text": "   "})
+    assert res.status_code == 400
+    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "text is required" in res.json()["message"]
+
+
+def test_detect_language_raw_text(client: TestClient) -> None:
+    res = client.post(
+        "/api/detect-language",
+        content="Xin chào thế giới, đây là tiếng Việt.".encode(),
+        headers={"content-type": "text/plain"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["language"] == "vi-VN"
+
+
+def test_analyze_multipart_file(client: TestClient) -> None:
+    content = "第一章 开篇\n测试内容。\n第二章 结局\n完结。"
+    res = client.post(
+        "/api/analyze",
+        files={"file": ("story.txt", content.encode("utf-8"), "text/plain")},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["encoding"] == "utf-8"
+    assert data["chapters_count"] == 2
+    assert len(data["chapters_preview"]) == 2
+    assert data["chapters_preview"][0]["title"] == "第一章 开篇"
+
+
+def test_analyze_preface_and_volume_does_not_inflate_chapters_count(client: TestClient) -> None:
+    # R4: Preface and volume headings should not inflate the chapters_count
+    content = "序言\n前言内容。\n第一卷 少年\n第一章 开端\n正文一。\n第二章 发展\n正文二。"
+    res = client.post("/api/analyze", json={"text": content})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["chapters_count"] == 2
+    # Chapters preview includes preface/volume with index=0, but chapters_count is 2
+    assert data["chapters_preview"][0]["index"] == 0
+    assert data["chapters_preview"][1]["index"] == 0
+    assert data["chapters_preview"][2]["index"] == 1
+    assert data["chapters_preview"][2]["title"] == "第一章 开端"
+
+
+def test_analyze_empty_text(client: TestClient) -> None:
+    res = client.post("/api/analyze", json={"text": ""})
+    assert res.status_code == 400
+    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "text is required" in res.json()["message"]
+
+
+def test_tts_preview_truncates_long_text(client: TestClient) -> None:
+    long_text = "Hello world! This is a long story segment. " + ("word " * 60)
+    res = client.post("/api/tts/preview", json={"text": long_text, "voice": "en-US-JennyNeural"})
+    assert res.status_code == 200
+    assert "audio_base64" in res.json()
+
+
+def test_tts_preview_truncation_logic() -> None:
+    from app.api.jobs import truncate_preview_text
+
+    assert truncate_preview_text("Short text.") == "Short text."
+    prefix = "Hello world! "
+    text = prefix + ("x" * 350)
+    assert truncate_preview_text(text) == "Hello world!"
+
+    cjk_prefix = "第一句话。第二句话！"
+    cjk_text = cjk_prefix + ("字" * 350)
+    assert truncate_preview_text(cjk_text) == "第一句话。第二句话！"
+
+    no_punct = "a" * 350
+    assert truncate_preview_text(no_punct) == "a" * 300
+
+
+def test_tts_preview_rate_limit(tmp_path: Path) -> None:
+    from app.api.jobs import _preview_rate_limiter
+
+    _preview_rate_limiter.reset()
+    try:
+        settings = Settings(_env_file=None, storage_path=tmp_path, tts_preview_rate_per_minute=2)
+        app = create_app(settings)
+        with TestClient(app) as test_client:
+            res1 = test_client.post(
+                "/api/tts/preview", json={"text": "hello", "voice": "en-US-JennyNeural"}
+            )
+            assert res1.status_code == 200
+            res2 = test_client.post(
+                "/api/tts/preview", json={"text": "world", "voice": "en-US-JennyNeural"}
+            )
+            assert res2.status_code == 200
+            res3 = test_client.post(
+                "/api/tts/preview", json={"text": "again", "voice": "en-US-JennyNeural"}
+            )
+            assert res3.status_code == 429
+            assert res3.json()["error_type"] == ErrorType.PROVIDER_RATE_LIMIT
+            assert "Too many preview requests" in res3.json()["message"]
+    finally:
+        _preview_rate_limiter.reset()
+
+
+def test_tts_preview_spoofed_x_forwarded_for_shares_bucket(tmp_path: Path) -> None:
+    from app.api.jobs import _preview_rate_limiter
+
+    _preview_rate_limiter.reset()
+    try:
+        settings = Settings(_env_file=None, storage_path=tmp_path, tts_preview_rate_per_minute=2)
+        app = create_app(settings)
+        with TestClient(app) as test_client:
+            # Client rotates X-Forwarded-For to try to evade limit
+            res1 = test_client.post(
+                "/api/tts/preview",
+                json={"text": "hello", "voice": "en-US-JennyNeural"},
+                headers={"X-Forwarded-For": "1.1.1.1"},
+            )
+            assert res1.status_code == 200
+            res2 = test_client.post(
+                "/api/tts/preview",
+                json={"text": "world", "voice": "en-US-JennyNeural"},
+                headers={"X-Forwarded-For": "2.2.2.2"},
+            )
+            assert res2.status_code == 200
+            res3 = test_client.post(
+                "/api/tts/preview",
+                json={"text": "again", "voice": "en-US-JennyNeural"},
+                headers={"X-Forwarded-For": "3.3.3.3"},
+            )
+            assert res3.status_code == 429
+            assert res3.json()["error_type"] == ErrorType.PROVIDER_RATE_LIMIT
+    finally:
+        _preview_rate_limiter.reset()
+
+
+def test_tts_preview_timeout_error(tmp_path: Path) -> None:
+    import asyncio
+
+    from app.api.deps import get_tts_provider
+    from app.api.jobs import _preview_rate_limiter
+    from app.domain.audio import AudioArtifact, TTSSettings
+
+    _preview_rate_limiter.reset()
+
+    class _HangingTTS:
+        async def synthesize(
+            self, text: str, language: str, voice: str, settings: TTSSettings
+        ) -> AudioArtifact:
+            await asyncio.sleep(1.0)
+            return AudioArtifact(path=tmp_path / "never.mp3")
+
+        def voices_for(self, language: str) -> list:
+            return []
+
+        def languages(self) -> set[str]:
+            return set()
+
+        def all_voices(self) -> list:
+            return []
+
+    try:
+        settings = Settings(
+            _env_file=None,
+            storage_path=tmp_path,
+            tts_preview_timeout_seconds=0.05,
+        )
+        app = create_app(settings)
+        app.dependency_overrides[get_tts_provider] = lambda: _HangingTTS()
+        with TestClient(app) as test_client:
+            res = test_client.post(
+                "/api/tts/preview",
+                json={"text": "hello hanging preview", "voice": "en-US-JennyNeural"},
+            )
+            assert res.status_code == 504
+            assert res.json()["error_type"] == ErrorType.TIMEOUT
+    finally:
+        _preview_rate_limiter.reset()
+
+
+def test_post_narrate_rejects_srt(jobs_client: TestClient) -> None:
+    srt_text = (
+        "1\n"
+        "00:00:01,000 --> 00:00:04,000\n"
+        "Hello subtitle world.\n\n"
+        "2\n"
+        "00:00:05,000 --> 00:00:08,000\n"
+        "Second subtitle line.\n"
+    )
+    res = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": srt_text,
+            "mode": "narrate",
+            "source_language": "en-US",
+            "voice": "fake-en-US-a",
+        },
+    )
+    assert res.status_code == 400
+    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "SRT narrate mode is coming in phase 2" in res.json()["message"]
+
+
+def test_decode_source_text_small_gbk_and_big5_not_mojibake() -> None:
+    from app.api.parse import _decode_source_text
+
+    gbk_sample = "天王盖地虎，宝塔镇河妖。这是几百字节的中文小说片段。".encode("gbk")
+    text, enc = _decode_source_text(gbk_sample)
+    assert "天王盖地虎" in text
+    assert enc.lower() in ("gb18030", "gbk", "gb2312")
+
+    big5_sample = "倚天屠龍記，金庸武俠小說經典。繁體中文編碼測試。".encode("big5")
+    text_b5, enc_b5 = _decode_source_text(big5_sample)
+    assert "倚天屠龍記" in text_b5
+    assert enc_b5.lower() in ("big5", "big5hkscs", "cp950")
+
+
+def test_detect_language_rejects_null_bytes(client: TestClient) -> None:
+    res = client.post(
+        "/api/detect-language",
+        content=b"hello \x00 null bytes",
+        headers={"content-type": "text/plain"},
+    )
+    assert res.status_code == 400
+    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
+
+
+def test_detect_language_multipart_text(client: TestClient) -> None:
+    res = client.post(
+        "/api/detect-language",
+        data={"text": "Hello world, this is an English sentence for language detection."},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["language"] == "en-US"
+    assert "confidence" in data
+
+
+def test_detect_language_multipart_file(client: TestClient) -> None:
+    content = b"Konnichiwa, watashi wa nihongo desu."
+    res = client.post(
+        "/api/detect-language",
+        files={"file": ("story.txt", content, "text/plain")},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "language" in data
+    assert "confidence" in data
+
+
+def test_tts_preview_empty_fields(client: TestClient) -> None:
+    res1 = client.post("/api/tts/preview", json={"text": "", "voice": "en-US-JennyNeural"})
+    assert res1.status_code == 400
+    assert "text is required" in res1.json()["message"]
+
+    res2 = client.post("/api/tts/preview", json={"text": "hi", "voice": "  "})
+    assert res2.status_code == 400
+    assert "voice is required" in res2.json()["message"]
+
+
+def test_tts_preview_invalid_speed(client: TestClient) -> None:
+    res = client.post(
+        "/api/tts/preview", json={"text": "hi", "voice": "en-US-JennyNeural", "speed": 3.0}
+    )
+    assert res.status_code == 400
+    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "speed must be between" in res.json()["message"]

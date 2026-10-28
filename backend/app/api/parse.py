@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import charset_normalizer
 from fastapi import Request, UploadFile
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -13,7 +14,7 @@ from app.application.jobs import CreateJobCommand
 from app.config.settings import Settings
 from app.domain.audio import SPEED_DEFAULT
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import OutputFormat
+from app.domain.jobs import JobMode, OutputFormat
 
 _JSON_CONTENT = "application/json"
 _MULTIPART_CONTENT = "multipart/form-data"
@@ -22,6 +23,66 @@ _READ_CHUNK = 64 * 1024
 _ALLOWED_FILE_MIME = frozenset(
     {"application/octet-stream", "application/x-subrip", "text/plain", "text/vtt"}
 )
+_ALLOWED_ENCODINGS = frozenset(
+    {
+        "gb18030",
+        "gbk",
+        "gb2312",
+        "big5",
+        "big5hkscs",
+        "cp950",
+        "shift_jis",
+        "cp932",
+        "euc-kr",
+        "euc_kr",
+        "cp949",
+        "cp1258",
+        "windows-1258",
+        "windows-1252",
+        "cp1252",
+        "latin-1",
+        "latin_1",
+        "iso-8859-1",
+        "iso8859-1",
+    }
+)
+_CHINESE_ENCODINGS = frozenset({"gb18030", "gbk", "gb2312", "big5", "big5hkscs", "cp950"})
+_LATIN_ENCODINGS = frozenset(
+    {"latin_1", "latin-1", "iso8859_1", "iso-8859-1", "cp1252", "windows-1252"}
+)
+
+
+def _select_charset_match(
+    matches: charset_normalizer.CharsetMatches,
+) -> charset_normalizer.CharsetMatch | None:
+    # If an alternative candidate in Chinese encodings has pure CJK ideographs
+    # and zero Hangul syllables, disambiguate against false-positive CP949 collisions
+    # on tiny Chinese snippets. Otherwise, legitimate Korean mixed script (국한문혼용 /
+    # Hangul + Hanja) is allowed.
+    has_pure_cjk_candidate = any(
+        m.encoding.lower().replace("-", "_") in _CHINESE_ENCODINGS
+        and "CJK Unified Ideographs" in m.alphabets
+        and "Hangul Syllables" not in m.alphabets
+        for m in matches
+    )
+
+    for m in matches:
+        enc = m.encoding.lower().replace("-", "_")
+        if enc not in _ALLOWED_ENCODINGS and m.encoding.lower() not in _ALLOWED_ENCODINGS:
+            continue
+        if (
+            enc in ("cp949", "euc_kr")
+            and "Hangul Syllables" in m.alphabets
+            and "CJK Unified Ideographs" in m.alphabets
+            and has_pure_cjk_candidate
+        ):
+            continue
+        if enc in _LATIN_ENCODINGS and has_pure_cjk_candidate:
+            continue
+        if enc in _LATIN_ENCODINGS and getattr(m, "coherence", 0.0) < 0.1:
+            continue
+        return m
+    return None
 
 
 async def parse_create_job(request: Request, settings: Settings) -> CreateJobCommand:
@@ -65,15 +126,27 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
         parsed = CreateJobJsonBody.model_validate(payload)
     except ValidationError as exc:
         raise DomainError(ErrorType.INVALID_INPUT, validation_message(list(exc.errors()))) from exc
-    text = _decode_source_text(parsed.text.encode("utf-8"), max_upload_bytes)
+    text, _ = _decode_source_text(parsed.text.encode("utf-8"), max_upload_bytes)
+    source_language = parsed.source_language.strip()
+    target_language = parsed.target_language.strip()
+    if parsed.mode == JobMode.TRANSLATE:
+        if not source_language:
+            raise DomainError(ErrorType.INVALID_INPUT, "source_language is required")
+        if not target_language:
+            raise DomainError(ErrorType.INVALID_INPUT, "target_language is required")
+    else:
+        source_language = source_language or "auto"
+        target_language = target_language or source_language
+
     return CreateJobCommand(
-        source_language=parsed.source_language,
-        target_language=parsed.target_language,
+        source_language=source_language,
+        target_language=target_language,
         text=text,
         voice=parsed.voice,
         speed=parsed.speed,
         output_format=parsed.output_format,
         translation_profile_id=parsed.translation_profile_id,
+        mode=parsed.mode,
     )
 
 
@@ -91,22 +164,39 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         text = await _read_upload(upload, max_upload_bytes)
     else:
         assert isinstance(text_value, str)
-        text = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
+        text, _ = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
+
+    mode_raw = _optional_form_string(form.get("mode")) or JobMode.TRANSLATE.value
+    try:
+        mode = JobMode(mode_raw)
+    except ValueError:
+        raise DomainError(ErrorType.INVALID_INPUT, f"invalid mode: {mode_raw}") from None
 
     speed_raw = form.get("speed")
     output_raw = form.get("output_format")
+
+    if mode == JobMode.NARRATE:
+        source_language = _optional_form_string(form.get("source_language")) or "auto"
+        target_language = _optional_form_string(form.get("target_language")) or source_language
+    else:
+        source_language = _form_string(form.get("source_language"), "source_language")
+        target_language = _form_string(form.get("target_language"), "target_language")
+
     return CreateJobCommand(
-        source_language=_form_string(form.get("source_language"), "source_language"),
-        target_language=_form_string(form.get("target_language"), "target_language"),
+        source_language=source_language,
+        target_language=target_language,
         text=text,
         voice=_optional_form_string(form.get("voice")),
         speed=_parse_speed(speed_raw),
         output_format=_optional_form_string(output_raw) or OutputFormat.MP3.value,
         translation_profile_id=_optional_form_string(form.get("translation_profile_id")),
+        mode=mode,
     )
 
 
-async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_bytes: int) -> str:
+async def _read_upload_raw(
+    upload: UploadFile | StarletteUploadFile, max_upload_bytes: int
+) -> bytes:
     _assert_safe_txt_filename(upload.filename)
     _assert_text_mime(upload.content_type)
     chunks: list[bytes] = []
@@ -119,21 +209,160 @@ async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_byte
         if total > max_upload_bytes:
             raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
         chunks.append(piece)
-    return _decode_source_text(b"".join(chunks), max_upload_bytes)
+    return b"".join(chunks)
 
 
-def _decode_source_text(raw: bytes, max_upload_bytes: int) -> str:
-    if len(raw) > max_upload_bytes:
+async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_bytes: int) -> str:
+    raw = await _read_upload_raw(upload, max_upload_bytes)
+    text, _ = _decode_source_text(raw, max_upload_bytes)
+    return text
+
+
+async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
+    content_type = (request.headers.get("content-type") or "").lower()
+    _assert_content_length(request, max_upload_bytes)
+    if content_type.startswith(_JSON_CONTENT):
+        body = await request.body()
+        if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
+            raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise DomainError(ErrorType.INVALID_INPUT, "invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise DomainError(ErrorType.INVALID_INPUT, "JSON body must be an object")
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        return text
+
+    if content_type.startswith(_MULTIPART_CONTENT):
+        form = await request.form()
+        text_value = form.get("text")
+        upload = form.get("file")
+        text_present = isinstance(text_value, str) and text_value.strip() != ""
+        file_present = isinstance(upload, StarletteUploadFile) and bool(upload.filename)
+        if not text_present and not file_present:
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        if text_present and file_present:
+            raise DomainError(ErrorType.INVALID_INPUT, "provide exactly one of text or file")
+
+        if file_present:
+            assert isinstance(upload, StarletteUploadFile)
+            raw = await _read_upload_raw(upload, max_upload_bytes)
+            text, _ = _decode_source_text(raw, max_upload_bytes)
+        else:
+            assert isinstance(text_value, str)
+            text, _ = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
+
+        if not text.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        return text
+
+    # Otherwise treat as raw text
+    body = await request.body()
+    if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
         raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise DomainError(ErrorType.INVALID_INPUT, "source text must be UTF-8") from exc
+    text, _ = _decode_source_text(body, max_upload_bytes)
+    if not text.strip():
+        raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+    return text
+
+
+async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]:
+    content_type = (request.headers.get("content-type") or "").lower()
+    _assert_content_length(request, settings.max_upload_bytes)
+    if content_type.startswith(_JSON_CONTENT):
+        body = await request.body()
+        if len(body) > settings.max_upload_bytes + _MULTIPART_OVERHEAD:
+            raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise DomainError(ErrorType.INVALID_INPUT, "invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise DomainError(ErrorType.INVALID_INPUT, "JSON body must be an object")
+        text_val = payload.get("text")
+        if not isinstance(text_val, str) or not text_val.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        text, encoding = _decode_source_text(text_val.encode("utf-8"), settings.max_upload_bytes)
+        if not text.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        return text, encoding
+
+    if content_type.startswith(_MULTIPART_CONTENT):
+        form = await request.form()
+        text_value = form.get("text")
+        upload = form.get("file")
+        text_present = isinstance(text_value, str) and text_value.strip() != ""
+        file_present = isinstance(upload, StarletteUploadFile) and bool(upload.filename)
+        if not text_present and not file_present:
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        if text_present and file_present:
+            raise DomainError(ErrorType.INVALID_INPUT, "provide exactly one of text or file")
+
+        if file_present:
+            assert isinstance(upload, StarletteUploadFile)
+            raw = await _read_upload_raw(upload, settings.max_upload_bytes)
+            text, encoding = _decode_source_text(raw, settings.max_upload_bytes)
+        else:
+            assert isinstance(text_value, str)
+            text, encoding = _decode_source_text(
+                text_value.encode("utf-8"), settings.max_upload_bytes
+            )
+
+        if not text.strip():
+            raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        return text, encoding
+
+    raise DomainError(
+        ErrorType.INVALID_INPUT,
+        "content type must be application/json or multipart/form-data",
+    )
+
+
+def _decode_source_text(raw: bytes, max_upload_bytes: int | None = None) -> tuple[str, str]:
+    if max_upload_bytes is not None and len(raw) > max_upload_bytes:
+        raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+
+    if raw.startswith(b"\xef\xbb\xbf"):
+        try:
+            text = raw[3:].decode("utf-8")
+            encoding = "utf-8-sig"
+        except UnicodeDecodeError as exc:
+            raise DomainError(
+                ErrorType.INVALID_INPUT, "source text has unsupported encoding"
+            ) from exc
+    elif raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            text = raw.decode("utf-16")
+            encoding = "utf-16"
+        except UnicodeDecodeError as exc:
+            raise DomainError(
+                ErrorType.INVALID_INPUT, "source text has unsupported encoding"
+            ) from exc
+    else:
+        try:
+            text = raw.decode("utf-8")
+            encoding = "utf-8"
+        except UnicodeDecodeError:
+            matches = charset_normalizer.from_bytes(raw)
+            selected_match = _select_charset_match(matches)
+            if selected_match is None:
+                raise DomainError(ErrorType.INVALID_INPUT, "source text has unsupported encoding")
+            try:
+                text = str(selected_match)
+                encoding = selected_match.encoding
+            except Exception as exc:
+                raise DomainError(
+                    ErrorType.INVALID_INPUT, "source text has unsupported encoding"
+                ) from exc
+
     if "\x00" in text:
         raise DomainError(ErrorType.INVALID_INPUT, "source text must not contain null bytes")
     if text.startswith("\ufeff"):
         text = text[1:]
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.replace("\r\n", "\n").replace("\r", "\n"), encoding
 
 
 def _assert_safe_txt_filename(filename: str | None) -> None:

@@ -12,11 +12,27 @@ try:
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
+from app.application.pipeline.parse import is_srt_document
+from app.application.pipeline.tts import resolve_voice
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import Job, JobStatus, OutputFormat, assert_legal_transition, is_terminal
+from app.domain.jobs import (
+    Job,
+    JobMode,
+    JobStatus,
+    OutputFormat,
+    assert_legal_transition,
+    is_terminal,
+)
 from app.domain.languages import AUTO_SOURCE_LANGUAGE, ensure_valid_languages
-from app.domain.ports import DiskJobStore, JobQueue, JobStore, SourceTextStorage
+from app.domain.ports import (
+    DiskJobStore,
+    JobQueue,
+    JobStore,
+    LanguageDetector,
+    SourceTextStorage,
+    TTSProvider,
+)
 from app.domain.translation_profile import TranslationProfile
 
 logger = logging.getLogger(__name__)
@@ -31,6 +47,7 @@ class CreateJobCommand:
     speed: float = SPEED_DEFAULT
     output_format: str = OutputFormat.MP3.value
     translation_profile_id: str | None = None
+    mode: JobMode = JobMode.TRANSLATE
 
 
 class JobService:
@@ -47,6 +64,9 @@ class JobService:
         translation_provider: str = "fake",
         translation_model: str = "fake",
         available_profiles: Sequence[TranslationProfile] | None = None,
+        tts: TTSProvider | None = None,
+        detector: LanguageDetector | None = None,
+        language_confirm_threshold: float = 0.70,
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
@@ -62,11 +82,13 @@ class JobService:
         self._available_profiles = (
             list(available_profiles) if available_profiles is not None else []
         )
+        self._tts = tts
+        self._detector = detector
+        self._language_confirm_threshold = language_confirm_threshold
 
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
         target_language = command.target_language.strip()
-        ensure_valid_languages(source_language, target_language)
         ensure_valid_speed(command.speed)
         text = command.text.strip()
         if not text:
@@ -74,53 +96,113 @@ class JobService:
         output_format = _parse_output_format(command.output_format)
         voice = command.voice.strip() if command.voice and command.voice.strip() else None
 
-        profile_id = (
-            command.translation_profile_id.strip()
-            if command.translation_profile_id and command.translation_profile_id.strip()
-            else None
-        )
-        matched = None
-        if profile_id is not None:
-            matched = next(
-                (p for p in self._available_profiles if p.id == profile_id),
-                None,
-            )
-            if matched is None:
-                trunc_id = profile_id[:64]
+        if command.mode == JobMode.NARRATE:
+            if is_srt_document(text):
                 raise DomainError(
                     ErrorType.INVALID_INPUT,
-                    f"unknown translation_profile_id: {trunc_id}",
+                    "SRT narrate mode is coming in phase 2",
                 )
-            translation_provider = matched.provider
-            translation_model = matched.model
-        else:
-            translation_provider = self._translation_provider
-            translation_model = self._translation_model
-            matched = next(
-                (p for p in self._available_profiles if p.is_default),
-                None,
-            )
 
-        if matched is not None and matched.supported_languages:
             if (
-                source_language != AUTO_SOURCE_LANGUAGE
-                and source_language not in matched.supported_languages
+                command.translation_profile_id is not None
+                and command.translation_profile_id.strip()
             ):
                 raise DomainError(
-                    ErrorType.UNSUPPORTED_LANGUAGE,
-                    (
-                        f"source language '{source_language}' is not supported "
-                        f"by translation profile '{matched.id}'"
-                    ),
+                    ErrorType.INVALID_INPUT,
+                    "translation profile not permitted in narrate mode",
                 )
-            if target_language not in matched.supported_languages:
+
+            if not source_language or source_language == AUTO_SOURCE_LANGUAGE:
+                if self._detector is not None:
+                    detection = await self._detector.detect(text[:8192])
+                    if detection.confidence < self._language_confirm_threshold:
+                        msg = (
+                            f"Language detection confidence ({detection.confidence:.2f}) "
+                            f"is below threshold ({self._language_confirm_threshold:.2f}); "
+                            "please specify language explicitly"
+                        )
+                        raise DomainError(ErrorType.INVALID_INPUT, msg)
+                    resolved_source = detection.language_code
+                else:
+                    raise DomainError(
+                        ErrorType.INVALID_INPUT,
+                        "auto language detection unavailable",
+                    )
+            else:
+                resolved_source = source_language
+
+            if (
+                target_language
+                and target_language != AUTO_SOURCE_LANGUAGE
+                and target_language != resolved_source
+            ):
                 raise DomainError(
-                    ErrorType.UNSUPPORTED_LANGUAGE,
-                    (
-                        f"target language '{target_language}' is not supported "
-                        f"by translation profile '{matched.id}'"
-                    ),
+                    ErrorType.INVALID_INPUT,
+                    "target_language must match source_language in narrate mode",
                 )
+
+            resolved_target = resolved_source
+
+            if self._tts is not None:
+                resolved_voice = resolve_voice(self._tts, resolved_source, voice)
+            else:
+                resolved_voice = voice
+
+            translation_provider = None
+            translation_model = None
+            source_language = resolved_source
+            target_language = resolved_target
+            voice = resolved_voice
+        else:
+            ensure_valid_languages(source_language, target_language)
+
+            profile_id = (
+                command.translation_profile_id.strip()
+                if command.translation_profile_id and command.translation_profile_id.strip()
+                else None
+            )
+            matched = None
+            if profile_id is not None:
+                matched = next(
+                    (p for p in self._available_profiles if p.id == profile_id),
+                    None,
+                )
+                if matched is None:
+                    trunc_id = profile_id[:64]
+                    raise DomainError(
+                        ErrorType.INVALID_INPUT,
+                        f"unknown translation_profile_id: {trunc_id}",
+                    )
+                translation_provider = matched.provider
+                translation_model = matched.model
+            else:
+                translation_provider = self._translation_provider
+                translation_model = self._translation_model
+                matched = next(
+                    (p for p in self._available_profiles if p.is_default),
+                    None,
+                )
+
+            if matched is not None and matched.supported_languages:
+                if (
+                    source_language != AUTO_SOURCE_LANGUAGE
+                    and source_language not in matched.supported_languages
+                ):
+                    raise DomainError(
+                        ErrorType.UNSUPPORTED_LANGUAGE,
+                        (
+                            f"source language '{source_language}' is not supported "
+                            f"by translation profile '{matched.id}'"
+                        ),
+                    )
+                if target_language not in matched.supported_languages:
+                    raise DomainError(
+                        ErrorType.UNSUPPORTED_LANGUAGE,
+                        (
+                            f"target language '{target_language}' is not supported "
+                            f"by translation profile '{matched.id}'"
+                        ),
+                    )
 
         job_id = str(uuid.uuid4())
         job = Job(
@@ -134,6 +216,7 @@ class JobService:
             output_bitrate_kbps=self._output_bitrate_kbps,
             translation_provider=translation_provider,
             translation_model=translation_model,
+            mode=command.mode,
         )
         try:
             await self._source_storage.write_source(job_id, text)
@@ -150,6 +233,7 @@ class JobService:
             "job_enqueued",
             extra={
                 "job_id": job.id,
+                "mode": job.mode.value,
                 "source_language": job.source_language,
                 "status": job.status.value,
                 "target_language": job.target_language,

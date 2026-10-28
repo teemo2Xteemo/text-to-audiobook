@@ -75,6 +75,10 @@ class FakeLanguageDetector:
         self.calls.append(text)
         return LanguageDetection(language_code=self.language_code, confidence=self.confidence)
 
+    async def detect_candidates(self, text: str) -> list[tuple[str, float]]:
+        self.calls.append(text)
+        return [(self.language_code, self.confidence)]
+
 
 class FakeNarrationProcessor:
     def __init__(self) -> None:

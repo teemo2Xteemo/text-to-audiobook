@@ -138,3 +138,81 @@ def test_negative_recovery_attempts_rejected() -> None:
     payload["recovery_attempts"] = -1
     with pytest.raises(ValueError, match="recovery_attempts"):
         Job.from_dict(payload)
+
+
+def test_job_mode_serialization_and_validation() -> None:
+    from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
+
+    job = Job(
+        id="test-1",
+        status=JobStatus.QUEUED,
+        source_language="vi-VN",
+        target_language="vi-VN",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    d = job.to_dict()
+    assert d["mode"] == "narrate"
+
+    restored = Job.from_dict(d)
+    assert restored.mode == JobMode.NARRATE
+
+    # Default fallback for missing mode in legacy record
+    d_no_mode = d.copy()
+    del d_no_mode["mode"]
+    assert Job.from_dict(d_no_mode).mode == JobMode.TRANSLATE
+
+    # Unknown mode fallback
+    d_invalid = d.copy()
+    d_invalid["mode"] = "unsupported_mode"
+    assert Job.from_dict(d_invalid).mode == JobMode.UNKNOWN
+
+
+def test_job_from_dict_missing_required_fields_raises() -> None:
+    from app.domain.jobs import Job, JobStatus, OutputFormat
+
+    valid = {
+        "id": "job-1",
+        "status": JobStatus.QUEUED.value,
+        "source_language": "en",
+        "target_language": "vi",
+        "voice": None,
+        "speed": 1.0,
+        "output_format": OutputFormat.MP3.value,
+        "output_bitrate_kbps": 128,
+    }
+
+    # Missing status
+    no_status = valid.copy()
+    del no_status["status"]
+    with pytest.raises(KeyError):
+        Job.from_dict(no_status)
+
+    # Missing id
+    no_id = valid.copy()
+    del no_id["id"]
+    with pytest.raises(KeyError):
+        Job.from_dict(no_id)
+
+    # Missing source_language
+    no_source = valid.copy()
+    del no_source["source_language"]
+    with pytest.raises(KeyError):
+        Job.from_dict(no_source)
+
+
+@pytest.mark.anyio
+async def test_null_translation_provider() -> None:
+    from app.domain.ports import NullTranslationProvider
+
+    provider = NullTranslationProvider()
+    assert provider.languages() == set()
+    assert provider.supported_languages() == ()
+
+    with pytest.raises(DomainError) as exc:
+        await provider.translate("hello", "en-US", "vi-VN")
+    assert exc.value.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert "translation is not supported in narrate mode" in str(exc.value)

@@ -7,16 +7,28 @@ from app.domain.audio import Voice
 from app.domain.ports import TranslationProvider, TTSProvider
 from app.domain.translation_profile import TranslationProfile
 
+_DEFAULT_ESTIMATE_DEFAULTS: dict[str, float] = {
+    "chars_per_second": 15.0,
+    "preview_wpm": 150.0,
+}
+
 
 @dataclass(frozen=True)
 class Capabilities:
     languages: list[str]
     voices: list[Voice]
     translation_profiles: list[TranslationProfile] = field(default_factory=list)
+    narrate_languages: list[str] = field(default_factory=list)
+    estimate_defaults: dict[str, float] = field(default_factory=dict)
 
 
 class CapabilitiesService:
-    """Languages = translation ∩ TTS (at least one voice). Voices filtered by optional language."""
+    """Languages = translation ∩ TTS (at least one voice).
+
+    Unfiltered voices returns all TTS voices sorted by language code with default voice first
+    per language (so narrate mode can access TTS-only locales); or voices are filtered by
+    optional language parameter.
+    """
 
     def __init__(
         self,
@@ -24,24 +36,47 @@ class CapabilitiesService:
         translation: TranslationProvider,
         tts: TTSProvider,
         translation_profiles: Sequence[TranslationProfile] | None = None,
+        estimate_defaults: dict[str, float] | None = None,
     ) -> None:
         self._translation = translation
         self._tts = tts
         self._translation_profiles = (
             list(translation_profiles) if translation_profiles is not None else []
         )
+        self._estimate_defaults = (
+            dict(estimate_defaults)
+            if estimate_defaults is not None
+            else _DEFAULT_ESTIMATE_DEFAULTS.copy()
+        )
 
     def get(self, language: str | None = None) -> Capabilities:
         languages = _intersection_languages(self._translation, self._tts)
         if language is None:
-            voices = _voices_for_languages(self._tts, languages)
+            voices = _all_ordered_voices(self._tts)
         else:
             voices = list(self._tts.voices_for(language))
+        narrate_languages = sorted(self._tts.languages())
         return Capabilities(
             languages=languages,
             voices=voices,
             translation_profiles=list(self._translation_profiles),
+            narrate_languages=narrate_languages,
+            estimate_defaults=dict(self._estimate_defaults),
         )
+
+
+def _all_ordered_voices(tts: TTSProvider) -> list[Voice]:
+    voices: list[Voice] = []
+    seen: set[str] = set()
+    for code in sorted(tts.languages()):
+        for v in tts.voices_for(code):
+            voices.append(v)
+            seen.add(v.id)
+    for v in tts.all_voices():
+        if v.id not in seen:
+            voices.append(v)
+            seen.add(v.id)
+    return voices
 
 
 def _intersection_languages(translation: TranslationProvider, tts: TTSProvider) -> list[str]:
@@ -50,10 +85,3 @@ def _intersection_languages(translation: TranslationProvider, tts: TTSProvider) 
         if tts.voices_for(code):
             result.append(code)
     return result
-
-
-def _voices_for_languages(tts: TTSProvider, languages: Sequence[str]) -> list[Voice]:
-    voices: list[Voice] = []
-    for code in languages:
-        voices.extend(tts.voices_for(code))
-    return voices

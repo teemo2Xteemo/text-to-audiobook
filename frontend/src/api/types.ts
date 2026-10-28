@@ -8,6 +8,8 @@ export type JobStatus =
   | "completed"
   | "failed";
 
+export type JobMode = "translate" | "narrate";
+
 export type OutputFormat = "mp3" | "wav";
 
 export type Voice = {
@@ -31,7 +33,11 @@ export type Capabilities = {
   languages: string[];
   voices: Voice[];
   translation_profiles?: TranslationProfile[];
+  narrate_languages?: string[];
+  estimate_defaults?: { chars_per_second?: number; preview_wpm?: number };
 };
+
+export type CapabilitiesResponse = Capabilities;
 
 export type JobCreated = {
   job_id: string;
@@ -55,6 +61,7 @@ export type JobStatusResponse = {
   subtitles_url?: string | null;
   translation_provider?: string | null;
   translation_model?: string | null;
+  mode?: JobMode;
 };
 
 export type ErrorEnvelope = {
@@ -71,6 +78,52 @@ export type CreateJobInput = {
   text?: string;
   file?: File;
   translation_profile_id?: string;
+  mode?: JobMode;
+};
+
+export type CreateJobPayload = CreateJobInput;
+
+export type LanguageCandidate = {
+  language: string;
+  confidence: number;
+};
+
+export type DetectLanguageResponse = {
+  language: string;
+  confidence: number;
+  needs_confirmation: boolean;
+  candidates: LanguageCandidate[];
+  preview_lines: string[];
+};
+
+export type ChapterSummary = {
+  index: number;
+  title: string;
+  char_count: number;
+};
+
+export type AnalyzeResponse = {
+  encoding: string;
+  language: string;
+  confidence: number;
+  needs_confirmation: boolean;
+  candidates: LanguageCandidate[];
+  chapters_count: number;
+  chapters_preview: ChapterSummary[];
+  duration_estimate_seconds: number;
+  process_time_estimate_seconds: number;
+  preview_lines: string[];
+};
+
+export type TTSPreviewPayload = {
+  text: string;
+  voice: string;
+  speed?: number;
+};
+
+export type TTSPreviewResponse = {
+  audio_base64: string;
+  mime_type: string;
 };
 
 export class ApiError extends Error {

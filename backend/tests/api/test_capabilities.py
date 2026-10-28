@@ -35,8 +35,49 @@ def test_capabilities_intersection_and_all_voices(capabilities_client: TestClien
     assert response.status_code == 200
     body = response.json()
     assert body["languages"] == ["en-US", "ja-JP"]
-    assert {voice["id"] for voice in body["voices"]} == {"fake-en", "fake-ja"}
+    assert body["narrate_languages"] == ["en-US", "ja-JP", "zh-CN"]
+    assert {voice["id"] for voice in body["voices"]} == {"fake-en", "fake-ja", "extra-zh"}
     assert all("Neural" not in voice["id"] for voice in body["voices"])
+
+
+def test_capabilities_unfiltered_includes_voices_for_tts_only_languages(
+    capabilities_client: TestClient,
+) -> None:
+    response = capabilities_client.get("/api/capabilities")
+    assert response.status_code == 200
+    body = response.json()
+    zh_voices = [v for v in body["voices"] if v["language"] == "zh-CN"]
+    assert len(zh_voices) == 1
+    assert zh_voices[0]["id"] == "extra-zh"
+
+
+def test_capabilities_unfiltered_preserves_default_voice_ordering(tmp_path: Path) -> None:
+    from app.providers.tts.edge import EdgeTTSProvider
+
+    records = [
+        {"ShortName": "vi-VN-AdapterANeural", "Locale": "vi-VN", "FriendlyName": "A"},
+        {"ShortName": "vi-VN-AdapterBNeural", "Locale": "vi-VN", "FriendlyName": "B"},
+    ]
+
+    class _Client:
+        def list_voices(self) -> list[dict[str, str]]:
+            return records
+
+    tts = EdgeTTSProvider(
+        tmp_path,
+        default_voice_by_language={"vi-VN": "vi-VN-AdapterBNeural"},
+        client=_Client(),
+    )
+    translation = FakeTranslationProvider(languages=["vi-VN"])
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.capabilities_service = CapabilitiesService(translation=translation, tts=tts)
+
+    with TestClient(app) as client:
+        res = client.get("/api/capabilities")
+        assert res.status_code == 200
+        vi_voices = [v for v in res.json()["voices"] if v["language"] == "vi-VN"]
+        assert len(vi_voices) == 2
+        assert vi_voices[0]["id"] == "vi-VN-AdapterBNeural"
 
 
 def test_capabilities_returns_translation_profiles(tmp_path: Path) -> None:
@@ -124,3 +165,12 @@ def test_security_headers_present(capabilities_client: TestClient) -> None:
     assert response.headers.get("x-content-type-options") == "nosniff"
     assert response.headers.get("x-frame-options") == "DENY"
     assert response.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+
+
+def test_capabilities_includes_narrate_languages(client: TestClient) -> None:
+    res = client.get("/api/capabilities")
+    assert res.status_code == 200
+    data = res.json()
+    assert "narrate_languages" in data
+    assert "estimate_defaults" in data
+    assert len(data["narrate_languages"]) >= len(data["languages"])

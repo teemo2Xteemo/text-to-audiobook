@@ -5,6 +5,8 @@ import {
   canGenerate,
   computeProgressPercent,
   estimateTextMetrics,
+  formatDuration,
+  friendlyError,
   isSrtContent,
   playerSrc,
   progressCopy,
@@ -138,5 +140,57 @@ describe("jobUi", () => {
     expect(stepVisualState("translating", "translating", "queued")).toBe("done");
     expect(stepVisualState("translating", "translating", "translating")).toBe("active");
     expect(stepVisualState("translating", "translating", "merging")).toBe("upcoming");
+  });
+
+  describe("friendlyError", () => {
+    it("maps PROVIDER_CONFIGURATION_ERROR to friendly text", () => {
+      const err = friendlyError("PROVIDER_CONFIGURATION_ERROR", "missing key");
+      expect(err.summary).toContain("Service configuration issue");
+      expect(err.details).toBe("PROVIDER_CONFIGURATION_ERROR: missing key");
+    });
+
+    it("maps domain error types to human-readable summaries", () => {
+      expect(friendlyError("UNSUPPORTED_LANGUAGE", "").summary).toBe(
+        "This language or voice is currently not supported.",
+      );
+      expect(friendlyError("TIMEOUT", "504 Gateway Timeout").summary).toBe(
+        "The request timed out. Please try again with shorter text.",
+      );
+      expect(friendlyError("PROVIDER_RATE_LIMIT", null).summary).toBe(
+        "The service is temporarily busy. Please try again shortly.",
+      );
+      expect(friendlyError("TTS_FAILED", "synth err").summary).toBe(
+        "Speech synthesis failed. Please try again or choose a different voice.",
+      );
+      expect(friendlyError("TRANSLATION_FAILED", "engine err").summary).toBe(
+        "Translation failed. Please try again or select a different engine.",
+      );
+      expect(friendlyError("INVALID_INPUT", "bad chars").summary).toBe(
+        "The provided input is invalid. Please check your text or file.",
+      );
+      expect(friendlyError("STORAGE_FAILED", "disk full").summary).toBe(
+        "Failed to store or retrieve audio file.",
+      );
+    });
+
+    it("handles fallback and missing errors gracefully", () => {
+      const fallback = friendlyError("UNKNOWN_ERROR", "something broke");
+      expect(fallback.summary).toBe("An unexpected error occurred while processing the request.");
+      expect(fallback.details).toBe("UNKNOWN_ERROR: something broke");
+
+      const empty = friendlyError(null, undefined);
+      expect(empty.summary).toBe("An unexpected error occurred while processing the request.");
+      expect(empty.details).toBeUndefined();
+    });
+  });
+
+  describe("formatDuration", () => {
+    it("formats seconds into human readable duration strings", () => {
+      expect(formatDuration(0)).toBe("0s");
+      expect(formatDuration(45)).toBe("45s");
+      expect(formatDuration(90)).toBe("1m 30s");
+      expect(formatDuration(120)).toBe("2m");
+      expect(formatDuration(3665)).toBe("1h 1m");
+    });
   });
 });
