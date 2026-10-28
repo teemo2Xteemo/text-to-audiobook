@@ -27,18 +27,65 @@ def test_split_chapters_preface_emitted_before_first_chapter():
     text_cn = "序言\n这是一段前言。\n第一章 启程\n正文开始。\n第二章 结束\n正文结束。"
     chapters = split_chapters(text_cn)
     assert len(chapters) == 3
-    # Preface chunk has title="" so it is read before Chapter 1 title
-    assert chapters[0].index == 1
+    # Preface has index=0, title="" so Chapter 1 stays index=1
+    assert chapters[0].index == 0
     assert chapters[0].title == ""
     assert "序言\n这是一段前言。" in chapters[0].body
 
-    assert chapters[1].index == 2
+    assert chapters[1].index == 1
     assert chapters[1].title == "第一章 启程"
     assert chapters[1].body == "正文开始。"
 
-    assert chapters[2].index == 3
+    assert chapters[2].index == 2
     assert chapters[2].title == "第二章 结束"
     assert chapters[2].body == "正文结束。"
+
+
+def test_split_chapters_chinese_no_space_and_bracket_headings():
+    # N1: Scraped web-novels often omit spaces between chapter number and title,
+    # or use quotes/brackets such as 「」, 【】, 《》
+    text = (
+        "第一章天才少年\n这是天才少年的故事。\n\n"
+        "第1章「开端」\n这是开端的故事。\n\n"
+        "第3章【突破】\n这是突破的故事。\n\n"
+        "第4章《重逢》\n这是重逢的故事。"
+    )
+    chapters = split_chapters(text)
+    assert len(chapters) == 4
+    assert chapters[0].index == 1
+    assert chapters[0].title == "第一章天才少年"
+    assert chapters[0].body == "这是天才少年的故事。"
+
+    assert chapters[1].index == 2
+    assert chapters[1].title == "第1章「开端」"
+    assert chapters[1].body == "这是开端的故事。"
+
+    assert chapters[2].index == 3
+    assert chapters[2].title == "第3章【突破】"
+    assert chapters[2].body == "这是突破的故事。"
+
+    assert chapters[3].index == 4
+    assert chapters[3].title == "第4章《重逢》"
+    assert chapters[3].body == "这是重逢的故事。"
+
+
+def test_split_chapters_prose_sentences_not_treated_as_headings():
+    # N2: Sentences containing clause/dialogue punctuation or starting as prose
+    # must not false-trigger chapter heading detection.
+    text_vi = "Hồi 3 tuổi, tôi ở quê.\nĐó là một mùa hè đáng nhớ."
+    chapters_vi = split_chapters(text_vi)
+    assert len(chapters_vi) == 1
+    assert chapters_vi[0].title == "Full text"
+
+    text_en = "Chapter 3 was the best part, he said.\nEveryone in the room agreed."
+    chapters_en = split_chapters(text_en)
+    assert len(chapters_en) == 1
+    assert chapters_en[0].title == "Full text"
+
+    text_zh_class = "第一节课，老师走进了教室，开始了新学期的课程。\n大家认真听讲。"
+    chapters_zh = split_chapters(text_zh_class)
+    assert len(chapters_zh) == 1
+    assert chapters_zh[0].title == "Full text"
 
 
 def test_split_chapters_chinese_action_prose_does_not_split():
