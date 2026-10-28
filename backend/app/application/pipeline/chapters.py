@@ -94,7 +94,7 @@ def _is_prose_space(rest: str, stopwords: set[str]) -> bool:
     return False
 
 
-def _is_prose_delimiter(delim_char: str, rest: str) -> bool:
+def _is_prose_delimiter(rest: str) -> bool:
     if not rest:
         return False
     # Lowercase title after delimiter indicates prose (e.g. '— he walked in')
@@ -102,19 +102,22 @@ def _is_prose_delimiter(delim_char: str, rest: str) -> bool:
         return True
     words = rest.split()
     first_w = words[0].strip("\"'“”‘’:;,.").lower()
-    # Delimiter was a dot '.' and rest ends in single period: e.g. 'Chapter 3. He walked in.'
-    if delim_char == "." and rest.endswith(".") and not rest.endswith(("...", "…")):
-        return True
     # Ending in a single period and looks like a full sentence:
     if rest.endswith(".") and not rest.endswith(("...", "…")):
         if len(words) >= 4 or len(rest) > 25:
             return True
-        if first_w in {"he", "she", "they", "i", "we", "it", "hắn", "nó"} and len(words) >= 2:
+        if (
+            first_w in {"he", "she", "they", "i", "we", "it", "hắn", "nó", "ông"}
+            and len(words) >= 2
+        ):
             return True
-    # Narrative sentence without trailing period (hard-wrapped,
-    # e.g. >= 5 words starting with a subject pronoun)
+    # Narrative sentence without trailing period (hard-wrapped, e.g. >= 5 words starting
+    # with a subject pronoun and written in sentence case rather than Title Case)
     if len(words) >= 5 and first_w in {"he", "she", "they", "i", "we", "it", "hắn", "nó"}:
-        return True
+        trailing_words = [clean for w in words[1:] if (clean := w.strip("\"'“”‘’:;,-—([<"))]
+        lowercase_count = sum(1 for w in trailing_words if w[0].islower())
+        if lowercase_count > len(trailing_words) / 2:
+            return True
     return False
 
 
@@ -159,9 +162,8 @@ def is_chapter_heading(line: str) -> bool:
         # Non-space delimiter, e.g. Chương 1: Mở đầu, Chương 5: Gió, mưa và lửa
         delim_match = re.match(r"^\s*([:：、.·\-_/\\–—「」『』【】《》〈〉()（）\[\]])", after)
         if delim_match:
-            delim_char = delim_match.group(1)
             rest = after[delim_match.end() :].strip()
-            if _is_prose_delimiter(delim_char, rest):
+            if _is_prose_delimiter(rest):
                 return False
             return True
         # Space + free text, e.g. Chương 1 Mở đầu, Chương 1\u00a0Mở đầu
@@ -185,9 +187,8 @@ def is_chapter_heading(line: str) -> bool:
         # Non-space delimiter, e.g. Chapter 1: Hello, World or Chapter 3: "The Return"
         delim_match = re.match(r"^\s*([:：.·\-_/\\–—\"'()\[\]])", after)
         if delim_match:
-            delim_char = delim_match.group(1)
             rest = after[delim_match.end() :].strip()
-            if _is_prose_delimiter(delim_char, rest):
+            if _is_prose_delimiter(rest):
                 return False
             return True
         # Space + free text, e.g. Chapter 1 The Beginning, Chapter 1\u00a0The Beginning
