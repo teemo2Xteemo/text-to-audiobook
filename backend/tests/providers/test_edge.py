@@ -205,6 +205,23 @@ def test_edge_synthesize_cleans_up_empty_or_failed_temp_file(tmp_path: Path) -> 
     assert list(out_dir.glob("*.mp3")) == []
 
 
+def test_edge_synthesize_cleans_up_temp_file_on_cancelled_error(tmp_path: Path) -> None:
+    class _CancelledClient:
+        def list_voices(self) -> list[dict[str, str]]:
+            return [{"ShortName": _EN, "Locale": "en-US", "FriendlyName": "Adapter EN"}]
+
+        async def synthesize(self, text: str, voice: str, rate: str, output_path: Path) -> None:
+            del text, voice, rate
+            output_path.write_bytes(b"partial-audio-content")
+            raise asyncio.CancelledError()
+
+    out_dir = tmp_path / "edge-tmp-cancelled"
+    provider = EdgeTTSProvider(out_dir, client=_CancelledClient())
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(provider.synthesize("hello", "en-US", _EN, TTSSettings(speed=1.0)))
+    assert list(out_dir.glob("*.mp3")) == []
+
+
 def test_sdk_edge_client_timeout_raises_timeout_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

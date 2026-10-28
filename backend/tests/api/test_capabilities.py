@@ -35,8 +35,20 @@ def test_capabilities_intersection_and_all_voices(capabilities_client: TestClien
     assert response.status_code == 200
     body = response.json()
     assert body["languages"] == ["en-US", "ja-JP"]
-    assert {voice["id"] for voice in body["voices"]} == {"fake-en", "fake-ja"}
+    assert body["narrate_languages"] == ["en-US", "ja-JP", "zh-CN"]
+    assert {voice["id"] for voice in body["voices"]} == {"fake-en", "fake-ja", "extra-zh"}
     assert all("Neural" not in voice["id"] for voice in body["voices"])
+
+
+def test_capabilities_unfiltered_includes_voices_for_tts_only_languages(
+    capabilities_client: TestClient,
+) -> None:
+    response = capabilities_client.get("/api/capabilities")
+    assert response.status_code == 200
+    body = response.json()
+    zh_voices = [v for v in body["voices"] if v["language"] == "zh-CN"]
+    assert len(zh_voices) == 1
+    assert zh_voices[0]["id"] == "extra-zh"
 
 
 def test_capabilities_returns_translation_profiles(tmp_path: Path) -> None:

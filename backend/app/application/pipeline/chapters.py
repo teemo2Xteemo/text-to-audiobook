@@ -16,21 +16,21 @@ _ZH_HEAD = re.compile(
     re.MULTILINE,
 )
 _VI_HEAD = re.compile(
-    r"^[ \t]*(?:(Chương|Hồi)|(Quyển|Tập))\s+(?:\d+|[IVXLCDM]+)",
-    re.MULTILINE | re.IGNORECASE,
+    r"^[ \t]*(?:(?i:Chương|Hồi)|(?i:Quyển|Tập))\s+(?:\d+|[IVXLCDM]+)\b",
+    re.MULTILINE,
 )
 _EN_HEAD = re.compile(
-    r"^[ \t]*(?:(Chapter|Act)|(Book|Volume))\s+(?:\d+|[IVXLCDM]+)",
-    re.MULTILINE | re.IGNORECASE,
+    r"^[ \t]*(?:(?i:Chapter|Act)|(?i:Book|Volume))\s+(?:\d+|[IVXLCDM]+)\b",
+    re.MULTILINE,
 )
 
 _VOL_HEAD = re.compile(
     r"^[ \t]*(?:"
     r"第\s*[0-9０-９零一二三四五六七八九十百千万两]+\s*卷(?!入)|"
-    r"(?:Book|Volume)\s+(?:\d+|[IVXLCDM]+)|"
-    r"(?:Quyển|Tập)\s+(?:\d+|[IVXLCDM]+)"
+    r"(?:(?i:Book|Volume))\s+(?:\d+|[IVXLCDM]+)\b|"
+    r"(?:(?i:Quyển|Tập))\s+(?:\d+|[IVXLCDM]+)\b"
     r")",
-    re.MULTILINE | re.IGNORECASE,
+    re.MULTILINE,
 )
 
 
@@ -73,7 +73,11 @@ def is_chapter_heading(line: str) -> bool:
         if not after or after.strip() == ".":
             return True
         # Non-space delimiter, e.g. Chương 1: Mở đầu, Chương 5: Gió, mưa và lửa
-        if re.match(r"^[ \t]*[:：、.·\-_/\\–—「」『』【】《》〈〉()（）\[\]]", after):
+        delim_match = re.match(r"^\s*[:：、.·\-_/\\–—「」『』【】《》〈〉()（）\[\]]", after)
+        if delim_match:
+            rest = after[delim_match.end() :].strip()
+            if rest and rest.endswith("."):
+                return False
             return True
         # Space + free text, e.g. Chương 1 Mở đầu, Chương 1\u00a0Mở đầu
         if after[0].isspace():
@@ -99,7 +103,11 @@ def is_chapter_heading(line: str) -> bool:
         if not after or after.strip() == ".":
             return True
         # Non-space delimiter, e.g. Chapter 1: Hello, World or Chapter 3: "The Return"
-        if re.match(r"^[ \t]*[:：.·\-_/\\–—\"'()\[\]]", after):
+        delim_match = re.match(r"^\s*[:：.·\-_/\\–—\"'()\[\]]", after)
+        if delim_match:
+            rest = after[delim_match.end() :].strip()
+            if rest and rest.endswith("."):
+                return False
             return True
         # Space + free text, e.g. Chapter 1 The Beginning, Chapter 1\u00a0The Beginning
         if after[0].isspace():

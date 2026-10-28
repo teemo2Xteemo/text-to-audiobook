@@ -47,7 +47,7 @@ class CapabilitiesService:
     def get(self, language: str | None = None) -> Capabilities:
         languages = _intersection_languages(self._translation, self._tts)
         if language is None:
-            voices = _voices_for_languages(self._tts, languages)
+            voices = list(self._tts.all_voices())
         else:
             voices = list(self._tts.voices_for(language))
         narrate_languages = sorted(self._tts.languages())
@@ -66,10 +66,3 @@ def _intersection_languages(translation: TranslationProvider, tts: TTSProvider) 
         if tts.voices_for(code):
             result.append(code)
     return result
-
-
-def _voices_for_languages(tts: TTSProvider, languages: Sequence[str]) -> list[Voice]:
-    voices: list[Voice] = []
-    for code in languages:
-        voices.extend(tts.voices_for(code))
-    return voices

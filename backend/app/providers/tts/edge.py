@@ -102,6 +102,9 @@ class EdgeTTSProvider:
         except Exception as exc:
             path.unlink(missing_ok=True)
             raise _map_edge_error(exc) from exc
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
         if not path.is_file() or path.stat().st_size == 0:
             path.unlink(missing_ok=True)
             raise DomainError(ErrorType.TTS_FAILED, "tts failed")

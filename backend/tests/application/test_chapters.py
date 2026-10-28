@@ -312,3 +312,25 @@ def test_split_chapters_unicode_whitespace_volume_and_chapter() -> None:
     assert chapters[1].index == 1
     assert chapters[1].title == "第一章\u3000Y"
     assert chapters[1].body == "正文"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Chapter 3. He walked in.",
+        "Chapter 3: I came home late that night.",
+        "Chương 3. Ông ấy bước vào nhà.",
+        "Book mild",
+        "Act civil",
+    ],
+)
+def test_is_chapter_heading_disqualifies_sentences_and_english_words(line: str) -> None:
+    # T1 & T2: Prose sentences ending in period and lowercase words matching Roman numerals
+    # must not be treated as chapter headings.
+    assert is_chapter_heading(line) is False
+
+
+def test_is_chapter_heading_unicode_whitespace_before_delimiter() -> None:
+    # T3: Whitespace before delimiter should accept NBSP (\u00a0)
+    assert is_chapter_heading("Chương 1\u00a0: Mở đầu") is True
+    assert is_chapter_heading("Chapter 1\u00a0: The Beginning") is True
