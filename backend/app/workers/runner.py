@@ -92,53 +92,22 @@ async def _process_job_async(job_id: str) -> None:
 
             text = await filesystem.read_source(job_id)
             try:
-                try:
-                    orchestrator = build_orchestrator(
-                        settings_for_translation_pin(settings, fresh),
-                        for_mode=fresh.mode,
-                    )
-                except TypeError:
-                    orchestrator = build_orchestrator(
-                        settings_for_translation_pin(settings, fresh),
-                    )
+                orchestrator = build_orchestrator(
+                    settings_for_translation_pin(settings, fresh),
+                    for_mode=fresh.mode,
+                )
             except ProviderConfigurationError as exc:
-                if fresh.mode == JobMode.NARRATE:
-                    from app.domain.ports import NullTranslationProvider
-
-                    try:
-                        orchestrator = build_orchestrator(
-                            settings_for_translation_pin(settings, fresh),
-                            translation_provider=NullTranslationProvider(),
-                        )
-                    except (TypeError, ProviderConfigurationError) as fallback_exc:
-                        final_exc = (
-                            fallback_exc
-                            if isinstance(fallback_exc, ProviderConfigurationError)
-                            else exc
-                        )
-                        logger.error(
-                            "worker_provider_configuration_error",
-                            extra={"job_id": job_id, "error": str(final_exc)},
-                        )
-                        service = build_job_service(settings)
-                        await service.mark_failed(
-                            job_id,
-                            ErrorType.PROVIDER_CONFIGURATION_ERROR,
-                            str(final_exc),
-                        )
-                        return
-                else:
-                    logger.error(
-                        "worker_provider_configuration_error",
-                        extra={"job_id": job_id, "error": str(exc)},
-                    )
-                    service = build_job_service(settings)
-                    await service.mark_failed(
-                        job_id,
-                        ErrorType.PROVIDER_CONFIGURATION_ERROR,
-                        str(exc),
-                    )
-                    return
+                logger.error(
+                    "worker_provider_configuration_error",
+                    extra={"job_id": job_id, "error": str(exc)},
+                )
+                service = build_job_service(settings)
+                await service.mark_failed(
+                    job_id,
+                    ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                    str(exc),
+                )
+                return
             await orchestrator.run(fresh, text, workspace=workspace)
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

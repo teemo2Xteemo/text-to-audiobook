@@ -112,14 +112,14 @@ def _pin_from_mapping(data: Mapping[str, Any]) -> tuple[str | None, str | None]:
 
 @dataclass(frozen=True)
 class Job:
-    id: str = ""
-    status: JobStatus = JobStatus.QUEUED
-    source_language: str = ""
-    target_language: str = ""
-    voice: str | None = None
-    speed: float = SPEED_DEFAULT
-    output_format: OutputFormat = OutputFormat.MP3
-    output_bitrate_kbps: int = 128
+    id: str
+    status: JobStatus
+    source_language: str
+    target_language: str
+    voice: str | None
+    speed: float
+    output_format: OutputFormat
+    output_bitrate_kbps: int
     chunk_current: int = 0
     chunk_total: int = 0
     error_type: ErrorType | None = None
@@ -128,25 +128,13 @@ class Job:
     translation_model: str | None = None
     recovery_attempts: int = 0
     mode: JobMode = JobMode.TRANSLATE
-    translation_profile_id: str | None = None
-    job_id: str | None = None
 
     def __post_init__(self) -> None:
-        actual_id = self.id or self.job_id or ""
-        if not actual_id:
-            raise ValueError("id or job_id is required")
-        if self.id and self.job_id and self.id != self.job_id:
-            raise ValueError("id and job_id must match if both provided")
-        if self.id != actual_id:
-            object.__setattr__(self, "id", actual_id)
-        if self.job_id != actual_id:
-            object.__setattr__(self, "job_id", actual_id)
+        if not self.id:
+            raise ValueError("id is required")
 
         if self.recovery_attempts < 0:
             raise ValueError("recovery_attempts must be >= 0")
-
-        if self.mode == JobMode.NARRATE and self.translation_profile_id is not None:
-            raise ValueError("translation_profile_id must be None in narrate mode")
 
         provider = self.translation_provider
         model = self.translation_model
@@ -178,8 +166,6 @@ class Job:
         if self.translation_provider is not None and self.translation_model is not None:
             payload["translation_model"] = self.translation_model
             payload["translation_provider"] = self.translation_provider
-        if self.translation_profile_id is not None:
-            payload["translation_profile_id"] = self.translation_profile_id
         if self.recovery_attempts > 0:
             payload["recovery_attempts"] = self.recovery_attempts
         return payload
@@ -195,18 +181,15 @@ class Job:
             mode = JobMode(str(raw_mode))
         except ValueError:
             mode = JobMode.UNKNOWN
-        job_id = str(data.get("id") or data.get("job_id") or "")
         return cls(
-            id=job_id,
-            status=JobStatus(str(data["status"])) if "status" in data else JobStatus.QUEUED,
-            source_language=str(data.get("source_language", "")),
-            target_language=str(data.get("target_language", "")),
+            id=str(data["id"]),
+            status=JobStatus(str(data["status"])),
+            source_language=str(data["source_language"]),
+            target_language=str(data["target_language"]),
             voice=str(voice) if voice else None,
             speed=float(data.get("speed", SPEED_DEFAULT)),
-            output_format=OutputFormat(str(data["output_format"]))
-            if "output_format" in data
-            else OutputFormat.MP3,
-            output_bitrate_kbps=int(data.get("output_bitrate_kbps", 128)),
+            output_format=OutputFormat(str(data["output_format"])),
+            output_bitrate_kbps=int(data["output_bitrate_kbps"]),
             chunk_current=int(data.get("chunk_current", 0)),
             chunk_total=int(data.get("chunk_total", 0)),
             error_type=ErrorType(str(error_raw)) if error_raw else None,
@@ -215,5 +198,4 @@ class Job:
             translation_model=model,
             recovery_attempts=int(data.get("recovery_attempts", 0)),
             mode=mode,
-            translation_profile_id=data.get("translation_profile_id"),
         )

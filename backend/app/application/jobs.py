@@ -12,6 +12,7 @@ try:
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
+from app.application.pipeline.parse import is_srt_document
 from app.application.pipeline.tts import resolve_voice
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
@@ -65,6 +66,7 @@ class JobService:
         available_profiles: Sequence[TranslationProfile] | None = None,
         tts: TTSProvider | None = None,
         detector: LanguageDetector | None = None,
+        language_confirm_threshold: float = 0.70,
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
@@ -82,6 +84,7 @@ class JobService:
         )
         self._tts = tts
         self._detector = detector
+        self._language_confirm_threshold = language_confirm_threshold
 
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
@@ -94,6 +97,12 @@ class JobService:
         voice = command.voice.strip() if command.voice and command.voice.strip() else None
 
         if command.mode == JobMode.NARRATE:
+            if is_srt_document(text):
+                raise DomainError(
+                    ErrorType.INVALID_INPUT,
+                    "SRT narrate mode is coming in phase 2",
+                )
+
             if (
                 command.translation_profile_id is not None
                 and command.translation_profile_id.strip()
@@ -106,6 +115,13 @@ class JobService:
             if not source_language or source_language == AUTO_SOURCE_LANGUAGE:
                 if self._detector is not None:
                     detection = await self._detector.detect(text[:8192])
+                    if detection.confidence < self._language_confirm_threshold:
+                        msg = (
+                            f"Language detection confidence ({detection.confidence:.2f}) "
+                            f"is below threshold ({self._language_confirm_threshold:.2f}); "
+                            "please specify language explicitly"
+                        )
+                        raise DomainError(ErrorType.INVALID_INPUT, msg)
                     resolved_source = detection.language_code
                 else:
                     raise DomainError(

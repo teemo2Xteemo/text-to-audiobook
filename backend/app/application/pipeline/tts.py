@@ -45,29 +45,13 @@ def _is_dialect_voice(voice_or_lang: str) -> bool:
 
 
 def _get_all_voices(tts: TTSProvider) -> list[Voice]:
-    if hasattr(tts, "all_voices") and callable(tts.all_voices):
-        return list(tts.all_voices())
-    if hasattr(tts, "list_voices") and callable(tts.list_voices):
-        return list(tts.list_voices())
-    if hasattr(tts, "_all_voices") and callable(tts._all_voices):
-        return list(tts._all_voices())
-    if hasattr(tts, "voices_list"):
-        return list(getattr(tts, "voices_list"))
-    if hasattr(tts, "_voices"):
-        return list(getattr(tts, "_voices"))
-    if hasattr(tts, "languages") and callable(tts.languages):
-        voices: list[Voice] = []
-        for lang in tts.languages():
-            voices.extend(tts.voices_for(lang))
-        return voices
-    return []
+    return list(tts.all_voices())
 
 
 def _available_languages(tts: TTSProvider) -> set[str]:
-    if hasattr(tts, "languages") and callable(tts.languages):
-        langs = tts.languages()
-        if langs:
-            return set(langs)
+    langs = tts.languages()
+    if langs:
+        return set(langs)
     return {v.language for v in _get_all_voices(tts)}
 
 

@@ -33,6 +33,7 @@ _STATUS_BY_ERROR = {
     ErrorType.UNSUPPORTED_LANGUAGE: 400,
     ErrorType.PROVIDER_RATE_LIMIT: 429,
     ErrorType.STORAGE_FAILED: 503,
+    ErrorType.TIMEOUT: 504,
 }
 
 

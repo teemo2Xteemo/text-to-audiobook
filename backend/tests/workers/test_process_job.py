@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -68,7 +69,7 @@ def test_process_job_completes_with_fakes(tmp_path: Path, monkeypatch: pytest.Mo
     )
 
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
-    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _: orchestrator)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
 
     process_job(job.id)
 
@@ -102,7 +103,7 @@ def test_process_job_completed_is_noop(tmp_path: Path, monkeypatch: pytest.Monke
             return captured
 
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
-    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _: _Capture())
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: _Capture())
 
     process_job(job.id)
     assert runs == []
@@ -133,7 +134,7 @@ def test_process_job_failed_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             return captured
 
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
-    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _: _Capture())
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: _Capture())
 
     process_job(job.id)
     assert runs == []
@@ -204,7 +205,7 @@ def test_process_job_resumes_generating_audio(
         max_chars=20,
     )
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
-    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _: orchestrator)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
 
     process_job(job.id)
 
@@ -309,8 +310,8 @@ def _capture_pin(
 
     monkeypatch.setattr(NllbTranslationProvider, "__init__", _spy_nllb)
 
-    def _build(effective: Settings) -> PipelineOrchestrator:
-        orchestrator = build_orchestrator(effective)
+    def _build(effective: Settings, **_kw: Any) -> PipelineOrchestrator:
+        orchestrator = build_orchestrator(effective, **_kw)
         captured["provider"] = effective.translation_provider
         captured["model"] = effective.ollama_translation_model
         captured["nllb_model"] = effective.nllb_model_id
@@ -461,8 +462,8 @@ def test_process_job_skips_when_workspace_lock_is_held(
     settings = Settings(_env_file=None, storage_path=tmp_path)
     ran: list[str] = []
 
-    def _unexpected_build(effective: Settings) -> PipelineOrchestrator:
-        del effective
+    def _unexpected_build(effective: Settings, **_kw: Any) -> PipelineOrchestrator:
+        del effective, _kw
         ran.append("built")
         raise AssertionError("orchestrator should not be built when job lock is held")
 
@@ -497,8 +498,8 @@ def test_process_job_rereads_job_after_acquiring_lock(
             await self.save_job(replace(job, status=JobStatus.COMPLETED))
         return loaded
 
-    def _unexpected_build(effective: Settings) -> PipelineOrchestrator:
-        del effective
+    def _unexpected_build(effective: Settings, **_kw: Any) -> PipelineOrchestrator:
+        del effective, _kw
         built.append("built")
         raise AssertionError("orchestrator must not be built for a job completed before lock")
 

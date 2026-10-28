@@ -28,18 +28,7 @@ class FakeTTSProvider:
         self.calls: list[tuple[str, str, str, TTSSettings]] = []
         self._count = 0
 
-    @property
-    def voices_list(self) -> list[Voice]:
-        return self._voices
-
-    @voices_list.setter
-    def voices_list(self, voices: Sequence[Voice]) -> None:
-        self._voices = list(voices)
-
-    def all_voices(self) -> list[Voice]:
-        return list(self._voices)
-
-    def list_voices(self) -> list[Voice]:
+    def all_voices(self) -> Sequence[Voice]:
         return list(self._voices)
 
     def voices_for(self, language: str) -> Sequence[Voice]:

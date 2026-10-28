@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import threading
 import time
@@ -230,7 +231,9 @@ async def analyze_text(
     duration_estimate_seconds = round(
         char_len / max(1.0, float(settings.estimate_chars_per_second)), 1
     )
-    process_time_estimate_seconds = round(duration_estimate_seconds * 0.15, 1)
+    process_time_estimate_seconds = round(
+        duration_estimate_seconds * float(settings.estimate_process_time_ratio), 1
+    )
     preview_lines = [line.strip() for line in slice_text.splitlines() if line.strip()][:5]
 
     return AnalyzeResponse(
@@ -263,7 +266,7 @@ def truncate_preview_text(text: str, max_chars: int = 300) -> str:
 
 
 class InMemoryRateLimiter:
-    """Thread-safe sliding window in-memory rate limiter per key."""
+    """Thread-safe sliding window in-memory rate limiter per process / client host."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -310,19 +313,22 @@ async def tts_preview(
         raise DomainError(ErrorType.INVALID_INPUT, "voice is required")
     ensure_valid_speed(req.speed)
 
-    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-        request.client.host if request.client else "unknown"
-    )
+    client_ip = request.client.host if request.client else "unknown"
     _preview_rate_limiter.check(client_ip, settings.tts_preview_rate_per_minute)
 
     preview_text = truncate_preview_text(req.text.strip())
 
-    artifact = await tts.synthesize(
-        preview_text,
-        language="",
-        voice=req.voice,
-        settings=TTSSettings(speed=req.speed),
-    )
+    try:
+        async with asyncio.timeout(float(settings.tts_preview_timeout_seconds)):
+            artifact = await tts.synthesize(
+                preview_text,
+                language="",
+                voice=req.voice,
+                settings=TTSSettings(speed=req.speed),
+            )
+    except TimeoutError as exc:
+        raise DomainError(ErrorType.TIMEOUT, "TTS preview timed out") from exc
+
     if not artifact.path.is_file():
         raise DomainError(ErrorType.STORAGE_FAILED, "synthesized audio artifact missing")
 

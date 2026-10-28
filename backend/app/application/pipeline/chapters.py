@@ -6,10 +6,13 @@ from app.domain.chunking import CHUNK_MAX_CHARS, Chunk
 
 __all__ = ["Chapter", "chunk_by_chapter", "split_chapters"]
 
+_MAX_HEADING_LEN = 60
+_DELIMITER_OR_END = r"(?=[\s:：、，,。.·!！?？\-_/\\()（）\[\]]|$)"
+
 _CHAPTER_HEADING_PATTERN = re.compile(
-    r"^\s*(?:"
-    r"第\s*[0-9零一二三四五六七八九十百千万两]+\s*[章回节卷]|"
-    r"(?:Chương|Hồi)\s+(?:\d+|[IVXLCDM]+)\b|"
+    r"^[ \t]*(?:"
+    r"第\s*[0-9０-９零一二三四五六七八九十百千万两]+\s*[章回节卷]" + _DELIMITER_OR_END + r"|"
+    r"(?:Chương|Hồi)\s+(?:\d+|[IVXLCDM]+)" + _DELIMITER_OR_END + r"|"
     r"(?:Chapter|Book|Act)\s+(?:\d+|[IVXLCDM]+)\b"
     r").*",
     re.MULTILINE | re.IGNORECASE,
@@ -26,8 +29,10 @@ class Chapter:
 
 def split_chapters(text: str) -> list[Chapter]:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    matches = list(_CHAPTER_HEADING_PATTERN.finditer(normalized))
-    if len(matches) < 2:
+    raw_matches = list(_CHAPTER_HEADING_PATTERN.finditer(normalized))
+    matches = [m for m in raw_matches if len(m.group(0).strip()) <= _MAX_HEADING_LEN]
+
+    if not matches:
         stripped = normalized.strip()
         return [
             Chapter(
@@ -40,6 +45,17 @@ def split_chapters(text: str) -> list[Chapter]:
 
     chapters: list[Chapter] = []
     preface = normalized[: matches[0].start()].strip()
+    next_index = 1
+    if preface:
+        chapters.append(
+            Chapter(
+                index=next_index,
+                title="",
+                body=preface,
+                char_count=len(preface),
+            )
+        )
+        next_index += 1
 
     for i, match in enumerate(matches):
         title = match.group(0).strip()
@@ -47,17 +63,15 @@ def split_chapters(text: str) -> list[Chapter]:
         body_end = matches[i + 1].start() if i + 1 < len(matches) else len(normalized)
         body = normalized[body_start:body_end].strip()
 
-        if i == 0 and preface:
-            body = f"{preface}\n\n{body}".strip() if body else preface
-
         chapters.append(
             Chapter(
-                index=i + 1,
+                index=next_index,
                 title=title,
                 body=body,
                 char_count=len(body),
             )
         )
+        next_index += 1
 
     return chapters
 

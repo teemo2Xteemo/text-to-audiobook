@@ -47,6 +47,9 @@ _ALLOWED_ENCODINGS = frozenset(
     }
 )
 _CHINESE_ENCODINGS = frozenset({"gb18030", "gbk", "gb2312", "big5", "big5hkscs", "cp950"})
+_LATIN_ENCODINGS = frozenset(
+    {"latin_1", "latin-1", "iso8859_1", "iso-8859-1", "cp1252", "windows-1252"}
+)
 
 
 def _select_charset_match(
@@ -73,6 +76,10 @@ def _select_charset_match(
             and "CJK Unified Ideographs" in m.alphabets
             and has_pure_cjk_candidate
         ):
+            continue
+        if enc in _LATIN_ENCODINGS and has_pure_cjk_candidate:
+            continue
+        if enc in _LATIN_ENCODINGS and getattr(m, "coherence", 0.0) < 0.1:
             continue
         return m
     return None
@@ -256,10 +263,7 @@ async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
     body = await request.body()
     if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
         raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
-    try:
-        text, _ = _decode_source_text(body, max_upload_bytes)
-    except Exception:
-        text = body.decode("utf-8", errors="replace")
+    text, _ = _decode_source_text(body, max_upload_bytes)
     if not text.strip():
         raise DomainError(ErrorType.INVALID_INPUT, "text is required")
     return text

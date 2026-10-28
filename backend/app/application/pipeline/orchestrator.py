@@ -165,10 +165,12 @@ class PipelineOrchestrator:
         workspace: Path,
         checkpoints: CheckpointStore,
     ) -> Job:
-        cleaned_text = prepare_narration_text(text)
-        normalized, resolved = await parse_source(cleaned_text, job.source_language, self._detector)
+        normalized, resolved = await parse_source(text, job.source_language, self._detector)
+        cleaned_text = prepare_narration_text(normalized)
         chapters = split_chapters(cleaned_text)
         chunks = chunk_by_chapter(chapters, max_chars=self._max_chars)
+        if not chunks:
+            raise DomainError(ErrorType.INVALID_INPUT, "No readable text found for narration")
         target_lang = (
             resolved
             if not job.target_language or job.target_language == AUTO_SOURCE_LANGUAGE

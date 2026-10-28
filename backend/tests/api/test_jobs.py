@@ -864,6 +864,129 @@ def test_tts_preview_rate_limit(tmp_path: Path) -> None:
         _preview_rate_limiter.reset()
 
 
+def test_tts_preview_spoofed_x_forwarded_for_shares_bucket(tmp_path: Path) -> None:
+    from app.api.jobs import _preview_rate_limiter
+
+    _preview_rate_limiter.reset()
+    try:
+        settings = Settings(_env_file=None, storage_path=tmp_path, tts_preview_rate_per_minute=2)
+        app = create_app(settings)
+        with TestClient(app) as test_client:
+            # Client rotates X-Forwarded-For to try to evade limit
+            res1 = test_client.post(
+                "/api/tts/preview",
+                json={"text": "hello", "voice": "en-US-JennyNeural"},
+                headers={"X-Forwarded-For": "1.1.1.1"},
+            )
+            assert res1.status_code == 200
+            res2 = test_client.post(
+                "/api/tts/preview",
+                json={"text": "world", "voice": "en-US-JennyNeural"},
+                headers={"X-Forwarded-For": "2.2.2.2"},
+            )
+            assert res2.status_code == 200
+            res3 = test_client.post(
+                "/api/tts/preview",
+                json={"text": "again", "voice": "en-US-JennyNeural"},
+                headers={"X-Forwarded-For": "3.3.3.3"},
+            )
+            assert res3.status_code == 429
+            assert res3.json()["error_type"] == ErrorType.PROVIDER_RATE_LIMIT
+    finally:
+        _preview_rate_limiter.reset()
+
+
+def test_tts_preview_timeout_error(tmp_path: Path) -> None:
+    import asyncio
+
+    from app.api.deps import get_tts_provider
+    from app.api.jobs import _preview_rate_limiter
+    from app.domain.audio import AudioArtifact, TTSSettings
+
+    _preview_rate_limiter.reset()
+
+    class _HangingTTS:
+        async def synthesize(
+            self, text: str, language: str, voice: str, settings: TTSSettings
+        ) -> AudioArtifact:
+            await asyncio.sleep(1.0)
+            return AudioArtifact(path=tmp_path / "never.mp3")
+
+        def voices_for(self, language: str) -> list:
+            return []
+
+        def languages(self) -> set[str]:
+            return set()
+
+        def all_voices(self) -> list:
+            return []
+
+    try:
+        settings = Settings(
+            _env_file=None,
+            storage_path=tmp_path,
+            tts_preview_timeout_seconds=0.05,
+        )
+        app = create_app(settings)
+        app.dependency_overrides[get_tts_provider] = lambda: _HangingTTS()
+        with TestClient(app) as test_client:
+            res = test_client.post(
+                "/api/tts/preview",
+                json={"text": "hello hanging preview", "voice": "en-US-JennyNeural"},
+            )
+            assert res.status_code == 504
+            assert res.json()["error_type"] == ErrorType.TIMEOUT
+    finally:
+        _preview_rate_limiter.reset()
+
+
+def test_post_narrate_rejects_srt(jobs_client: TestClient) -> None:
+    srt_text = (
+        "1\n"
+        "00:00:01,000 --> 00:00:04,000\n"
+        "Hello subtitle world.\n\n"
+        "2\n"
+        "00:00:05,000 --> 00:00:08,000\n"
+        "Second subtitle line.\n"
+    )
+    res = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": srt_text,
+            "mode": "narrate",
+            "source_language": "en-US",
+            "voice": "fake-en-US-a",
+        },
+    )
+    assert res.status_code == 400
+    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
+    assert "SRT narrate mode is coming in phase 2" in res.json()["message"]
+
+
+def test_decode_source_text_small_gbk_and_big5_not_mojibake() -> None:
+    from app.api.parse import _decode_source_text
+
+    gbk_sample = "天王盖地虎，宝塔镇河妖。这是几百字节的中文小说片段。".encode("gbk")
+    text, enc = _decode_source_text(gbk_sample)
+    assert "天王盖地虎" in text
+    assert enc.lower() in ("gb18030", "gbk", "gb2312")
+
+    big5_sample = "倚天屠龍記，金庸武俠小說經典。繁體中文編碼測試。".encode("big5")
+    text_b5, enc_b5 = _decode_source_text(big5_sample)
+    assert "倚天屠龍記" in text_b5
+    assert enc_b5.lower() in ("big5", "big5hkscs", "cp950")
+
+
+def test_detect_language_rejects_null_bytes(client: TestClient) -> None:
+    res = client.post(
+        "/api/detect-language",
+        content=b"hello \x00 null bytes",
+        headers={"content-type": "text/plain"},
+    )
+    assert res.status_code == 400
+    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
+
+
 def test_detect_language_multipart_text(client: TestClient) -> None:
     res = client.post(
         "/api/detect-language",

@@ -40,6 +40,23 @@ type JobFormProps = {
 
 const SPEED_PRESETS = [0.75, 1.0, 1.25, 1.5] as const;
 
+const SAMPLE_PREVIEWS: Record<string, string> = {
+  vi: "Xin chào, đây là giọng đọc thử nghiệm cho sách nói của bạn.",
+  en: "Hello, this is a sample preview of this voice for your audiobook.",
+  ja: "こんにちは、これはオーディオブックの音声プレビューです。",
+  zh: "你好，这是您的有声书语音试听示例。",
+  ko: "안녕하세요, 오디오북 음성 미리듣기 샘플입니다.",
+  fr: "Bonjour, ceci est un aperçu audio pour votre livre audio.",
+  de: "Hallo, dies ist eine Hörprobe für Ihr Hörbuch.",
+  es: "Hola, esta es una muestra de audio para su audiolibro.",
+  ru: "Здравствуйте, это образец озвучивания для вашей аудиокниги.",
+};
+
+function getVoicePreviewSample(lang: string, fallbackText: string): string {
+  const prefix = lang.split("-")[0]?.toLowerCase();
+  return SAMPLE_PREVIEWS[prefix] || fallbackText || "Hello, this is a voice sample preview.";
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -256,10 +273,20 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     let active = true;
     const timer = setTimeout(() => {
       setIsAnalyzing(true);
-      analyze({ text: trimmed })
+      const sampleText = trimmed.length > 20000 ? trimmed.slice(0, 20000) : trimmed;
+      analyze({ text: sampleText })
         .then((res) => {
           if (active) {
-            setAnalysis(res);
+            if (trimmed.length > 20000) {
+              const ratio = trimmed.length / sampleText.length;
+              setAnalysis({
+                ...res,
+                duration_estimate_seconds: Math.round(res.duration_estimate_seconds * ratio * 10) / 10,
+                process_time_estimate_seconds: Math.round(res.process_time_estimate_seconds * ratio * 10) / 10,
+              });
+            } else {
+              setAnalysis(res);
+            }
             setIsAnalyzing(false);
           }
         })
@@ -379,9 +406,9 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
       return;
     }
     const sample = (
-      text.trim() ||
-      analysis?.preview_lines?.join(" ") ||
-      "Audio preview"
+      mode === "narrate"
+        ? (text.trim() || analysis?.preview_lines?.join(" ") || getVoicePreviewSample(activeVoiceLanguage, "Audio preview"))
+        : getVoicePreviewSample(targetLanguage, "Audio preview")
     ).slice(0, 200);
 
     setPreviewLoading(true);

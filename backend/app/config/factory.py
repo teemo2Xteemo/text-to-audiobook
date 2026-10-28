@@ -68,6 +68,7 @@ def build_job_service(settings: Settings) -> JobService:
         available_profiles=profiles,
         tts=tts,
         detector=build_language_detector(settings),
+        language_confirm_threshold=settings.language_confirm_threshold,
     )
 
 
@@ -320,7 +321,7 @@ def build_capabilities_service(settings: Settings) -> CapabilitiesService:
         translation_profiles=profiles,
         estimate_defaults={
             "chars_per_second": float(settings.estimate_chars_per_second),
-            "preview_wpm": float(settings.tts_preview_rate_per_minute),
+            "preview_wpm": float(settings.tts_preview_wpm),
         },
     )
 

@@ -26,6 +26,7 @@ def _service(
     available_profiles: list[TranslationProfile] | None = None,
     tts: TTSProvider | None = None,
     detector: LanguageDetector | None = None,
+    language_confirm_threshold: float = 0.70,
 ) -> tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue | FailingQueue]:
     store = jobs or InMemoryJobStore()
     storage = source or InMemorySourceStorage()
@@ -41,6 +42,7 @@ def _service(
         available_profiles=available_profiles,
         tts=tts,
         detector=detector,
+        language_confirm_threshold=language_confirm_threshold,
     )
     return service, store, storage, queued
 
@@ -781,22 +783,24 @@ def test_resolve_voice_family_fallback_and_cantonese_guard() -> None:
     from app.domain.errors import DomainError, ErrorType
     from app.providers.fake import FakeTTSProvider
 
-    fake_tts = FakeTTSProvider()
-    fake_tts.voices_list = [
-        Voice(id="en-GB-SoniaNeural", name="Sonia", language="en-GB", gender="female"),
-        Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female"),
-        Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female"),
-    ]
+    fake_tts = FakeTTSProvider(
+        voices=[
+            Voice(id="en-GB-SoniaNeural", name="Sonia", language="en-GB", gender="female"),
+            Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female"),
+            Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female"),
+        ]
+    )
 
     # Family fallback: en-US falls back to en-GB
     voice = resolve_voice(fake_tts, "en-US", None)
     assert voice == "en-GB-SoniaNeural"
 
     # Cantonese guard: zh-HK never falls back to zh-CN
-    fake_cantonese_only = FakeTTSProvider()
-    fake_cantonese_only.voices_list = [
-        Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female")
-    ]
+    fake_cantonese_only = FakeTTSProvider(
+        voices=[
+            Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female"),
+        ]
+    )
     with pytest.raises(DomainError) as exc_info:
         resolve_voice(fake_cantonese_only, "zh-CN", None)
     assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
@@ -808,10 +812,11 @@ def test_resolve_voice_cantonese_text_does_not_fall_back_to_mandarin() -> None:
     from app.domain.errors import DomainError, ErrorType
     from app.providers.fake import FakeTTSProvider
 
-    fake_mandarin_only = FakeTTSProvider()
-    fake_mandarin_only.voices_list = [
-        Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female")
-    ]
+    fake_mandarin_only = FakeTTSProvider(
+        voices=[
+            Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female"),
+        ]
+    )
     with pytest.raises(DomainError) as exc_info:
         resolve_voice(fake_mandarin_only, "zh-HK", None)
     assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
@@ -823,11 +828,12 @@ def test_resolve_voice_explicit_cross_cantonese_mandarin_rejected() -> None:
     from app.domain.errors import DomainError, ErrorType
     from app.providers.fake import FakeTTSProvider
 
-    fake_tts = FakeTTSProvider()
-    fake_tts.voices_list = [
-        Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female"),
-        Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female"),
-    ]
+    fake_tts = FakeTTSProvider(
+        voices=[
+            Voice(id="zh-HK-HiuGaaiNeural", name="HiuGaai", language="zh-HK", gender="female"),
+            Voice(id="zh-CN-XiaoxiaoNeural", name="Xiaoxiao", language="zh-CN", gender="female"),
+        ]
+    )
     with pytest.raises(DomainError) as exc_info:
         resolve_voice(fake_tts, "zh-CN", "zh-HK-HiuGaaiNeural")
     assert exc_info.value.error_type == ErrorType.UNSUPPORTED_LANGUAGE
@@ -843,11 +849,12 @@ def test_resolve_voice_explicit_voice_selection_and_invalid() -> None:
     from app.domain.errors import DomainError, ErrorType
     from app.providers.fake import FakeTTSProvider
 
-    fake_tts = FakeTTSProvider()
-    fake_tts.voices_list = [
-        Voice(id="en-GB-SoniaNeural", name="Sonia", language="en-GB", gender="female"),
-        Voice(id="en-US-JennyNeural", name="Jenny", language="en-US", gender="female"),
-    ]
+    fake_tts = FakeTTSProvider(
+        voices=[
+            Voice(id="en-GB-SoniaNeural", name="Sonia", language="en-GB", gender="female"),
+            Voice(id="en-US-JennyNeural", name="Jenny", language="en-US", gender="female"),
+        ]
+    )
 
     # Exact selection
     assert resolve_voice(fake_tts, "en-US", "en-US-JennyNeural") == "en-US-JennyNeural"
@@ -872,11 +879,12 @@ def test_resolve_voice_skips_mandarin_dialects_in_auto_fallback_unless_explicit(
     from app.domain.audio import Voice
     from app.providers.fake import FakeTTSProvider
 
-    fake_tts = FakeTTSProvider()
-    fake_tts.voices_list = [
-        Voice(id="zh-CN-liaoning-XiaobeiNeural", language="zh-CN-liaoning"),
-        Voice(id="zh-TW-HsiaoChenNeural", language="zh-TW"),
-    ]
+    fake_tts = FakeTTSProvider(
+        voices=[
+            Voice(id="zh-CN-liaoning-XiaobeiNeural", language="zh-CN-liaoning"),
+            Voice(id="zh-TW-HsiaoChenNeural", language="zh-TW"),
+        ]
+    )
 
     # Automatic fallback skips liaoning dialect and picks zh-TW
     assert resolve_voice(fake_tts, "zh-CN", None) == "zh-TW-HsiaoChenNeural"
@@ -895,14 +903,15 @@ def test_fake_tts_languages_and_voice_inspection() -> None:
     fake_tts = FakeTTSProvider()
     assert len(fake_tts.languages()) > 0
     assert len(fake_tts.all_voices()) > 0
-    assert len(fake_tts.list_voices()) > 0
 
-    fake_tts.voices_list = [
-        Voice(id="v1", language="en-US"),
-        Voice(id="v2", language="en-GB"),
-    ]
-    assert fake_tts.languages() == {"en-US", "en-GB"}
-    assert [v.id for v in fake_tts.voices_list] == ["v1", "v2"]
+    fake_tts_custom = FakeTTSProvider(
+        voices=[
+            Voice(id="v1", language="en-US"),
+            Voice(id="v2", language="en-GB"),
+        ]
+    )
+    assert fake_tts_custom.languages() == {"en-US", "en-GB"}
+    assert [v.id for v in fake_tts_custom.all_voices()] == ["v1", "v2"]
 
 
 @pytest.fixture
@@ -1000,10 +1009,11 @@ def test_create_narrate_job_resolves_voice_via_tts() -> None:
     from app.domain.jobs import JobMode
     from app.providers.fake import FakeTTSProvider
 
-    fake_tts = FakeTTSProvider()
-    fake_tts.voices_list = [
-        Voice(id="vi-VN-HoaiMyNeural", name="HoaiMy", language="vi-VN", gender="female"),
-    ]
+    fake_tts = FakeTTSProvider(
+        voices=[
+            Voice(id="vi-VN-HoaiMyNeural", name="HoaiMy", language="vi-VN", gender="female"),
+        ]
+    )
     service, _, _, _ = _service(tts=fake_tts)
     job = asyncio.run(
         service.create(
@@ -1016,3 +1026,33 @@ def test_create_narrate_job_resolves_voice_via_tts() -> None:
         )
     )
     assert job.voice == "vi-VN-HoaiMyNeural"
+
+
+def test_create_narrate_job_low_detection_confidence_raises() -> None:
+    from app.domain.jobs import JobMode
+    from app.domain.languages import LanguageDetection
+
+    class _LowConfidenceDetector:
+        async def detect(self, text: str) -> LanguageDetection:
+            return LanguageDetection(language_code="en-US", confidence=0.45)
+
+        async def detect_candidates(self, text: str) -> list[tuple[str, float]]:
+            return [("en-US", 0.45)]
+
+    service, _, _, _ = _service(
+        detector=_LowConfidenceDetector(),
+        language_confirm_threshold=0.70,
+    )
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(
+            service.create(
+                CreateJobCommand(
+                    text="Ambiguous text snippet",
+                    source_language="auto",
+                    target_language="",
+                    mode=JobMode.NARRATE,
+                )
+            )
+        )
+    assert exc.value.error_type == ErrorType.INVALID_INPUT
+    assert "below threshold" in exc.value.message

@@ -4,30 +4,61 @@ from app.application.pipeline.chapters import Chapter, chunk_by_chapter, split_c
 def test_split_chapters_multilingual():
     text_cn = "序言\n内容\n第一章 启程\n内容一\n第二章 远行\n内容二"
     chapters = split_chapters(text_cn)
-    assert len(chapters) == 2
-    assert chapters[0].title == "第一章 启程"
-    assert chapters[1].title == "第二章 远行"
+    # Preface is chapter 1, followed by Chapter 1 and Chapter 2
+    assert len(chapters) == 3
+    assert chapters[0].title == ""
+    assert "序言" in chapters[0].body
+    assert chapters[1].title == "第一章 启程"
+    assert chapters[2].title == "第二章 远行"
 
     text_vn = "Chương 1: Mở đầu\nNội dung 1\nChương 2: Diễn biến\nNội dung 2"
     chapters_vn = split_chapters(text_vn)
     assert len(chapters_vn) == 2
 
-    # Under 2 headings -> single chapter
+    # Single heading preserves chapter title
     text_short = "Chapter 1: The Only One\nContent"
     chapters_single = split_chapters(text_short)
     assert len(chapters_single) == 1
-    assert chapters_single[0].title == "Full text"
+    assert chapters_single[0].title == "Chapter 1: The Only One"
+    assert chapters_single[0].body == "Content"
 
 
-def test_split_chapters_preface_preserved_in_first_chapter():
+def test_split_chapters_preface_emitted_before_first_chapter():
     text_cn = "序言\n这是一段前言。\n第一章 启程\n正文开始。\n第二章 结束\n正文结束。"
     chapters = split_chapters(text_cn)
+    assert len(chapters) == 3
+    # Preface chunk has title="" so it is read before Chapter 1 title
+    assert chapters[0].index == 1
+    assert chapters[0].title == ""
+    assert "序言\n这是一段前言。" in chapters[0].body
+
+    assert chapters[1].index == 2
+    assert chapters[1].title == "第一章 启程"
+    assert chapters[1].body == "正文开始。"
+
+    assert chapters[2].index == 3
+    assert chapters[2].title == "第二章 结束"
+    assert chapters[2].body == "正文结束。"
+
+
+def test_split_chapters_chinese_action_prose_does_not_split():
+    # Combat prose starting with '第三回合' should NOT match as a chapter heading
+    text = "第三回合，他一拳打向了对手的胸口，将对方震退了三步。\n接下来的战斗更加激烈。"
+    chapters = split_chapters(text)
+    assert len(chapters) == 1
+    assert chapters[0].title == "Full text"
+    assert chapters[0].body == text
+
+
+def test_split_chapters_chinese_full_width_and_standalone_headings():
+    # Full-width digits and standalone headings
+    text = "第１章 开端\n这里是开端内容。\n\n第十二章\n这里是第十二章内容。"
+    chapters = split_chapters(text)
     assert len(chapters) == 2
-    assert chapters[0].title == "第一章 启程"
-    assert "序言" in chapters[0].body
-    assert "这是一段前言。" in chapters[0].body
-    assert "正文开始。" in chapters[0].body
-    assert chapters[0].char_count == len(chapters[0].body)
+    assert chapters[0].title == "第１章 开端"
+    assert chapters[0].body == "这里是开端内容。"
+    assert chapters[1].title == "第十二章"
+    assert chapters[1].body == "这里是第十二章内容。"
 
 
 def test_split_chapters_english_multichapter():

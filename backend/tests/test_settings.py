@@ -43,13 +43,12 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.ollama_http_timeout_seconds == 120.0
     assert settings.language_detect_min_confidence == 0.5
     assert settings.language_confirm_threshold == 0.70
-    assert settings.LANGUAGE_CONFIRM_THRESHOLD == 0.70
-    assert settings.tts_preview_rate_per_minute == 150
-    assert settings.TTS_PREVIEW_RATE_PER_MINUTE == 150
+    assert settings.tts_preview_wpm == 150.0
+    assert settings.tts_preview_rate_per_minute == 30
+    assert settings.tts_preview_timeout_seconds == 15.0
     assert settings.estimate_chars_per_second == 15.0
-    assert settings.ESTIMATE_CHARS_PER_SECOND == 15.0
     assert settings.estimate_translation_expansion == 1.2
-    assert settings.ESTIMATE_TRANSLATION_EXPANSION == 1.2
+    assert settings.estimate_process_time_ratio == 0.15
     assert settings.tts_default_voice_by_language == ""
     assert settings.retry_max_attempts == 3
     assert settings.retry_backoff_seconds == 1.0

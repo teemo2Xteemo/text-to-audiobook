@@ -721,7 +721,8 @@ def test_factory_wires_job_service_and_capabilities_for_narrate(tmp_path: Path) 
         translation_provider="fake",
         tts_provider="fake",
         estimate_chars_per_second=18.5,
-        tts_preview_rate_per_minute=160,
+        tts_preview_wpm=160.0,
+        tts_preview_rate_per_minute=20,
     )
     job_service = build_job_service(settings)
     assert job_service._tts is not None

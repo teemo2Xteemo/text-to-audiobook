@@ -107,6 +107,9 @@ class EdgeTTSProvider:
             raise DomainError(ErrorType.TTS_FAILED, "tts failed")
         return AudioArtifact(path=path)
 
+    def all_voices(self) -> Sequence[Voice]:
+        return self._all_voices()
+
     def _all_voices(self) -> list[Voice]:
         if self._voices is None:
             try:

@@ -1107,6 +1107,26 @@ def test_narrate_mode_splits_chapters_and_preserves_titles(tmp_path: Path) -> No
     assert "They traveled across the mountains." in chunk_2_text
 
 
+def test_narrate_mode_empty_readable_text_raises_invalid_input(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-empty-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, _, jobs = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+    )
+    result = _run(orchestrator, job, workspace, text="***\n---\n===")
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.INVALID_INPUT
+    assert "No readable text found" in (result.message or "")
+
+
 def test_translate_same_language_bypasses_translation(tmp_path: Path) -> None:
     job = _job(
         id="test-trans-same-1",
