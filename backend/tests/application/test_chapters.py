@@ -325,7 +325,9 @@ def test_split_chapters_unicode_whitespace_volume_and_chapter() -> None:
         "Chapter 3- and then he was gone",
         "Chapter 3: I came home late that night",
         "Chương 3: Hắn bước vào phòng vắng",
-        "Chương 3: Ông lão bước vào căn phòng tối",
+        "Chương 2: Anh ấy bước vào phòng",
+        "Chương 1: Anh ta ngẩng đầu lên nhìn trời",
+        "Chương 2: Cô ấy mỉm cười rồi quay đi",
         "Chương 3: Ta bước vào căn phòng tối",
         "Chương 3: Nàng mỉm cười nhìn hắn rồi đi",
         "Hồi 3 tuổi, cậu bé ...",
@@ -338,7 +340,7 @@ def test_split_chapters_unicode_whitespace_volume_and_chapter() -> None:
     ],
 )
 def test_is_chapter_heading_disqualifies_sentences_and_english_words(line: str) -> None:
-    # T1, T2, U2, V1, X2, Y3, Z1: Prose ending in period, lowercase phrases after delimiter,
+    # T1, T2, U2, V1, X2, Y3, Z1, BB1: Prose ending in period, lowercase phrases after delimiter,
     # sentence-cased pronoun-led sentences, and words matching Roman numerals must not be headings.
     assert is_chapter_heading(line) is False
 
@@ -370,12 +372,16 @@ def test_is_chapter_heading_disqualifies_sentences_and_english_words(line: str) 
         "Chương 9: Bà la sát hiện thân",
         "Chương 2: Cô gái.",
         "Chương 1: Thiếu niên áo trắng xuất hiện",
+        "Chương 4: Lão tổ lại xuất thế",
+        "Chương 3: Anh hùng đã trở lại nơi cũ",
+        "Chương 8: Cô gái đi lạc giữa rừng sâu",
+        "Chương 15: Ông lão đang chờ ở cổng",
         "Tập 2: Đi.",
         "Chapter IV",
     ],
 )
 def test_is_chapter_heading_accepts_valid_short_titles_with_dots_or_ellipsis(line: str) -> None:
-    # U1, V1, X1, X2, Y1, Z1, AA1: Valid titles with initial stopwords after delimiter,
+    # U1, V1, X1, X2, Y1, Z1, AA1, BB1: Valid titles with initial stopwords after delimiter,
     # dot delimiters, Title-Cased pronoun headings (even short/dotted), kinship noun titles,
     # periods, or ellipsis.
     assert is_chapter_heading(line) is True

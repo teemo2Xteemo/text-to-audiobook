@@ -108,34 +108,27 @@ _KINSHIP_STARTERS = {
     "chúng",
 }
 
-_COMMON_NARRATIVE_VERBS = {
-    "bước",
-    "nói",
-    "đi",
-    "nhìn",
-    "cười",
-    "đứng",
-    "ngồi",
-    "chạy",
-    "thấy",
-    "nghe",
-    "hỏi",
-    "đáp",
-    "bảo",
-    "kể",
-    "đã",
-    "đang",
-    "vẫn",
-    "sẽ",
-    "liền",
-    "lại",
-    "vội",
-    "quay",
-    "lấy",
-    "rút",
-    "bắt",
-    "cầm",
+_DEMONSTRATIVE_MARKERS = {
+    "ấy",
+    "ta",
+    "kia",
+    "này",
+    "nọ",
+    "mình",
 }
+
+
+def _is_pronoun_led(words: list[str]) -> bool:
+    if not words:
+        return False
+    first_w = words[0].strip("\"'“”‘’:;,.").lower()
+    if first_w in _UNAMBIGUOUS_PRONOUNS:
+        return True
+    if first_w in _KINSHIP_STARTERS and len(words) >= 2:
+        second_w = words[1].strip("\"'“”‘’:;,.").lower()
+        if second_w in _DEMONSTRATIVE_MARKERS:
+            return True
+    return False
 
 
 def _is_sentence_cased(trailing_words: list[str]) -> bool:
@@ -167,36 +160,20 @@ def _is_prose_delimiter(rest: str) -> bool:
     if rest[0].islower():
         return True
     words = rest.split()
-    first_w = words[0].strip("\"'“”‘’:;,.").lower()
     trailing_words = [clean for w in words[1:] if (clean := w.strip("\"'“”‘’:;,-—([<"))]
 
     # Ending in a single period and looks like a full sentence:
     if rest.endswith(".") and not rest.endswith(("...", "…")):
         if len(words) >= 4 or len(rest) > 25:
             return True
-        if first_w in _UNAMBIGUOUS_PRONOUNS and len(words) >= 2:
-            # If trailing words are predominantly Title Case (e.g. 'Chapter 7: It Ends.',
-            # 'Chương 3: Ta Trở Về.'), it is a chapter title, not prose.
-            if _is_sentence_cased(trailing_words):
-                return True
-        if (
-            first_w in _KINSHIP_STARTERS
-            and len(words) >= 2
-            and any(w.strip("\"'“”‘’:;,.").lower() in _COMMON_NARRATIVE_VERBS for w in words[1:4])
-            and _is_sentence_cased(trailing_words)
-        ):
+        if _is_pronoun_led(words) and len(words) >= 2 and _is_sentence_cased(trailing_words):
             return True
+
     # Narrative sentence without trailing period (hard-wrapped, e.g. >= 5 words starting
     # with a subject pronoun and written in sentence case rather than Title Case)
-    if len(words) >= 5:
-        if first_w in _UNAMBIGUOUS_PRONOUNS and _is_sentence_cased(trailing_words):
-            return True
-        if (
-            first_w in _KINSHIP_STARTERS
-            and any(w.strip("\"'“”‘’:;,.").lower() in _COMMON_NARRATIVE_VERBS for w in words[1:4])
-            and _is_sentence_cased(trailing_words)
-        ):
-            return True
+    if len(words) >= 5 and _is_pronoun_led(words) and _is_sentence_cased(trailing_words):
+        return True
+
     return False
 
 
