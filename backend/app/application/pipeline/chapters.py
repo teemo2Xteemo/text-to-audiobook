@@ -80,14 +80,38 @@ _EN_PROSE_STOPWORDS = {
 }
 
 
-_PRONOUN_STARTERS = {"he", "she", "they", "i", "we", "it", "hắn", "nó", "ông"}
+_PRONOUN_STARTERS = {
+    # English subject pronouns
+    "he",
+    "she",
+    "they",
+    "i",
+    "we",
+    "it",
+    # Vietnamese personal pronouns common in fiction / novel narration
+    "hắn",
+    "nó",
+    "ông",
+    "bà",
+    "anh",
+    "chị",
+    "cô",
+    "cậu",
+    "ta",
+    "tôi",
+    "nàng",
+    "y",
+    "lão",
+    "chúng",
+}
 
 
 def _is_sentence_cased(trailing_words: list[str]) -> bool:
-    if not trailing_words:
+    alpha_words = [w for w in trailing_words if w and w[0].isalpha()]
+    if not alpha_words:
         return False
-    lowercase_count = sum(1 for w in trailing_words if w[0].islower())
-    return lowercase_count > len(trailing_words) / 2
+    lowercase_count = sum(1 for w in alpha_words if w[0].islower())
+    return lowercase_count > len(alpha_words) / 2
 
 
 def _is_prose_space(rest: str, stopwords: set[str]) -> bool:
