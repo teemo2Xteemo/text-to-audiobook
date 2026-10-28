@@ -80,6 +80,16 @@ _EN_PROSE_STOPWORDS = {
 }
 
 
+_PRONOUN_STARTERS = {"he", "she", "they", "i", "we", "it", "hắn", "nó", "ông"}
+
+
+def _is_sentence_cased(trailing_words: list[str]) -> bool:
+    if not trailing_words:
+        return False
+    lowercase_count = sum(1 for w in trailing_words if w[0].islower())
+    return lowercase_count > len(trailing_words) / 2
+
+
 def _is_prose_space(rest: str, stopwords: set[str]) -> bool:
     if not rest:
         return False
@@ -102,21 +112,21 @@ def _is_prose_delimiter(rest: str) -> bool:
         return True
     words = rest.split()
     first_w = words[0].strip("\"'“”‘’:;,.").lower()
+    trailing_words = [clean for w in words[1:] if (clean := w.strip("\"'“”‘’:;,-—([<"))]
+
     # Ending in a single period and looks like a full sentence:
     if rest.endswith(".") and not rest.endswith(("...", "…")):
         if len(words) >= 4 or len(rest) > 25:
             return True
-        if (
-            first_w in {"he", "she", "they", "i", "we", "it", "hắn", "nó", "ông"}
-            and len(words) >= 2
-        ):
-            return True
+        if first_w in _PRONOUN_STARTERS and len(words) >= 2:
+            # If trailing words are predominantly Title Case (e.g. 'Chapter 7: It Ends.',
+            # 'Chương 3: Ông Lão.'), it is a chapter title, not prose.
+            if _is_sentence_cased(trailing_words):
+                return True
     # Narrative sentence without trailing period (hard-wrapped, e.g. >= 5 words starting
     # with a subject pronoun and written in sentence case rather than Title Case)
-    if len(words) >= 5 and first_w in {"he", "she", "they", "i", "we", "it", "hắn", "nó"}:
-        trailing_words = [clean for w in words[1:] if (clean := w.strip("\"'“”‘’:;,-—([<"))]
-        lowercase_count = sum(1 for w in trailing_words if w[0].islower())
-        if lowercase_count > len(trailing_words) / 2:
+    if len(words) >= 5 and first_w in _PRONOUN_STARTERS:
+        if _is_sentence_cased(trailing_words):
             return True
     return False
 
