@@ -38,8 +38,8 @@ def is_chapter_heading(line: str) -> bool:
     stripped = line.strip()
     if not stripped or len(stripped) > _MAX_HEADING_LEN:
         return False
-    # Entire line ending in sentence-ending punctuation is prose
-    if stripped.endswith((".", "。")):
+    # Entire line ending in Chinese sentence period is prose
+    if stripped.endswith("。"):
         return False
 
     # 1. Chinese headings
@@ -52,8 +52,8 @@ def is_chapter_heading(line: str) -> bool:
         if re.match(r"^[:：、\-_/\\–—「」『』【】《》〈〉()（）\[\]]", after):
             # Non-space delimiter: e.g. 第1章「开端」, 第3章【突破】, 第一章：开端
             return True
-        if after[0] in " \t":
-            # Space + title, e.g. 第一章 天才, 第一回 启程
+        if after[0].isspace():
+            # Space + title, e.g. 第一章 天才, 第一回 启程, 第一回\u3000启程
             rest = after.strip()
             if not rest:
                 return True
@@ -70,20 +70,24 @@ def is_chapter_heading(line: str) -> bool:
     m_vi = _VI_HEAD.match(stripped)
     if m_vi:
         after = stripped[m_vi.end() :]
-        if not after:
+        if not after or after.strip() == ".":
             return True
         # Non-space delimiter, e.g. Chương 1: Mở đầu, Chương 5: Gió, mưa và lửa
         if re.match(r"^[ \t]*[:：、.·\-_/\\–—「」『』【】《》〈〉()（）\[\]]", after):
             return True
-        # Space + free text, e.g. Chương 1 Mở đầu
-        if after[0] in " \t":
+        # Space + free text, e.g. Chương 1 Mở đầu, Chương 1\u00a0Mở đầu
+        if after[0].isspace():
             rest = after.strip()
             if not rest:
                 return True
             # Title must start with capital letter and not contain clause/dialogue punctuation
             # Disqualifies prose like "Hồi 3 tuổi tôi ở quê" or "Hồi 3 tuổi, tôi ở quê."
             clause_punct = (",", "，", ";", "；", '"', "“", "”")
-            if rest[0].isupper() and not any(p in rest for p in clause_punct):
+            if (
+                rest[0].isupper()
+                and not any(p in rest for p in clause_punct)
+                and not rest.endswith(".")
+            ):
                 first_word = rest.split()[0].lower()
                 if first_word not in {"tuổi", "đó", "nhỏ", "xưa", "trước", "năm"}:
                     return True
@@ -92,19 +96,23 @@ def is_chapter_heading(line: str) -> bool:
     m_en = _EN_HEAD.match(stripped)
     if m_en:
         after = stripped[m_en.end() :]
-        if not after:
+        if not after or after.strip() == ".":
             return True
         # Non-space delimiter, e.g. Chapter 1: Hello, World or Chapter 3: "The Return"
         if re.match(r"^[ \t]*[:：.·\-_/\\–—\"'()\[\]]", after):
             return True
-        # Space + free text, e.g. Chapter 1 The Beginning
-        if after[0] in " \t":
+        # Space + free text, e.g. Chapter 1 The Beginning, Chapter 1\u00a0The Beginning
+        if after[0].isspace():
             rest = after.strip()
             if not rest:
                 return True
             # Must start with capital letter and not contain clause punctuation
             # Disqualifies prose like "Chapter 3 was the best part of the"
-            if rest[0].isupper() and not any(p in rest for p in (",", ";", '"', "“", "”")):
+            if (
+                rest[0].isupper()
+                and not any(p in rest for p in (",", ";", '"', "“", "”"))
+                and not rest.endswith(".")
+            ):
                 first_word = rest.split()[0].lower()
                 if first_word not in {
                     "was",

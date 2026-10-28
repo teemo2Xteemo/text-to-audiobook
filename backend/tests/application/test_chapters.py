@@ -1,4 +1,11 @@
-from app.application.pipeline.chapters import Chapter, chunk_by_chapter, split_chapters
+import pytest
+
+from app.application.pipeline.chapters import (
+    Chapter,
+    chunk_by_chapter,
+    is_chapter_heading,
+    split_chapters,
+)
 
 
 def test_split_chapters_multilingual():
@@ -273,3 +280,35 @@ def test_split_chapters_regression_cases_from_review():
     assert len(ch_en_quote) == 1
     assert ch_en_quote[0].title == 'Chapter 3: "The Return"'
     assert ch_en_quote[0].body == "Content begins."
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "第一回\u3000启程",
+        "第一卷\u3000少年出山",
+        "第一节\u3000概述",
+        "Chapter 1\u00a0The Beginning",
+        "Chương 1\u00a0Mở đầu",
+        "第一章\u3000天才少年",
+        "CHAPTER I.",
+        "Chương 12.",
+    ],
+)
+def test_is_chapter_heading_unicode_whitespace_and_ordinal_dot(heading: str) -> None:
+    # S1 & S3: Full-width ideographic space (\u3000), non-breaking space (\u00a0),
+    # and ordinal period endings (CHAPTER I., Chương 12.) must be accepted.
+    assert is_chapter_heading(heading) is True
+
+
+def test_split_chapters_unicode_whitespace_volume_and_chapter() -> None:
+    # S1 Acceptance: 第一卷\u3000X\n第一章\u3000Y\n正文 gives indices 0, 1
+    text = "第一卷\u3000X\n第一章\u3000Y\n正文"
+    chapters = split_chapters(text)
+    assert len(chapters) == 2
+    assert chapters[0].index == 0
+    assert chapters[0].title == "第一卷\u3000X"
+    assert chapters[0].body == ""
+    assert chapters[1].index == 1
+    assert chapters[1].title == "第一章\u3000Y"
+    assert chapters[1].body == "正文"
