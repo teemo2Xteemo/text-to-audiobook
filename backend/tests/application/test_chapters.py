@@ -363,13 +363,21 @@ def test_is_chapter_heading_disqualifies_sentences_and_english_words(line: str) 
         "Chapter 5: We Rise.",
         "Chương 3: Ta Trở Về.",
         "Chương 7: Nàng Là Ai",
+        "Chương 12: Cô gái áo trắng trên lầu",
+        "Chương 4: Lão già bí ẩn ở núi",
+        "Chương 5: Y thuật thần kỳ của ta",
+        "Chương 6: Anh hùng xuất thiếu niên",
+        "Chương 9: Bà la sát hiện thân",
+        "Chương 2: Cô gái.",
+        "Chương 1: Thiếu niên áo trắng xuất hiện",
         "Tập 2: Đi.",
         "Chapter IV",
     ],
 )
 def test_is_chapter_heading_accepts_valid_short_titles_with_dots_or_ellipsis(line: str) -> None:
-    # U1, V1, X1, X2, Y1, Z1: Valid titles with initial stopwords after delimiter, dot delimiters,
-    # Title-Cased pronoun headings (even short/dotted), periods, or ellipsis must be accepted.
+    # U1, V1, X1, X2, Y1, Z1, AA1: Valid titles with initial stopwords after delimiter,
+    # dot delimiters, Title-Cased pronoun headings (even short/dotted), kinship noun titles,
+    # periods, or ellipsis.
     assert is_chapter_heading(line) is True
 
 
