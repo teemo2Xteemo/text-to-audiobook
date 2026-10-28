@@ -15,6 +15,8 @@ _ZH_HEAD = re.compile(
     r"(?:(章|回(?!合)|节(?!课))|(卷(?!入)))",
     re.MULTILINE,
 )
+# Roman numerals are strictly uppercase [IVXLCDM]+ with word boundary to avoid
+# false-matching ordinary lowercase English words like "mild", "civil", "did", "mix".
 _VI_HEAD = re.compile(
     r"^[ \t]*(?:(?i:Chương|Hồi)|(?i:Quyển|Tập))\s+(?:\d+|[IVXLCDM]+)\b",
     re.MULTILINE,
@@ -32,6 +34,67 @@ _VOL_HEAD = re.compile(
     r")",
     re.MULTILINE,
 )
+
+_VI_PROSE_STOPWORDS = {
+    "tuổi",
+    "đó",
+    "nhỏ",
+    "xưa",
+    "trước",
+    "năm",
+    "tôi",
+    "ông",
+    "bà",
+    "anh",
+    "chị",
+    "hắn",
+    "nó",
+    "người",
+    "khi",
+    "lúc",
+    "và",
+    "nhưng",
+}
+_EN_PROSE_STOPWORDS = {
+    "was",
+    "were",
+    "is",
+    "are",
+    "had",
+    "has",
+    "said",
+    "told",
+    "became",
+    "seemed",
+    "he",
+    "she",
+    "they",
+    "we",
+    "it",
+    "i",
+    "you",
+    "and",
+    "but",
+    "so",
+    "then",
+}
+
+
+def _is_prose_title(rest: str, stopwords: set[str]) -> bool:
+    if not rest:
+        return False
+    # Lowercase title after delimiter or space indicates narrative prose
+    if rest[0].islower():
+        return True
+    words = rest.split()
+    first_word = words[0].strip("\"'“”‘’:;,.").lower()
+    if first_word in stopwords:
+        return True
+    # If ends in a single period (not ellipsis), reject if it contains prose length
+    if rest.endswith(".") and not rest.endswith(("...", "…")):
+        if len(words) >= 4 or len(rest) > 25:
+            return True
+    return False
 
 
 def is_chapter_heading(line: str) -> bool:
@@ -76,7 +139,7 @@ def is_chapter_heading(line: str) -> bool:
         delim_match = re.match(r"^\s*[:：、.·\-_/\\–—「」『』【】《》〈〉()（）\[\]]", after)
         if delim_match:
             rest = after[delim_match.end() :].strip()
-            if rest and rest.endswith("."):
+            if _is_prose_title(rest, _VI_PROSE_STOPWORDS):
                 return False
             return True
         # Space + free text, e.g. Chương 1 Mở đầu, Chương 1\u00a0Mở đầu
@@ -84,17 +147,12 @@ def is_chapter_heading(line: str) -> bool:
             rest = after.strip()
             if not rest:
                 return True
-            # Title must start with capital letter and not contain clause/dialogue punctuation
-            # Disqualifies prose like "Hồi 3 tuổi tôi ở quê" or "Hồi 3 tuổi, tôi ở quê."
             clause_punct = (",", "，", ";", "；", '"', "“", "”")
-            if (
-                rest[0].isupper()
-                and not any(p in rest for p in clause_punct)
-                and not rest.endswith(".")
-            ):
-                first_word = rest.split()[0].lower()
-                if first_word not in {"tuổi", "đó", "nhỏ", "xưa", "trước", "năm"}:
-                    return True
+            if any(p in rest for p in clause_punct):
+                return False
+            if _is_prose_title(rest, _VI_PROSE_STOPWORDS):
+                return False
+            return True
 
     # 3. English headings
     m_en = _EN_HEAD.match(stripped)
@@ -106,7 +164,7 @@ def is_chapter_heading(line: str) -> bool:
         delim_match = re.match(r"^\s*[:：.·\-_/\\–—\"'()\[\]]", after)
         if delim_match:
             rest = after[delim_match.end() :].strip()
-            if rest and rest.endswith("."):
+            if _is_prose_title(rest, _EN_PROSE_STOPWORDS):
                 return False
             return True
         # Space + free text, e.g. Chapter 1 The Beginning, Chapter 1\u00a0The Beginning
@@ -114,32 +172,11 @@ def is_chapter_heading(line: str) -> bool:
             rest = after.strip()
             if not rest:
                 return True
-            # Must start with capital letter and not contain clause punctuation
-            # Disqualifies prose like "Chapter 3 was the best part of the"
-            if (
-                rest[0].isupper()
-                and not any(p in rest for p in (",", ";", '"', "“", "”"))
-                and not rest.endswith(".")
-            ):
-                first_word = rest.split()[0].lower()
-                if first_word not in {
-                    "was",
-                    "were",
-                    "is",
-                    "are",
-                    "had",
-                    "has",
-                    "said",
-                    "told",
-                    "became",
-                    "seemed",
-                    "he",
-                    "she",
-                    "they",
-                    "we",
-                    "it",
-                }:
-                    return True
+            if any(p in rest for p in (",", ";", '"', "“", "”")):
+                return False
+            if _is_prose_title(rest, _EN_PROSE_STOPWORDS):
+                return False
+            return True
 
     return False
 

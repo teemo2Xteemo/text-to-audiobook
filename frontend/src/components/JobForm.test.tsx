@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { JobForm } from "./JobForm";
+import type { Capabilities } from "../api/types";
 import { capabilitiesFixture } from "../test/fixtures";
 
 describe("JobForm", () => {
@@ -43,6 +44,25 @@ describe("JobForm", () => {
       "Japanese A",
     ]);
     expect(within(voice).queryByText("English A")).toBeNull();
+  });
+
+  it("translating mode never lists voices outside the target language even if capabilities has TTS-only voices", () => {
+    const capabilitiesWithExtra: Capabilities = {
+      ...capabilitiesFixture,
+      voices: [
+        ...capabilitiesFixture.voices,
+        { id: "extra-zh", language: "zh-CN", label: "Chinese TTS Only" },
+        { id: "extra-es", language: "es-ES", label: "Spanish TTS Only" },
+      ],
+    };
+    render(
+      <JobForm capabilities={capabilitiesWithExtra} disabled={false} onSubmit={() => undefined} />,
+    );
+    const voice = screen.getByLabelText("Voice");
+    const options = within(voice).getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual(["English A"]);
+    expect(within(voice).queryByText("Chinese TTS Only")).toBeNull();
+    expect(within(voice).queryByText("Spanish TTS Only")).toBeNull();
   });
 
   it("clears paste when a file is chosen and does not POST both", async () => {

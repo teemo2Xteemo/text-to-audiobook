@@ -320,14 +320,35 @@ def test_split_chapters_unicode_whitespace_volume_and_chapter() -> None:
         "Chapter 3. He walked in.",
         "Chapter 3: I came home late that night.",
         "Chương 3. Ông ấy bước vào nhà.",
+        "Chapter 3:He left.",
+        "Chapter 3 — he walked in",
+        "Chapter 3- and then he was gone",
+        "Chapter 3: I came home late that night",
         "Book mild",
         "Act civil",
+        "chapter iv",  # Lowercase Roman numerals intentionally not detected as trade-off for T2
     ],
 )
 def test_is_chapter_heading_disqualifies_sentences_and_english_words(line: str) -> None:
-    # T1 & T2: Prose sentences ending in period and lowercase words matching Roman numerals
-    # must not be treated as chapter headings.
+    # T1, T2, U2: Prose sentences ending in period, lowercase phrases after delimiter,
+    # and words matching Roman numerals must not be treated as chapter headings.
     assert is_chapter_heading(line) is False
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Chương 5: Đêm...",
+        "Chương 5: Đêm…",
+        "Chương 10: Kết thúc.",
+        "Chapter 1: The End.",
+        "Tập 2: Đi.",
+        "Chapter IV",
+    ],
+)
+def test_is_chapter_heading_accepts_valid_short_titles_with_dots_or_ellipsis(line: str) -> None:
+    # U1: Short valid titles ending in periods or ellipsis must be accepted as chapter headings.
+    assert is_chapter_heading(line) is True
 
 
 def test_is_chapter_heading_unicode_whitespace_before_delimiter() -> None:

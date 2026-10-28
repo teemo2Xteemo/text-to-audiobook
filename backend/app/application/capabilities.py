@@ -23,7 +23,11 @@ class Capabilities:
 
 
 class CapabilitiesService:
-    """Languages = translation ∩ TTS (at least one voice). Voices filtered by optional language."""
+    """Languages = translation ∩ TTS (at least one voice).
+
+    Unfiltered voices returns all TTS voices (so narrate mode can access TTS-only locales);
+    or voices are filtered by optional language parameter.
+    """
 
     def __init__(
         self,
