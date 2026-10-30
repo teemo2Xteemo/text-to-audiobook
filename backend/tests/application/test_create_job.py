@@ -1061,10 +1061,13 @@ def test_create_narrate_job_low_detection_confidence_raises() -> None:
 
 
 def test_create_normalize_text_requires_configured_normalizer() -> None:
+    from app.domain.jobs import JobMode
+
     command = CreateJobCommand(
         text="Hello 20",
         source_language="en-US",
-        target_language="ko-KR",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
         normalize_text=True,
     )
     service, store, _, _ = _service()
@@ -1077,3 +1080,21 @@ def test_create_normalize_text_requires_configured_normalizer() -> None:
     job = asyncio.run(service.create(command))
     assert job.normalize_text is True
     assert Job.from_dict(job.to_dict()).normalize_text is True
+
+
+def test_create_rejects_normalize_text_in_translate_mode() -> None:
+    service, store, _, _ = _service(text_normalization_available=True)
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(
+            service.create(
+                CreateJobCommand(
+                    text="Hello 20",
+                    source_language="en-US",
+                    target_language="ko-KR",
+                    normalize_text=True,
+                )
+            )
+        )
+    assert exc.value.error_type is ErrorType.INVALID_INPUT
+    assert "narrate mode" in exc.value.message
+    assert store.jobs == {}

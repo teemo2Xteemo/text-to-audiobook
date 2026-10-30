@@ -9,7 +9,13 @@ _TIMECODE_LINE_RE = re.compile(
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
-SOUND_EFFECT_RE = re.compile(r"^\s*(?:\[[^\]]+\]|\([^)]+\)|[♪♫][^♪♫]*[♪♫]|\*+[^*]+\*+)\s*$")
+# [..] and ♪..♪ lines are always effects; (..) and *..* only up to 3 words, since fansubs use
+# them for inner thoughts, translator notes and emphasis.
+SOUND_EFFECT_RE = re.compile(
+    r"^\s*(?:\[[^\]]+\]|[♪♫][^♪♫]*[♪♫]"
+    r"|\(\s*[^()\s]+(?:\s+[^()\s]+){0,2}\s*\)"
+    r"|\*+\s*[^*\s]+(?:\s+[^*\s]+){0,2}\s*\*+)\s*$"
+)
 INLINE_SOUND_EFFECT_RE = re.compile(
     r"\[(?:Music|Applause|Laughter|Sighs|Gasps|Cheering|Groans|Crying)\]"
     r"|\((?:applause|cheering|laughter|sighs|music)\)|[♪♫]",
@@ -102,11 +108,10 @@ def parse_srt_cues(text: str) -> list[SRTCue]:
             # Sound-effect-only cue: nothing to voice, its time becomes silence.
             continue
         previous = cues[-1] if cues else None
-        merged = (
-            merge_rolling_cue(previous.text, cue_text)
-            if previous and previous.text and cue_text
-            else None
-        )
+        merged = None
+        close = previous is not None and start_ms - previous.end_ms <= ROLLING_CUE_MAX_GAP_MS
+        if previous is not None and close and previous.text and cue_text:
+            merged = merge_rolling_cue(previous.text, cue_text)
         if previous is not None and merged is not None:
             # Rolling captions repeat earlier words; keep one cue spanning both.
             cues[-1] = SRTCue(
@@ -129,6 +134,8 @@ def parse_srt_cues(text: str) -> list[SRTCue]:
 
 
 _MIN_ROLLING_OVERLAP_WORDS = 2
+# Timed cues further apart than this are separate utterances, even when identical.
+ROLLING_CUE_MAX_GAP_MS = 1000
 
 
 def merge_rolling_cue(previous: str, current: str) -> str | None:
@@ -141,7 +148,9 @@ def merge_rolling_cue(previous: str, current: str) -> str | None:
     """
     prev_words = previous.split()
     cur_words = current.split()
-    if cur_words[: len(prev_words)] == prev_words:
+    extends = cur_words[: len(prev_words)] == prev_words
+    # A one-word cue ("No.") followed by "No way." is two utterances, not a rolling caption.
+    if extends and (cur_words == prev_words or len(prev_words) >= _MIN_ROLLING_OVERLAP_WORDS):
         return current
     if (
         _MIN_ROLLING_OVERLAP_WORDS <= len(cur_words) <= len(prev_words)

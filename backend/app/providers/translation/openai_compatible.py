@@ -580,12 +580,9 @@ class OpenAICompatibleTranslationProvider:
             if exc.error_type is not ErrorType.TRANSLATION_FAILED:
                 raise
             # error_type codes are a fixed list (backend rule), so the message names the step.
-            message = exc.message.replace("translation", "text normalization")
-            if not message.startswith("text normalization"):
-                message = f"text normalization failed: {message}"
             raise DomainError(
                 ErrorType.TRANSLATION_FAILED,
-                message,
+                f"text normalization failed: {exc.message}",
                 retry_after_seconds=exc.retry_after_seconds,
             ) from exc
 

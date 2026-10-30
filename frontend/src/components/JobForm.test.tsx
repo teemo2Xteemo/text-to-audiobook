@@ -119,6 +119,9 @@ describe("JobForm", () => {
         onSubmit={onSubmit}
       />,
     );
+    // Translate mode never offers it; narrate does.
+    expect(screen.queryByLabelText(/Spell out numbers/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Narrate/i }));
     await user.click(screen.getByLabelText(/Spell out numbers/i));
     await user.type(screen.getByLabelText("Paste story"), "It was 20 years ago.");
     await user.click(screen.getByRole("button", { name: "Generate" }));

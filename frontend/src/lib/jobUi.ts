@@ -408,7 +408,6 @@ const ERROR_SUMMARY_MAP: Record<string, string> = {
   PROVIDER_RATE_LIMIT: "The service is temporarily busy. Please try again shortly.",
   TTS_FAILED: "Speech synthesis failed. Please try again or choose a different voice.",
   TRANSLATION_FAILED: "Translation failed. Please try again or select a different engine.",
-  NORMALIZATION_FAILED: "Spelling out numbers and dates failed. Please try again or turn it off.",
   INVALID_INPUT: "The provided input is invalid. Please check your text or file.",
   STORAGE_FAILED: "Failed to store or retrieve audio file.",
 };

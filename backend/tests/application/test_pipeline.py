@@ -1505,3 +1505,95 @@ def test_strip_srt_breaks_unpunctuated_captions_on_long_silence() -> None:
     )
     # 3 s gap without punctuation still joins; 5 s (> 2 x 2 s) breaks regardless.
     assert strip_srt(srt) == "so we went down to the river\n\nthe next day it rained"
+
+
+class _FixedNormalizer:
+    def __init__(self, output: str) -> None:
+        self.output = output
+
+    async def normalize(self, text: str, language: str) -> str:
+        return self.output
+
+
+@pytest.mark.parametrize(
+    "bad_output",
+    [
+        "She was twenty.",  # truncated: second line dropped
+        "Here is the rewritten text:\nShe was twenty years old.\nHe was thirty.",  # preamble
+        "她二十岁。\n他三十岁。",  # answered in another script
+    ],
+)
+def test_rejected_normalization_narrates_original_and_is_not_cached(
+    tmp_path: Path, bad_output: str
+) -> None:
+    original = "She was 20 years old.\nHe was 30."
+    job = _normalize_job("normalize-rejected")
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        artifact_cache=_pipeline_cache(tmp_path),
+        text_normalizer=_FixedNormalizer(bad_output),
+    )
+    result = _run(orchestrator, job, workspace, text=original)
+
+    assert result.status is JobStatus.COMPLETED
+    assert narration.calls == [(original, "en-US")]  # type: ignore[attr-defined]
+    assert not any((tmp_path / "cache" / "normalization").glob("*"))
+
+
+class _ConcurrencyNormalizer:
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def normalize(self, text: str, language: str) -> str:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.01)
+        self.in_flight -= 1
+        return text.replace("20", "twenty")
+
+
+def test_normalization_runs_with_bounded_concurrency(tmp_path: Path) -> None:
+    normalizer = _ConcurrencyNormalizer()
+    job = _normalize_job("normalize-concurrent")
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        text_normalizer=normalizer,
+    )
+    orchestrator._translation_concurrency = 2
+    story = "\n\n".join(
+        f"Paragraph {i} says she was 20 at the time of the story." for i in range(6)
+    )
+    result = _run(orchestrator, job, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    assert normalizer.max_in_flight == 2
+    narrated = " ".join(text for text, _ in narration.calls)  # type: ignore[attr-defined]
+    assert " 20 " not in narrated
+    assert narrated.count("twenty") == 6
+
+
+def test_narrate_srt_never_translates_even_if_tags_differ(tmp_path: Path) -> None:
+    from app.domain.jobs import SrtTiming
+
+    job = _job(
+        id="test-narrate-srt-tag-drift",
+        source_language="en-US",
+        target_language="en-GB",
+        mode=JobMode.NARRATE,
+        srt_timing=SrtTiming.ALIGNED,
+    )
+    orchestrator, workspace, translation, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, languages=["en-US", "en-GB"], voices=_voices_for("en-GB")
+    )
+    result = _run(orchestrator, job, workspace, text=_TWO_CUES_WITH_GAP)
+
+    assert result.status is JobStatus.COMPLETED
+    assert translation.calls == []

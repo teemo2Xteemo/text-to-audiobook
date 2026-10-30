@@ -77,7 +77,10 @@ LLM pass that turns numbers, dates and abbreviations into spoken words.
 3. **Chapter pauses:** chunks carry their chapter ordinal; the narrate merge inserts
    `NARRATE_CHAPTER_PAUSE_MS` of silence at chapter boundaries. Per-chapter files stay with #29.
 4. **Speech normalization is a separate, opt-in port:** `TextNormalizer` runs inside the narration
-   stage before `NarrationProcessor`, only when the job sets `normalize_text`. It never translates.
+   stage before `NarrationProcessor`, only for narrate jobs that set `normalize_text` (translate
+   rejects it). It never translates and runs with bounded concurrency. Output that fails a
+   script-agnostic fidelity check (line structure, letter ratio, new script, more digits, changed
+   opening) is discarded: the original chunk is narrated and nothing is cached.
    Results are cached under their own `normalization` cache operation keyed by normalizer
    provider/model and prompt version, independent of the translation and TTS keys. The normalizer
    uses live settings, never a job's translation pin. Failures keep the fixed `TRANSLATION_FAILED`

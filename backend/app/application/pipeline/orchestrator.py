@@ -24,6 +24,7 @@ from app.application.pipeline.normalize import normalize_chunk
 from app.application.pipeline.parse import is_srt_document, parse_source, prepare_narration_text
 from app.application.pipeline.parse_srt import parse_srt_cues, serialize_srt_cues
 from app.application.pipeline.retry import with_chunk_retry
+from app.application.pipeline.speech_normalization import normalization_problem
 from app.application.pipeline.timeline import schedule_srt_timeline
 from app.application.pipeline.translate import translate_chunk
 from app.application.pipeline.tts import select_voice, synthesize_chunk
@@ -257,7 +258,8 @@ class PipelineOrchestrator:
         await self._jobs.save(job)
 
         job = await self._advance(job, JobStatus.TRANSLATING)
-        if job.source_language != job.target_language:
+        # Narrate never translates, even if source/target tags drift apart after resolution.
+        if job.mode is not JobMode.NARRATE and job.source_language != job.target_language:
             job = await self._translate_chunks(job, chunks, workspace, checkpoints)
         else:
             job = await self._pass_through_chunks(
@@ -582,16 +584,16 @@ class PipelineOrchestrator:
             job = replace(job, chunk_current=completed_count)
             await self._jobs.save(job)
 
-        for chunk in chunks:
-            if chunk.id in already_completed_ids:
-                continue
+        pending = [chunk for chunk in chunks if chunk.id not in already_completed_ids]
+        spoken_by_id = (
+            await self._normalize_pending(job, pending, workspace) if job.normalize_text else {}
+        )
+        for chunk in pending:
             self._active_chunk_id = chunk.id
             source = workspace / "chunks" / f"{chunk.id}.translated.txt"
             path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
             if not checkpoints.is_complete(chunk.id, STAGE_NARRATED):
-                spoken = source.read_text(encoding="utf-8")
-                if job.normalize_text:
-                    spoken = await self._normalize_for_speech(job, chunk, spoken, workspace)
+                spoken = spoken_by_id.get(chunk.id) or source.read_text(encoding="utf-8")
                 narrated = narrate_chunk(
                     spoken,
                     language=job.target_language,
@@ -612,6 +614,42 @@ class PipelineOrchestrator:
                 extra={"job_id": job.id, "chunk_id": chunk.id, "stage": STAGE_NARRATED},
             )
         return job
+
+    async def _normalize_pending(
+        self, job: Job, chunks: list[Chunk], workspace: Path
+    ) -> dict[str, str]:
+        """Normalize chunks with bounded concurrency; narration itself stays sequential."""
+        limit = min(
+            self._translation_concurrency,
+            getattr(self._text_normalizer, "max_concurrency", self._translation_concurrency),
+        )
+        semaphore = asyncio.Semaphore(max(1, limit))
+        spoken_by_id: dict[str, str] = {}
+
+        async def _one(chunk: Chunk) -> None:
+            async with semaphore:
+                source = workspace / "chunks" / f"{chunk.id}.translated.txt"
+                text = source.read_text(encoding="utf-8")
+                try:
+                    spoken_by_id[chunk.id] = await self._normalize_for_speech(
+                        job, chunk, text, workspace
+                    )
+                except Exception:
+                    if self._active_chunk_id is None:
+                        self._active_chunk_id = chunk.id
+                    raise
+
+        self._active_chunk_id = None
+        tasks = [asyncio.create_task(_one(chunk)) for chunk in chunks]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return spoken_by_id
 
     async def _normalize_for_speech(
         self, job: Job, chunk: Chunk, text: str, workspace: Path
@@ -645,6 +683,14 @@ class PipelineOrchestrator:
             chunk_id=chunk.id,
             stage=STAGE_NARRATED,
         )
+        problem = normalization_problem(text, normalized)
+        if problem is not None:
+            # Never narrate or cache an unfaithful rewrite; the original text is safe to read.
+            logger.warning(
+                "normalization_rejected",
+                extra={"job_id": job.id, "chunk_id": chunk.id, "reason": problem},
+            )
+            return text
         path.write_text(normalized, encoding="utf-8")
         if cache is not None:
             cache.store_normalization(

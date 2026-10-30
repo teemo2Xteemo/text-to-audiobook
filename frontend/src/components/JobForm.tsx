@@ -463,7 +463,8 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
         mode === "narrate" ? undefined : (translationProfileId || undefined),
       mode,
       srt_timing: mode === "narrate" && isSubtitleInput ? srtTiming : undefined,
-      normalize_text: capabilities.text_normalization && normalizeText ? true : undefined,
+      normalize_text:
+        mode === "narrate" && capabilities.text_normalization && normalizeText ? true : undefined,
     };
     if (file) {
       input.file = file;
@@ -696,7 +697,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
             )
           )}
 
-          {capabilities.text_normalization ? (
+          {mode === "narrate" && capabilities.text_normalization ? (
             <label className="normalize-text-option">
               <input
                 type="checkbox"

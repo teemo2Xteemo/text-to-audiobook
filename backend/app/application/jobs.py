@@ -100,6 +100,11 @@ class JobService:
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
         output_format = _parse_output_format(command.output_format)
         voice = command.voice.strip() if command.voice and command.voice.strip() else None
+        if command.normalize_text and command.mode is not JobMode.NARRATE:
+            # Translate already runs an LLM; a second rewrite would also stretch SRT timing.
+            raise DomainError(
+                ErrorType.INVALID_INPUT, "normalize_text is only supported in narrate mode"
+            )
         if command.normalize_text and not self._text_normalization_available:
             raise DomainError(
                 ErrorType.PROVIDER_CONFIGURATION_ERROR,

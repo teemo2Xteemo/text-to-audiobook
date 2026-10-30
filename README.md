@@ -299,8 +299,8 @@ Creates an asynchronous generation job. Accepts JSON (`CreateJobJsonBody`) or mu
 | `speed` | float | `1.0` | Speech rate multiplier (`0.5` to `2.0`). |
 | `output_format` | string | `"mp3"` | Audio output container: `"mp3"` or `"wav"`. |
 | `translation_profile_id` | string | `null` | Optional translation profile from capabilities. Allowed in `translate` mode; rejected in `narrate` mode. |
-| `srt_timing` | string | `"continuous"` | Narrate mode with `.srt`/`.vtt` input only. `"continuous"` reads the subtitles as one story (cues joined; a new paragraph after a > 2 s pause that ends a sentence). `"aligned"` voices each cue on its timestamp and also writes timed subtitles. Rejected in `translate` mode, which always uses the cue timeline. |
-| `normalize_text` | boolean | `false` | Rewrite numbers, dates and abbreviations as spoken words with an LLM before narration (no translation). Requires `TEXT_NORMALIZER_PROVIDER` (`groq` or `openrouter`, reusing that provider's key and model); otherwise `PROVIDER_CONFIGURATION_ERROR`. Adds model cost. |
+| `srt_timing` | string | `"continuous"` | Narrate mode with `.srt`/`.vtt` input only. `"continuous"` reads the subtitles as one story (cues joined; a new paragraph after a > 2 s pause that ends a sentence). `"aligned"` voices each cue on its timestamp and also writes timed subtitles. Rejected in `translate` mode, which always uses the cue timeline. Ignored for non-subtitle input. |
+| `normalize_text` | boolean | `false` | Narrate mode only (rejected in `translate`). Rewrite numbers, dates and abbreviations as spoken words with an LLM before narration (no translation). Output that fails a fidelity check (changed lines, lost text, new script, preamble) is discarded and the original chunk is narrated. Requires `TEXT_NORMALIZER_PROVIDER` (`groq` or `openrouter`, reusing that provider's key and model); otherwise `PROVIDER_CONFIGURATION_ERROR`. Adds model cost. |
 
 **Narrate Mode Example (Direct Narration Without Translation):**
 ```bash
@@ -383,6 +383,15 @@ Recreate frontend after those services:
 ```bash
 docker compose up -d --force-recreate frontend
 ```
+
+### Retrying jobs across an upgrade that changes chunking
+
+Retry resumes from per-chunk checkpoints keyed by chunk id only. When an upgrade changes how text is
+split (subtitle paragraphing, sound-effect/rolling-cue handling, chapter detection,
+`CHUNK_MAX_CHARS`), a job that **failed before the upgrade** can reuse chunks cut at the old
+boundaries and repeat or skip passages. Before retrying such a job (any SRT job, narrate or
+translate, and chaptered narrate text), delete its `storage/jobs/<job_id>/chunks`, `audio` and
+`checkpoint.json`, or create a new job.
 
 ### Job stays `translating` / `generating_audio` after the worker dies
 

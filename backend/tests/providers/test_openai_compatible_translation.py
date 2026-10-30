@@ -1045,5 +1045,4 @@ async def test_normalize_failure_message_names_normalization() -> None:
 
     # error_type codes are fixed by the backend rule; the message says which step failed.
     assert exc_info.value.error_type == ErrorType.TRANSLATION_FAILED
-    assert exc_info.value.message.startswith("text normalization")
-    assert "translation" not in exc_info.value.message
+    assert exc_info.value.message.startswith("text normalization failed: ")

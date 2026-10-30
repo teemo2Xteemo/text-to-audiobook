@@ -114,3 +114,26 @@ def test_parse_srt_cues_drops_sound_effects_and_merges_rolling_captions() -> Non
         (3000, 5000, "Hello there my friend"),
         (11000, 12000, "Goodbye."),
     ]
+
+
+def test_parse_srt_cues_keeps_distant_repeats_and_long_parentheticals() -> None:
+    from app.application.pipeline.parse_srt import parse_srt_cues
+
+    srt = (
+        "1\n00:00:01,000 --> 00:00:02,000\nNo.\n\n"
+        "2\n00:00:40,000 --> 00:00:41,000\nNo.\n\n"
+        "3\n00:00:41,200 --> 00:00:42,000\nNo way.\n\n"
+        "4\n00:00:43,000 --> 00:00:45,000\n(Anh ấy nghĩ rằng cô ấy sẽ quay lại)\n\n"
+        "5\n00:00:46,000 --> 00:00:47,000\n(sighs)\n\n"
+        "6\n00:00:48,000 --> 00:00:49,000\n*đó là lời nói dối lớn nhất*\n"
+    )
+    cues = parse_srt_cues(srt)
+
+    assert [c.text for c in cues] == [
+        "No.",
+        "No.",
+        "No way.",
+        "(Anh ấy nghĩ rằng cô ấy sẽ quay lại)",
+        "*đó là lời nói dối lớn nhất*",
+    ]
+    assert cues[0].end_ms == 2000  # the distant repeat did not stretch the first cue
