@@ -68,6 +68,8 @@ def test_factory_builds_edge_provider_without_calling_sdk(tmp_path: Path) -> Non
     provider = build_tts_provider(settings)
     assert isinstance(provider, EdgeTTSProvider)
     assert provider._defaults == {"ja-JP": "ja-JP-AdapterANeural"}
+    assert provider._max_chars == 500
+    assert provider._timeout_seconds == 90.0
     processor = build_audio_processor(settings)
     assert isinstance(processor, FFmpegAudioProcessor)
     assert processor._encode_timeout_ceiling_seconds == 1800.0
@@ -132,6 +134,7 @@ def test_build_orchestrator_injects_conservative_narration(
     assert seen["retry_policy"] == RetryPolicy(max_attempts=3, backoff_seconds=1.0)
     assert seen["translation_concurrency"] == 2
     assert seen["tts_concurrency"] == 2
+    assert seen["max_chars"] == 1200
 
 
 def test_build_orchestrator_injects_retry_policy_from_env(

@@ -124,6 +124,10 @@ const SRT_TIMECODE_LINE_RE =
   /^\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}.*$/;
 const SRT_INDEX_LINE_RE = /^\s*\d+\s*$/;
 const SRT_HTML_TAG_RE = /<\/?[a-zA-Z][^>]*>/g;
+const SRT_ASS_TAG_RE = /\{[^}]*\}/g;
+const SRT_SOUND_EFFECT_RE = /^\s*(?:\[[^\]]+\]|\([^)]+\)|[♪♫][^♪♫]*[♪♫]|\*+[^*]+\*+)\s*$/;
+const SRT_INLINE_SOUND_EFFECT_RE =
+  /\[(?:Music|Applause|Laughter|Sighs|Gasps|Cheering|Groans|Crying)\]|\((?:applause|cheering|laughter|sighs|music)\)|[♪♫]/gi;
 
 function isSrtCueBlock(block: string): boolean {
   const lines = block
@@ -205,7 +209,19 @@ export function stripSrtToText(raw: string): string {
         i++;
         continue;
       }
-      const cleaned = line.replace(SRT_HTML_TAG_RE, "").trim();
+      if (SRT_SOUND_EFFECT_RE.test(line)) {
+        i++;
+        continue;
+      }
+      const cleaned = line
+        .replace(/[\u200b\u200c\u200d\u2060\ufeff\u00ad\u200e\u200f]/g, "")
+        .replace(SRT_HTML_TAG_RE, "")
+        .replace(SRT_ASS_TAG_RE, "")
+        .replace(SRT_INLINE_SOUND_EFFECT_RE, "")
+        .replace(/^\s*[-–—]\s*/, "")
+        .replace(/\s+[-–—]\s*/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
       if (cleaned) {
         cueLines.push(cleaned);
       }
@@ -213,7 +229,10 @@ export function stripSrtToText(raw: string): string {
     }
 
     if (cueLines.length > 0) {
-      cleanedBlocks.push(cueLines.join(" "));
+      const blockText = cueLines.join(" ");
+      if (cleanedBlocks.length === 0 || cleanedBlocks[cleanedBlocks.length - 1] !== blockText) {
+        cleanedBlocks.push(blockText);
+      }
     }
   }
 

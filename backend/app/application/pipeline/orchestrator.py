@@ -105,11 +105,6 @@ class PipelineOrchestrator:
         try:
             job = await self._advance(job, JobStatus.PARSING)
             if job.mode == JobMode.NARRATE:
-                if is_srt_document(text):
-                    raise DomainError(
-                        ErrorType.INVALID_INPUT,
-                        "SRT narrate mode is coming in phase 2",
-                    )
                 return await self._run_narrate(
                     job, text, workspace=workspace, checkpoints=checkpoints
                 )

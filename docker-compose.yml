@@ -50,6 +50,9 @@ services:
       RQ_JOB_TIMEOUT_SECONDS: ${RQ_JOB_TIMEOUT_SECONDS:-1800}
       CHUNK_TRANSLATION_CONCURRENCY: ${CHUNK_TRANSLATION_CONCURRENCY:-2}
       CHUNK_TTS_CONCURRENCY: ${CHUNK_TTS_CONCURRENCY:-2}
+      CHUNK_MAX_CHARS: ${CHUNK_MAX_CHARS:-1200}
+      EDGE_TTS_MAX_CHARS: ${EDGE_TTS_MAX_CHARS:-500}
+      EDGE_TTS_TIMEOUT_SECONDS: ${EDGE_TTS_TIMEOUT_SECONDS:-90}
     volumes:
       # Image code only. A live source mount lives in docker-compose.dev.yml.
       - ./storage:/data/storage
@@ -106,6 +109,9 @@ services:
       RQ_JOB_TIMEOUT_SECONDS: ${RQ_JOB_TIMEOUT_SECONDS:-1800}
       CHUNK_TRANSLATION_CONCURRENCY: ${CHUNK_TRANSLATION_CONCURRENCY:-2}
       CHUNK_TTS_CONCURRENCY: ${CHUNK_TTS_CONCURRENCY:-2}
+      CHUNK_MAX_CHARS: ${CHUNK_MAX_CHARS:-1200}
+      EDGE_TTS_MAX_CHARS: ${EDGE_TTS_MAX_CHARS:-500}
+      EDGE_TTS_TIMEOUT_SECONDS: ${EDGE_TTS_TIMEOUT_SECONDS:-90}
       HF_HOME: /data/huggingface
     volumes:
       # Image code only. A live source mount lives in docker-compose.dev.yml.

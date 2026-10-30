@@ -286,10 +286,25 @@ def _retry_after_header(exc: urllib.error.HTTPError) -> str | None:
     headers = getattr(exc, "headers", None)
     if headers is None:
         return None
-    value = headers.get("Retry-After")
-    if value is None:
-        return None
-    return str(value)
+    for name in (
+        "Retry-After",
+        "retry-after",
+        "x-ratelimit-reset-tokens",
+        "x-ratelimit-reset-requests",
+    ):
+        value = headers.get(name)
+        if value is not None:
+            raw = str(value).strip()
+            if raw.endswith("s") and not raw.endswith("ms"):
+                raw = raw[:-1].strip()
+            return raw
+    ms_val = headers.get("retry-after-ms")
+    if ms_val is not None:
+        try:
+            return str(float(ms_val) / 1000.0)
+        except ValueError:
+            pass
+    return None
 
 
 def _http_client_message(code: int, detail: str, *, model: str | None) -> str:
@@ -330,6 +345,19 @@ def _map_openai_error(
         )
         if exc.code == 429:
             message = _http_client_message(exc.code, detail or "rate limit exceeded", model=None)
+            if retry_after is None and detail:
+                match = re.search(
+                    r"try again in (\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?",
+                    detail,
+                    re.IGNORECASE,
+                )
+                if match:
+                    try:
+                        retry_after = min(float(match.group(1)), _MAX_RETRY_AFTER_SECONDS)
+                    except ValueError:
+                        pass
+            if retry_after is None:
+                retry_after = 5.0
             mapped = DomainError(
                 ErrorType.PROVIDER_RATE_LIMIT,
                 message,

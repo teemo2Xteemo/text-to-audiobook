@@ -349,6 +349,7 @@ def build_orchestrator(
         jobs=store,
         artifact_cache=build_artifact_cache(settings),
         checkpoint_storage_factory=CheckpointFilesystem,
+        max_chars=settings.chunk_max_chars,
         retry_policy=RetryPolicy(
             max_attempts=settings.retry_max_attempts,
             backoff_seconds=settings.retry_backoff_seconds,
@@ -459,6 +460,8 @@ def build_tts_provider(settings: Settings) -> TTSProvider:
             default_voice_by_language=parse_tts_default_voice_by_language(
                 settings.tts_default_voice_by_language
             ),
+            max_chars=settings.edge_tts_max_chars,
+            timeout_seconds=settings.edge_tts_timeout_seconds,
         )
     raise UnknownProviderError(f"unknown TTS_PROVIDER: {settings.tts_provider}")
 

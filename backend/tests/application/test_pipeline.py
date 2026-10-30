@@ -1029,6 +1029,27 @@ def test_webvtt_with_dot_timecodes_is_stripped() -> None:
     assert strip_srt(vtt) == "Hello there.\n\nSecond line."
 
 
+def test_strip_srt_strips_ass_tags_and_sound_effects() -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    srt = (
+        "1\n"
+        "00:00:01,000 --> 00:00:03,000\n"
+        "{\\an8}Hello {\\b1}brave{\\b0} world!\n\n"
+        "2\n"
+        "00:00:04,000 --> 00:00:06,000\n"
+        "[Music]\n\n"
+        "3\n"
+        "00:00:07,000 --> 00:00:09,000\n"
+        "♪ Uplifting intro ♪\n\n"
+        "4\n"
+        "00:00:10,000 --> 00:00:12,000\n"
+        "Welcome to the show. (applause)\n"
+    )
+    result = strip_srt(srt)
+    assert result == "Hello brave world!\n\nWelcome to the show."
+
+
 def test_plain_txt_with_embedded_timecode_and_chapter_numbers_is_not_stripped(
     tmp_path: Path,
 ) -> None:
@@ -1164,7 +1185,7 @@ def test_unknown_job_mode_fails_pipeline(tmp_path: Path) -> None:
     assert saved is not None and saved.status is JobStatus.FAILED
 
 
-def test_srt_with_narrate_mode_fails_with_coming_soon(tmp_path: Path) -> None:
+def test_srt_with_narrate_mode_produces_audio_successfully(tmp_path: Path) -> None:
     job = _job(
         id="test-narrate-srt-1",
         source_language="en-US",
@@ -1175,8 +1196,7 @@ def test_srt_with_narrate_mode_fails_with_coming_soon(tmp_path: Path) -> None:
     srt_text = "1\n00:00:01,000 --> 00:00:04,000\nHello subtitle\n"
     result = _run(orchestrator, job, workspace, text=srt_text)
 
-    assert result.status is JobStatus.FAILED
-    assert result.error_type is ErrorType.INVALID_INPUT
-    assert "SRT narrate mode is coming in phase 2" in (result.message or "")
+    assert result.status is JobStatus.COMPLETED
+    assert result.error_type is None
     saved = asyncio.run(jobs.get(job.id))
-    assert saved is not None and saved.status is JobStatus.FAILED
+    assert saved is not None and saved.status is JobStatus.COMPLETED

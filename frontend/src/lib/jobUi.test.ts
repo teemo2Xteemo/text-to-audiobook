@@ -120,6 +120,28 @@ describe("jobUi", () => {
     expect(stripSrtToText(srt)).toBe("Hello world.\n\nSecond line.");
   });
 
+  it("strips ASS tags and drops sound-effect cues matching backend strip_srt", () => {
+    const srt = [
+      "1",
+      "00:00:01,000 --> 00:00:03,000",
+      "{\\an8}Hello {\\b1}brave{\\b0} world!",
+      "",
+      "2",
+      "00:00:04,000 --> 00:00:06,000",
+      "[Music]",
+      "",
+      "3",
+      "00:00:07,000 --> 00:00:09,000",
+      "♪ Uplifting intro ♪",
+      "",
+      "4",
+      "00:00:10,000 --> 00:00:12,000",
+      "Welcome to the show. (applause)",
+    ].join("\n");
+
+    expect(stripSrtToText(srt)).toBe("Hello brave world!\n\nWelcome to the show.");
+  });
+
   it("returns empty string when SRT has only timestamps and indices without dialogue", () => {
     const metadataOnlySrt =
       "1\n00:00:01,000 --> 00:00:03,000\n\n2\n00:00:04,000 --> 00:00:06,000\n";

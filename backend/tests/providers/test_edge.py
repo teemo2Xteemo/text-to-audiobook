@@ -246,6 +246,44 @@ def test_sdk_edge_client_timeout_raises_timeout_error(
         asyncio.run(client.synthesize("test", "voice", "+0%", tmp_path / "out.mp3"))
 
 
+def test_sdk_edge_client_splits_large_text_and_concatenates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.providers.tts.edge import SdkEdgeTtsClient
+
+    calls: list[str] = []
+
+    class _RecordingCommunicate:
+        def __init__(self, text: str, voice: str, rate: str) -> None:
+            self._text = text
+
+        async def save(self, path: str) -> None:
+            calls.append(self._text)
+            Path(path).write_bytes(f"AUDIO[{self._text}]".encode())
+
+    import sys
+    import types
+
+    fake_edge_tts = types.ModuleType("edge_tts")
+    fake_edge_tts.Communicate = _RecordingCommunicate  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge_tts)
+
+    client = SdkEdgeTtsClient(timeout_seconds=5.0, max_chars=60)
+    long_text = (
+        "Câu đầu tiên rất dài ở đây. Câu thứ hai tiếp theo ở đây. Câu thứ ba kết thúc ở đây."
+    )
+    out_path = tmp_path / "out.mp3"
+    asyncio.run(client.synthesize(long_text, "vi-VN-NamMinhNeural", "+0%", out_path))
+
+    assert len(calls) > 1
+    assert out_path.is_file()
+    content = out_path.read_bytes().decode("utf-8")
+    for call_text in calls:
+        assert f"AUDIO[{call_text}]" in content
+    # Ensure temporary part files were cleaned up
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 @pytest.mark.integration
 def test_edge_live_synthesize_opt_in(tmp_path: Path) -> None:
     if os.environ.get("EDGE_TTS_INTEGRATION") != "1":

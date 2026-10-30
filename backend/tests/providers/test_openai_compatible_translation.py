@@ -346,10 +346,14 @@ def _http_error(
     body: bytes,
     *,
     retry_after: str | None = None,
+    extra_hdrs: dict[str, str] | None = None,
 ) -> urllib.error.HTTPError:
     headers = Message()
     if retry_after is not None:
         headers["Retry-After"] = retry_after
+    if extra_hdrs is not None:
+        for k, v in extra_hdrs.items():
+            headers[k] = v
     return urllib.error.HTTPError(
         url="https://api.groq.com/openai/v1/chat/completions",
         code=code,
@@ -357,6 +361,39 @@ def _http_error(
         hdrs=headers,
         fp=BytesIO(body),
     )
+
+
+@pytest.mark.anyio
+async def test_groq_rate_limit_reset_header_is_parsed_as_retry_after() -> None:
+    fake_http = FakeOpenAIHttp()
+    fake_http.fail = _http_error(
+        429,
+        b'{"error": {"message": "Rate limit reached"}}',
+        extra_hdrs={"x-ratelimit-reset-tokens": "8.82s"},
+    )
+    provider = _provider(http=fake_http)
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Hello", "en-US", "vi-VN")
+    assert exc_info.value.error_type is ErrorType.PROVIDER_RATE_LIMIT
+    assert exc_info.value.retry_after_seconds is not None
+    assert 8.8 <= exc_info.value.retry_after_seconds <= 10.0
+
+
+@pytest.mark.anyio
+async def test_groq_rate_limit_error_body_text_is_parsed_as_retry_after() -> None:
+    fake_http = FakeOpenAIHttp()
+    body = (
+        b'{"error": {"message": "Rate limit reached for model qwen/qwen3.8-27b on '
+        b"output tokens per minute (OTPM): Limit 1000, Used 955, Requested 147. "
+        b'Please try again in 8.82s."}}'
+    )
+    fake_http.fail = _http_error(429, body)
+    provider = _provider(http=fake_http)
+    with pytest.raises(DomainError) as exc_info:
+        await provider.translate("Hello", "en-US", "vi-VN")
+    assert exc_info.value.error_type is ErrorType.PROVIDER_RATE_LIMIT
+    assert exc_info.value.retry_after_seconds is not None
+    assert 8.8 <= exc_info.value.retry_after_seconds <= 10.0
 
 
 @pytest.mark.anyio
