@@ -26,6 +26,13 @@ class JobMode(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SrtTiming(StrEnum):
+    """How narrate mode voices subtitles: one continuous read, or on the cue timeline."""
+
+    CONTINUOUS = "continuous"
+    ALIGNED = "aligned"
+
+
 class IllegalJobTransition(Exception):
     def __init__(self, current: JobStatus, target: JobStatus) -> None:
         self.current = current
@@ -128,6 +135,7 @@ class Job:
     translation_model: str | None = None
     recovery_attempts: int = 0
     mode: JobMode = JobMode.TRANSLATE
+    srt_timing: SrtTiming = SrtTiming.CONTINUOUS
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -168,6 +176,8 @@ class Job:
             payload["translation_provider"] = self.translation_provider
         if self.recovery_attempts > 0:
             payload["recovery_attempts"] = self.recovery_attempts
+        if self.srt_timing is not SrtTiming.CONTINUOUS:
+            payload["srt_timing"] = self.srt_timing.value
         return payload
 
     @classmethod
@@ -181,6 +191,10 @@ class Job:
             mode = JobMode(str(raw_mode))
         except ValueError:
             mode = JobMode.UNKNOWN
+        try:
+            srt_timing = SrtTiming(str(data.get("srt_timing", SrtTiming.CONTINUOUS.value)))
+        except ValueError:
+            srt_timing = SrtTiming.CONTINUOUS
         return cls(
             id=str(data["id"]),
             status=JobStatus(str(data["status"])),
@@ -198,4 +212,5 @@ class Job:
             translation_model=model,
             recovery_attempts=int(data.get("recovery_attempts", 0)),
             mode=mode,
+            srt_timing=srt_timing,
         )

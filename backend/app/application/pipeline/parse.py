@@ -1,10 +1,21 @@
 import re
 
+from app.application.pipeline.merge_srt import is_sentence_terminal
+from app.application.pipeline.parse_srt import parse_timecode_line
 from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import resolve_source_language
 from app.domain.ports import LanguageDetector
 
-__all__ = ["is_srt_document", "parse_source", "prepare_narration_text", "strip_srt"]
+__all__ = [
+    "SRT_PARAGRAPH_GAP_MS",
+    "is_srt_document",
+    "parse_source",
+    "prepare_narration_text",
+    "strip_srt",
+]
+
+# Silence between cues that starts a new narration paragraph (spec #28 §7.4).
+SRT_PARAGRAPH_GAP_MS = 2000
 
 _SRT_TIMECODE_RE = re.compile(
     r"^\s*(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3}.*$",
@@ -67,19 +78,30 @@ def is_srt_document(text_or_blocks: str | list[str]) -> bool:
     return _is_srt_document(blocks)
 
 
-def strip_srt(text: str) -> str:
+def strip_srt(text: str, *, paragraph_gap_ms: int = SRT_PARAGRAPH_GAP_MS) -> str:
+    """Turn subtitles into continuous narration text.
+
+    Cues are joined into one paragraph. A new paragraph starts only when the silence
+    before a cue exceeds ``paragraph_gap_ms`` and the previous cue ends a sentence, so
+    TTS never pauses mid-sentence at a cue boundary.
+    """
     normalized = _INVISIBLE_CHARS_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n").strip())
     blocks = re.split(r"\n{2,}", normalized)
     if not _is_srt_document(blocks):
         return text
-    cleaned_blocks: list[str] = []
+    paragraphs: list[list[str]] = []
+    previous_end_ms: int | None = None
     for block in blocks:
         lines: list[str] = []
+        timing: tuple[int, int] | None = None
         for raw_line in block.split("\n"):
             line = _INVISIBLE_CHARS_RE.sub("", raw_line).strip()
             if not line or line.upper() == "WEBVTT":
                 continue
-            if _SRT_INDEX_RE.match(line) or _SRT_TIMECODE_RE.match(line):
+            if _SRT_TIMECODE_RE.match(line):
+                timing = parse_timecode_line(line)
+                continue
+            if _SRT_INDEX_RE.match(line):
                 continue
             if _SOUND_EFFECT_RE.match(line):
                 continue
@@ -91,14 +113,32 @@ def strip_srt(text: str) -> str:
             cleaned = re.sub(r"\s+", " ", cleaned).strip()
             if cleaned:
                 lines.append(cleaned)
-        if lines:
-            block_text = " ".join(lines)
-            merged = _merge_rolling_cue(cleaned_blocks[-1], block_text) if cleaned_blocks else None
-            if merged is None:
-                cleaned_blocks.append(block_text)
-            else:
-                cleaned_blocks[-1] = merged
-    return "\n\n".join(cleaned_blocks).strip()
+        if not lines:
+            continue
+        cue = " ".join(lines)
+        merged = _merge_rolling_cue(paragraphs[-1][-1], cue) if paragraphs else None
+        if merged is not None:
+            paragraphs[-1][-1] = merged
+        elif paragraphs and not _starts_paragraph(
+            paragraphs[-1][-1], previous_end_ms, timing, paragraph_gap_ms
+        ):
+            paragraphs[-1].append(cue)
+        else:
+            paragraphs.append([cue])
+        if timing is not None:
+            previous_end_ms = timing[1]
+    return "\n\n".join(" ".join(cues) for cues in paragraphs).strip()
+
+
+def _starts_paragraph(
+    previous_cue: str,
+    previous_end_ms: int | None,
+    timing: tuple[int, int] | None,
+    paragraph_gap_ms: int,
+) -> bool:
+    if previous_end_ms is None or timing is None or not is_sentence_terminal(previous_cue):
+        return False
+    return timing[0] - previous_end_ms > paragraph_gap_ms
 
 
 _MIN_ROLLING_OVERLAP_WORDS = 2

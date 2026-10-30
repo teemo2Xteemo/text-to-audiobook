@@ -216,3 +216,29 @@ async def test_null_translation_provider() -> None:
         await provider.translate("hello", "en-US", "vi-VN")
     assert exc.value.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
     assert "translation is not supported in narrate mode" in str(exc.value)
+
+
+def test_job_srt_timing_round_trip_and_legacy_default() -> None:
+    from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat, SrtTiming
+
+    job = Job(
+        id="test-srt-timing",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="en-US",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+        srt_timing=SrtTiming.ALIGNED,
+    )
+    data = job.to_dict()
+    assert data["srt_timing"] == "aligned"
+    assert Job.from_dict(data).srt_timing is SrtTiming.ALIGNED
+
+    # Continuous is the default and is not written, so old status.json files stay valid.
+    legacy = {key: value for key, value in data.items() if key != "srt_timing"}
+    assert Job.from_dict(legacy).srt_timing is SrtTiming.CONTINUOUS
+    assert "srt_timing" not in Job.from_dict(legacy).to_dict()
+    assert Job.from_dict({**data, "srt_timing": "future"}).srt_timing is SrtTiming.CONTINUOUS

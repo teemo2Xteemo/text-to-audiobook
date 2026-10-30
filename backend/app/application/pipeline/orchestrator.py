@@ -35,6 +35,7 @@ from app.domain.jobs import (
     JobMode,
     JobStatus,
     OutputFormat,
+    SrtTiming,
     assert_legal_transition,
     is_at_or_past,
     is_terminal,
@@ -72,6 +73,7 @@ class PipelineOrchestrator:
         sleep: Callable[[float], Awaitable[None]] | None = None,
         translation_concurrency: int = 1,
         tts_concurrency: int = 1,
+        chapter_pause_ms: int = 0,
     ) -> None:
         self._translation = translation
         self._tts = tts
@@ -88,6 +90,7 @@ class PipelineOrchestrator:
         self._sleep = sleep or asyncio.sleep
         self._translation_concurrency = max(1, translation_concurrency)
         self._tts_concurrency = max(1, tts_concurrency)
+        self._chapter_pause_ms = max(0, chapter_pause_ms)
         self._active_chunk_id: str | None = None
 
     async def run(self, job: Job, text: str, *, workspace: Path) -> Job:
@@ -104,7 +107,9 @@ class PipelineOrchestrator:
             )
         try:
             job = await self._advance(job, JobStatus.PARSING)
-            if job.mode == JobMode.NARRATE:
+            if job.mode == JobMode.NARRATE and not (
+                job.srt_timing is SrtTiming.ALIGNED and is_srt_document(text)
+            ):
                 return await self._run_narrate(
                     job, text, workspace=workspace, checkpoints=checkpoints
                 )
@@ -765,7 +770,20 @@ class PipelineOrchestrator:
 
     async def _merge(self, job: Job, chunks: list[Chunk], workspace: Path) -> Job:
         ext = job.output_format.value
-        sources = [workspace / "audio" / f"{chunk.id}.normalized.{ext}" for chunk in chunks]
+        sources: list[Path] = []
+        pause: Path | None = None
+        for position, chunk in enumerate(chunks):
+            if self._chapter_pause_ms and position and chunk.chapter != chunks[position - 1].chapter:
+                if pause is None:
+                    pause = workspace / "audio" / f"chapter-pause.{ext}"
+                    await self._audio.generate_silence(
+                        self._chapter_pause_ms,
+                        pause,
+                        output_format=job.output_format,
+                        bitrate_kbps=job.output_bitrate_kbps,
+                    )
+                sources.append(pause)
+            sources.append(workspace / "audio" / f"{chunk.id}.normalized.{ext}")
         destination = workspace / f"output.{ext}"
         await merge_artifacts(
             self._audio,

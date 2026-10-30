@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, model_serializer
 
 from app.domain.audio import SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, Voice
-from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat, SrtTiming
 
 
 class ErrorEnvelope(BaseModel):
@@ -34,6 +34,7 @@ class JobStatusResponse(BaseModel):
     translation_provider: str | None = None
     translation_model: str | None = None
     mode: JobMode = JobMode.TRANSLATE
+    srt_timing: SrtTiming = SrtTiming.CONTINUOUS
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -66,6 +67,7 @@ class JobStatusResponse(BaseModel):
             translation_provider=job.translation_provider,
             translation_model=job.translation_model,
             mode=job.mode,
+            srt_timing=job.srt_timing,
         )
 
 
@@ -78,6 +80,7 @@ class CreateJobJsonBody(BaseModel):
     output_format: str = Field(default=OutputFormat.MP3.value)
     translation_profile_id: str | None = None
     mode: JobMode = JobMode.TRANSLATE
+    srt_timing: SrtTiming = SrtTiming.CONTINUOUS
 
 
 class VoiceResponse(BaseModel):

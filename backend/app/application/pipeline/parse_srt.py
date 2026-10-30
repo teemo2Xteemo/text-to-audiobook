@@ -19,6 +19,16 @@ def _timecode_to_ms(hours: str | None, minutes: str, seconds: str, millis: str) 
     return (h * 3600 + m * 60 + s) * 1000 + ms
 
 
+def parse_timecode_line(line: str) -> tuple[int, int] | None:
+    """Return ``(start_ms, end_ms)`` for an SRT/VTT timecode line, else ``None``."""
+    match = _TIMECODE_LINE_RE.match(line)
+    if match is None:
+        return None
+    start = _timecode_to_ms(match.group(1), match.group(2), match.group(3), match.group(4))
+    end = _timecode_to_ms(match.group(5), match.group(6), match.group(7), match.group(8))
+    return start, end
+
+
 def format_srt_timecode(ms: int) -> str:
     total_ms = max(0, ms)
     hours = total_ms // 3600000

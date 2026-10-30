@@ -10,6 +10,8 @@ class Chunk:
     id: str
     text: str
     index: int
+    # 1-based chapter ordinal for chaptered narration; 0 when chapters are not tracked.
+    chapter: int = 0
 
 
 def chunk_text(text: str, max_chars: int = CHUNK_MAX_CHARS) -> list[Chunk]:

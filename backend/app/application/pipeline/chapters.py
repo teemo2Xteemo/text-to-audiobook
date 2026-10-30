@@ -336,7 +336,7 @@ def split_chapters(text: str) -> list[Chapter]:
 def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) -> list[Chunk]:
     chunks: list[Chunk] = []
     global_index = 1
-    for chapter in chapters:
+    for ordinal, chapter in enumerate(chapters, start=1):
         body = chapter.body.strip()
         title = chapter.title.strip()
         if not body:
@@ -357,6 +357,7 @@ def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) 
                     id=f"chunk-{global_index:03d}",
                     text=c.text,
                     index=global_index,
+                    chapter=ordinal,
                 )
             )
             global_index += 1

@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     estimate_translation_expansion: float = Field(default=1.2, gt=0.0)
     estimate_process_time_ratio: float = Field(default=0.15, gt=0.0)
     tts_default_voice_by_language: str = Field(default="")
+    narrate_chapter_pause_ms: int = Field(default=1500, ge=0, le=10_000)
     retry_max_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
     max_recovery_attempts: int = Field(default=3, ge=1)

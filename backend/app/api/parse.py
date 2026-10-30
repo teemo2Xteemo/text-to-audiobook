@@ -14,7 +14,7 @@ from app.application.jobs import CreateJobCommand
 from app.config.settings import Settings
 from app.domain.audio import SPEED_DEFAULT
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import JobMode, OutputFormat
+from app.domain.jobs import JobMode, OutputFormat, SrtTiming
 
 _JSON_CONTENT = "application/json"
 _MULTIPART_CONTENT = "multipart/form-data"
@@ -147,6 +147,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
         output_format=parsed.output_format,
         translation_profile_id=parsed.translation_profile_id,
         mode=parsed.mode,
+        srt_timing=parsed.srt_timing,
     )
 
 
@@ -172,6 +173,12 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
     except ValueError:
         raise DomainError(ErrorType.INVALID_INPUT, f"invalid mode: {mode_raw}") from None
 
+    timing_raw = _optional_form_string(form.get("srt_timing")) or SrtTiming.CONTINUOUS.value
+    try:
+        srt_timing = SrtTiming(timing_raw)
+    except ValueError:
+        raise DomainError(ErrorType.INVALID_INPUT, f"invalid srt_timing: {timing_raw[:32]}") from None
+
     speed_raw = form.get("speed")
     output_raw = form.get("output_format")
 
@@ -191,6 +198,7 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         output_format=_optional_form_string(output_raw) or OutputFormat.MP3.value,
         translation_profile_id=_optional_form_string(form.get("translation_profile_id")),
         mode=mode,
+        srt_timing=srt_timing,
     )
 
 

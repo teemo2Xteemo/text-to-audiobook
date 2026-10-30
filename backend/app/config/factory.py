@@ -356,6 +356,7 @@ def build_orchestrator(
         ),
         translation_concurrency=settings.chunk_translation_concurrency,
         tts_concurrency=settings.chunk_tts_concurrency,
+        chapter_pause_ms=settings.narrate_chapter_pause_ms,
     )
 
 

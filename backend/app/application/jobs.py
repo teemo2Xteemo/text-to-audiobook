@@ -21,6 +21,7 @@ from app.domain.jobs import (
     JobMode,
     JobStatus,
     OutputFormat,
+    SrtTiming,
     assert_legal_transition,
     is_terminal,
 )
@@ -48,6 +49,7 @@ class CreateJobCommand:
     output_format: str = OutputFormat.MP3.value
     translation_profile_id: str | None = None
     mode: JobMode = JobMode.TRANSLATE
+    srt_timing: SrtTiming = SrtTiming.CONTINUOUS
 
 
 class JobService:
@@ -149,6 +151,11 @@ class JobService:
             target_language = resolved_target
             voice = resolved_voice
         else:
+            if command.srt_timing is not SrtTiming.CONTINUOUS:
+                # Translate mode always voices subtitles on their cue timeline.
+                raise DomainError(
+                    ErrorType.INVALID_INPUT, "srt_timing is only supported in narrate mode"
+                )
             ensure_valid_languages(source_language, target_language)
 
             profile_id = (
@@ -212,6 +219,7 @@ class JobService:
             translation_provider=translation_provider,
             translation_model=translation_model,
             mode=command.mode,
+            srt_timing=command.srt_timing,
         )
         try:
             await self._source_storage.write_source(job_id, text)

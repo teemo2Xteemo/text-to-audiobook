@@ -140,6 +140,7 @@ def _orchestrator(
     retry_policy: RetryPolicy | None = None,
     sleep: _RecordingSleep | None = None,
     artifact_cache: PipelineArtifactCache | None = None,
+    chapter_pause_ms: int = 0,
 ) -> tuple[
     PipelineOrchestrator,
     Path,
@@ -169,6 +170,7 @@ def _orchestrator(
         "checkpoint_storage_factory": CheckpointFilesystem,
         "retry_policy": retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0),
         "sleep": sleep if sleep is not None else _RecordingSleep(),
+        "chapter_pause_ms": chapter_pause_ms,
     }
     if artifact_cache is not None:
         kwargs["artifact_cache"] = artifact_cache
@@ -1026,7 +1028,7 @@ def test_webvtt_with_dot_timecodes_is_stripped() -> None:
         "00:00:01.000 --> 00:00:02.500\nHello <i>there</i>.\n\n"
         "00:00:03.000 --> 00:00:04.000\nSecond line.\n"
     )
-    assert strip_srt(vtt) == "Hello there.\n\nSecond line."
+    assert strip_srt(vtt) == "Hello there. Second line."
 
 
 def test_strip_srt_strips_ass_tags_and_sound_effects() -> None:
@@ -1082,8 +1084,8 @@ def test_strip_srt_keeps_cues_sharing_a_single_word() -> None:
     from app.application.pipeline.parse import strip_srt
 
     srt = _srt("I saw you.", "you never listen.")
-    assert strip_srt(srt) == "I saw you.\n\nyou never listen."
-    assert strip_srt(_srt("I saw you.", "you.")) == "I saw you.\n\nyou."
+    assert strip_srt(srt) == "I saw you. you never listen."
+    assert strip_srt(_srt("I saw you.", "you.")) == "I saw you. you."
     assert strip_srt(_srt("Hello there my friend", "my friend")) == "Hello there my friend"
 
 
@@ -1093,7 +1095,25 @@ def test_strip_srt_drops_identical_consecutive_cues() -> None:
     from app.application.pipeline.parse import strip_srt
 
     srt = _srt("No.", "No.", "Fine.", "No.")
-    assert strip_srt(srt) == "No.\n\nFine.\n\nNo."
+    assert strip_srt(srt) == "No. Fine. No."
+
+
+def test_strip_srt_breaks_paragraph_only_after_long_gap_and_sentence_end() -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    srt = (
+        "1\n00:00:01,000 --> 00:00:02,000\nShe opened the door\n\n"
+        "2\n00:00:05,000 --> 00:00:06,000\nand stepped inside.\n\n"
+        "3\n00:00:06,500 --> 00:00:07,000\nIt was dark.\n\n"
+        "4\n00:00:12,000 --> 00:00:13,000\nMorning came.\n"
+    )
+    # 3 s gap after an unfinished sentence still joins; 5 s gap after "dark." breaks.
+    assert strip_srt(srt) == (
+        "She opened the door and stepped inside. It was dark.\n\nMorning came."
+    )
+    assert strip_srt(srt, paragraph_gap_ms=10_000) == (
+        "She opened the door and stepped inside. It was dark. Morning came."
+    )
 
 
 def test_plain_txt_with_embedded_timecode_and_chapter_numbers_is_not_stripped(
@@ -1174,6 +1194,57 @@ def test_narrate_mode_splits_chapters_and_preserves_titles(tmp_path: Path) -> No
     assert "They traveled across the mountains." in chunk_2_text
 
 
+@pytest.mark.parametrize("pause_ms", [0, 1500])
+def test_narrate_mode_inserts_pause_between_chapters_only(tmp_path: Path, pause_ms: int) -> None:
+    job = _job(
+        id="test-narrate-pause-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        chapter_pause_ms=pause_ms,
+    )
+    story = (
+        "Chapter 1: Dawn\n\n"
+        + "The sun rose slowly over the quiet hills. " * 4
+        + "\n\nChapter 2: Dusk\n\nThe sun set."
+    )
+    result = _run(orchestrator, job, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    merged = [path.name for path in audio.merge_calls[-1]]
+    pause = "chapter-pause.mp3"
+    if pause_ms == 0:
+        assert pause not in merged
+        assert audio.silence_calls == []
+        return
+    # Chapter 1 spans several chunks; the single pause sits only at the chapter boundary.
+    assert merged.count(pause) == 1
+    boundary = merged.index(pause)
+    assert boundary > 1
+    assert merged[boundary + 1] == f"chunk-{boundary + 1:03d}.normalized.mp3"
+    assert audio.silence_calls == [(pause_ms, workspace / "audio" / pause)]
+
+
+def test_translate_mode_never_inserts_chapter_pauses(tmp_path: Path) -> None:
+    job = _job()
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path, job=job, chapter_pause_ms=1500
+    )
+    story = "Chapter 1: A\n\nOne.\n\nChapter 2: B\n\nTwo."
+    result = _run(orchestrator, job, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    assert audio.silence_calls == []
+
+
 def test_narrate_mode_empty_readable_text_raises_invalid_input(tmp_path: Path) -> None:
     job = _job(
         id="test-narrate-empty-1",
@@ -1229,6 +1300,51 @@ def test_unknown_job_mode_fails_pipeline(tmp_path: Path) -> None:
     assert "Unknown job mode" in (result.message or "")
     saved = asyncio.run(jobs.get(job.id))
     assert saved is not None and saved.status is JobStatus.FAILED
+
+
+_TWO_CUES_WITH_GAP = (
+    "1\n00:00:01,000 --> 00:00:02,000\nFirst line.\n\n"
+    "2\n00:00:10,000 --> 00:00:11,000\nSecond line.\n"
+)
+
+
+def test_narrate_srt_aligned_follows_cue_timeline_without_translation(tmp_path: Path) -> None:
+    from app.domain.jobs import SrtTiming
+
+    job = _job(
+        id="test-narrate-srt-aligned",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        srt_timing=SrtTiming.ALIGNED,
+    )
+    orchestrator, workspace, translation, _, _, _, audio, _ = _orchestrator(
+        tmp_path, job=job, voices=_voices_for("en-US")
+    )
+    result = _run(orchestrator, job, workspace, text=_TWO_CUES_WITH_GAP)
+
+    assert result.status is JobStatus.COMPLETED
+    assert translation.calls == []
+    # Aligned timing keeps the cue gaps as silence and writes timed subtitles.
+    assert audio.silence_calls
+    assert (workspace / "output.srt").read_text(encoding="utf-8").count("-->") == 2
+
+
+def test_narrate_srt_continuous_is_default_and_has_no_timeline(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-srt-continuous",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+    )
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path, job=job, voices=_voices_for("en-US")
+    )
+    result = _run(orchestrator, job, workspace, text=_TWO_CUES_WITH_GAP)
+
+    assert result.status is JobStatus.COMPLETED
+    assert audio.silence_calls == []
+    assert not (workspace / "output.srt").exists()
 
 
 def test_srt_with_narrate_mode_produces_audio_successfully(tmp_path: Path) -> None:
