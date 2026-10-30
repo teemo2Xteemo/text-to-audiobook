@@ -90,6 +90,19 @@ describe("JobForm", () => {
     expect(screen.getByLabelText("Paste story")).toHaveValue("Chapter One begins.");
   });
 
+  it("displays continuous narration indicator for SRT in Narrate mode", async () => {
+    const user = userEvent.setup();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={() => undefined} />);
+    const narrateTab = screen.getByRole("tab", { name: /Narrate/i });
+    await user.click(narrateTab);
+
+    const srtText = "1\n00:00:01,000 --> 00:00:03,000\nChapter One begins.";
+    await user.type(screen.getByLabelText("Paste story"), srtText);
+
+    expect(screen.getByText("SRT · Continuous Narration")).toBeInTheDocument();
+    expect(screen.getByText("Subtitles will be converted to continuous narration")).toBeInTheDocument();
+  });
+
   it("provides an accessible swap button that exchanges source and target languages", async () => {
     const user = userEvent.setup();
     render(

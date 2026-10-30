@@ -17,6 +17,7 @@ _HORIZONTAL_SPACE_RE = re.compile(r"[ \t\f\v]+")
 _NEWLINE_SPACE_RE = re.compile(r" *\n *")
 _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
 _MULTI_SPACE_RE = re.compile(r" {2,}")
+_INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad\u200e\u200f]")
 _QUOTE_TABLE = str.maketrans(
     {
         "“": '"',
@@ -64,6 +65,7 @@ def _narrate(text: str) -> str:
 
 def _normalize(text: str) -> str:
     value = text.replace("\r\n", "\n").replace("\r", "\n")
+    value = _INVISIBLE_CHARS_RE.sub("", value)
     value = value.translate(_QUOTE_TABLE)
     value = _ELLIPSIS_RE.sub(_ELLIPSIS_MARK, value)
     value = _DASH_RE.sub(_DASH, value)

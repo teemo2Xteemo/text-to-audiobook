@@ -638,7 +638,11 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
 
           {mode === "narrate" ? (
             <div className="narrate-mode-note">
-              <span className="muted italic text-sm">No translation needed</span>
+              <span className="muted italic text-sm">
+                {metrics.isSrt
+                  ? "Subtitles will be converted to continuous narration"
+                  : "No translation needed"}
+              </span>
             </div>
           ) : (
             profileOptions.length > 0 && (
@@ -794,7 +798,9 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
             </span>
             <div className="editor-metrics" aria-live="polite">
               {metrics.isSrt ? (
-                <span className="srt-badge">SRT Timecodes Detected</span>
+                <span className="srt-badge">
+                  {mode === "narrate" ? "SRT · Continuous Narration" : "SRT Timecodes Detected"}
+                </span>
               ) : null}
               <span className="metric-item">{metrics.chars.toLocaleString()} chars</span>
               <span className="metric-sep">·</span>

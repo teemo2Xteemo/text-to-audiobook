@@ -67,6 +67,9 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.openrouter_http_timeout_seconds == 60.0
     assert settings.chunk_translation_concurrency == 2
     assert settings.chunk_tts_concurrency == 2
+    assert settings.chunk_max_chars == 1200
+    assert settings.edge_tts_max_chars == 500
+    assert settings.edge_tts_timeout_seconds == 90.0
 
 
 def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -95,6 +98,9 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.setenv("RQ_JOB_TIMEOUT_SECONDS", "3600")
     monkeypatch.setenv("CHUNK_TRANSLATION_CONCURRENCY", "4")
     monkeypatch.setenv("CHUNK_TTS_CONCURRENCY", "3")
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "1500")
+    monkeypatch.setenv("EDGE_TTS_MAX_CHARS", "450")
+    monkeypatch.setenv("EDGE_TTS_TIMEOUT_SECONDS", "120.0")
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://example:6379/1"
     assert settings.storage_path == tmp_path
@@ -124,6 +130,9 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.rq_job_timeout_seconds == 3600
     assert settings.chunk_translation_concurrency == 4
     assert settings.chunk_tts_concurrency == 3
+    assert settings.chunk_max_chars == 1500
+    assert settings.edge_tts_max_chars == 450
+    assert settings.edge_tts_timeout_seconds == 120.0
 
 
 def test_parse_tts_default_voice_by_language_skips_malformed() -> None:

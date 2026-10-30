@@ -954,7 +954,7 @@ def test_tts_preview_timeout_error(tmp_path: Path) -> None:
         _preview_rate_limiter.reset()
 
 
-def test_post_narrate_rejects_srt(jobs_client: TestClient) -> None:
+def test_post_narrate_accepts_srt_phase_2(jobs_client: TestClient) -> None:
     srt_text = (
         "1\n"
         "00:00:01,000 --> 00:00:04,000\n"
@@ -972,9 +972,12 @@ def test_post_narrate_rejects_srt(jobs_client: TestClient) -> None:
             "voice": "fake-en-US-a",
         },
     )
-    assert res.status_code == 400
-    assert res.json()["error_type"] == ErrorType.INVALID_INPUT
-    assert "SRT narrate mode is coming in phase 2" in res.json()["message"]
+    assert res.status_code == 202
+    job_id = res.json()["job_id"]
+    get_res = jobs_client.get(f"/api/jobs/{job_id}")
+    assert get_res.status_code == 200
+    body = get_res.json()
+    assert body["mode"] == "narrate"
 
 
 def test_decode_source_text_small_gbk_and_big5_not_mojibake() -> None:
