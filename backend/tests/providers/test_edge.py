@@ -284,6 +284,169 @@ def test_sdk_edge_client_splits_large_text_and_concatenates(
     assert list(tmp_path.glob("*.tmp")) == []
 
 
+def _install_fake_edge_tts(
+    monkeypatch: pytest.MonkeyPatch, communicate: type, no_audio_exc: type | None = None
+) -> None:
+    import sys
+    import types
+
+    fake_edge_tts = types.ModuleType("edge_tts")
+    fake_edge_tts.Communicate = communicate  # type: ignore[attr-defined]
+    if no_audio_exc is not None:
+        fake_exceptions = types.ModuleType("edge_tts.exceptions")
+        fake_exceptions.NoAudioReceived = no_audio_exc  # type: ignore[attr-defined]
+        fake_edge_tts.exceptions = fake_exceptions  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge_tts)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Nhiệt độ -5 độ.",
+        "Hắn — kẻ thù — đứng đó.",
+        "1990 - 2000",
+    ],
+)
+def test_clean_tts_text_preserves_dashes(text: str) -> None:
+    from app.providers.tts.edge import _clean_tts_text
+
+    assert _clean_tts_text(text) == text
+
+
+def test_clean_tts_text_strips_invisible_chars_and_normalizes_spaces() -> None:
+    from app.providers.tts.edge import _clean_tts_text
+
+    assert _clean_tts_text("Xin\u200b chào\u00a0\u00a0bạn.\n\n\nTạm biệt.") == (
+        "Xin chào bạn.\nTạm biệt."
+    )
+
+
+def test_sdk_edge_client_raises_after_empty_output_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.providers.tts.edge import SdkEdgeTtsClient
+
+    calls: list[str] = []
+
+    class _EmptyCommunicate:
+        def __init__(self, text: str, voice: str, rate: str) -> None:
+            self._text = text
+
+        async def save(self, path: str) -> None:
+            calls.append(self._text)
+            Path(path).write_bytes(b"")
+
+    _install_fake_edge_tts(monkeypatch, _EmptyCommunicate)
+    client = SdkEdgeTtsClient(timeout_seconds=5.0, retry_backoff_seconds=0.0)
+    out_path = tmp_path / "out.mp3"
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(client.synthesize("hello", "voice", "+0%", out_path))
+    assert exc.value.error_type is ErrorType.TTS_FAILED
+    assert len(calls) == 2
+    assert not out_path.exists()
+
+
+def test_sdk_edge_client_fails_whole_synthesis_when_one_segment_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.providers.tts.edge import SdkEdgeTtsClient
+
+    class _LastSegmentEmpty:
+        def __init__(self, text: str, voice: str, rate: str) -> None:
+            self._text = text
+
+        async def save(self, path: str) -> None:
+            payload = b"" if "Câu thứ ba" in self._text else b"AUDIO"
+            Path(path).write_bytes(payload)
+
+    _install_fake_edge_tts(monkeypatch, _LastSegmentEmpty)
+    client = SdkEdgeTtsClient(timeout_seconds=5.0, max_chars=60, retry_backoff_seconds=0.0)
+    long_text = (
+        "Câu đầu tiên rất dài ở đây. Câu thứ hai tiếp theo ở đây. Câu thứ ba kết thúc ở đây."
+    )
+    out_path = tmp_path / "out.mp3"
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(client.synthesize(long_text, "voice", "+0%", out_path))
+    assert exc.value.error_type is ErrorType.TTS_FAILED
+    assert not out_path.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_sdk_edge_client_retries_no_audio_received_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.providers.tts.edge import SdkEdgeTtsClient
+
+    class NoAudioReceived(Exception):
+        pass
+
+    attempts: list[int] = []
+
+    class _FlakyCommunicate:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def save(self, path: str) -> None:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise NoAudioReceived()
+            Path(path).write_bytes(b"AUDIO")
+
+    _install_fake_edge_tts(monkeypatch, _FlakyCommunicate, no_audio_exc=NoAudioReceived)
+    client = SdkEdgeTtsClient(timeout_seconds=5.0, retry_backoff_seconds=0.0)
+    out_path = tmp_path / "out.mp3"
+    asyncio.run(client.synthesize("hello", "voice", "+0%", out_path))
+    assert len(attempts) == 2
+    assert out_path.read_bytes() == b"AUDIO"
+
+
+def test_sdk_edge_client_does_not_retry_timeouts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.providers.tts.edge import SdkEdgeTtsClient
+
+    attempts: list[int] = []
+
+    class _HangingCommunicate:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def save(self, path: str) -> None:
+            attempts.append(1)
+            await asyncio.sleep(10)
+
+    _install_fake_edge_tts(monkeypatch, _HangingCommunicate)
+    client = SdkEdgeTtsClient(timeout_seconds=0.05, retry_backoff_seconds=0.0)
+    with pytest.raises(TimeoutError):
+        asyncio.run(client.synthesize("hello", "voice", "+0%", tmp_path / "out.mp3"))
+    # Timeouts are left to the orchestrator RetryPolicy so worst-case time stays bounded.
+    assert len(attempts) == 1
+
+
+def test_sdk_edge_client_timeout_is_a_deadline_for_all_segments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.providers.tts.edge import SdkEdgeTtsClient
+
+    class _SlowCommunicate:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def save(self, path: str) -> None:
+            await asyncio.sleep(0.1)
+            Path(path).write_bytes(b"AUDIO")
+
+    _install_fake_edge_tts(monkeypatch, _SlowCommunicate)
+    # Each segment fits inside the timeout on its own; together they exceed it.
+    client = SdkEdgeTtsClient(timeout_seconds=0.25, max_chars=60, retry_backoff_seconds=0.0)
+    long_text = (
+        "Câu đầu tiên rất dài ở đây. Câu thứ hai tiếp theo ở đây. Câu thứ ba kết thúc ở đây."
+    )
+    with pytest.raises(TimeoutError):
+        asyncio.run(client.synthesize(long_text, "voice", "+0%", tmp_path / "out.mp3"))
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 @pytest.mark.integration
 def test_edge_live_synthesize_opt_in(tmp_path: Path) -> None:
     if os.environ.get("EDGE_TTS_INTEGRATION") != "1":

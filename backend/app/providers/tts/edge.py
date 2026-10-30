@@ -30,8 +30,6 @@ _TTS_UNICODE_SPACE_RE = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u300
 def _clean_tts_text(text: str) -> str:
     cleaned = _TTS_INVISIBLE_CHARS_RE.sub("", text)
     cleaned = _TTS_UNICODE_SPACE_RE.sub(" ", cleaned)
-    cleaned = re.sub(r"^\s*[-–—]\s*", "", cleaned, flags=re.MULTILINE)
-    cleaned = re.sub(r"\s+[-–—]\s*", " ", cleaned)
     lines = [re.sub(r" +", " ", line.strip()) for line in cleaned.splitlines()]
     non_empty = [line for line in lines if line]
     return "\n".join(non_empty)
@@ -44,6 +42,12 @@ def speed_to_edge_rate(speed: float) -> str:
 
 DEFAULT_EDGE_TTS_TIMEOUT_SECONDS = 90.0
 DEFAULT_EDGE_TTS_MAX_CHARS = 500
+# In-client attempts for fast failures only (NoAudioReceived, empty output). Timeouts are
+# not retried here: the orchestrator RetryPolicy owns them, so one chunk is bounded by
+# RETRY_MAX_ATTEMPTS * EDGE_TTS_TIMEOUT_SECONDS.
+_EDGE_MAX_ATTEMPTS = 2
+_EDGE_RETRY_BACKOFF_SECONDS = 2.0
+_EDGE_SEGMENT_PAUSE_SECONDS = 0.3
 
 
 class EdgeTTSProvider:
@@ -167,9 +171,11 @@ class SdkEdgeTtsClient:
         self,
         timeout_seconds: float = DEFAULT_EDGE_TTS_TIMEOUT_SECONDS,
         max_chars: int = DEFAULT_EDGE_TTS_MAX_CHARS,
+        retry_backoff_seconds: float = _EDGE_RETRY_BACKOFF_SECONDS,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._max_chars = max(50, max_chars)
+        self._retry_backoff_seconds = retry_backoff_seconds
 
     def list_voices(self) -> Sequence[Mapping[str, Any]]:
         import edge_tts
@@ -177,11 +183,18 @@ class SdkEdgeTtsClient:
         return list(_run_sync(edge_tts.list_voices()))
 
     async def synthesize(self, text: str, voice: str, rate: str, output_path: Path) -> None:
-        if len(text) <= self._max_chars:
-            await self._synthesize_single(text, voice, rate, output_path)
-            return
+        # One deadline covers every segment and retry of this chunk.
+        async with asyncio.timeout(self._timeout_seconds):
+            await self._synthesize_segments(text, voice, rate, output_path)
 
-        segments = [c.text for c in chunk_text(text, max_chars=self._max_chars)]
+    async def _synthesize_segments(
+        self, text: str, voice: str, rate: str, output_path: Path
+    ) -> None:
+        segments = (
+            [c.text for c in chunk_text(text, max_chars=self._max_chars)]
+            if len(text) > self._max_chars
+            else [text]
+        )
         if len(segments) <= 1:
             await self._synthesize_single(text, voice, rate, output_path)
             return
@@ -189,6 +202,8 @@ class SdkEdgeTtsClient:
         temp_paths: list[Path] = []
         try:
             for idx, segment in enumerate(segments):
+                if idx:
+                    await asyncio.sleep(_EDGE_SEGMENT_PAUSE_SECONDS)
                 part_path = output_path.parent / f"{output_path.stem}.part-{idx:03d}.tmp"
                 temp_paths.append(part_path)
                 await self._synthesize_single(segment, voice, rate, part_path)
@@ -205,37 +220,43 @@ class SdkEdgeTtsClient:
     async def _synthesize_single(self, text: str, voice: str, rate: str, output_path: Path) -> None:
         import edge_tts
 
-        no_audio_exc = getattr(getattr(edge_tts, "exceptions", None), "NoAudioReceived", ())
-        retry_exceptions = (no_audio_exc, TimeoutError) if no_audio_exc else (TimeoutError,)
+        no_audio_exc = getattr(getattr(edge_tts, "exceptions", None), "NoAudioReceived", None)
+        retry_exceptions: tuple[type[BaseException], ...] = (
+            (no_audio_exc, _EmptyAudioError) if no_audio_exc else (_EmptyAudioError,)
+        )
 
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(_EDGE_MAX_ATTEMPTS):
             output_path.unlink(missing_ok=True)
             communicate = edge_tts.Communicate(text, voice, rate=rate)
             try:
-                await asyncio.wait_for(
-                    communicate.save(str(output_path)), timeout=self._timeout_seconds
-                )
-                if output_path.is_file() and output_path.stat().st_size > 0:
-                    return
+                await communicate.save(str(output_path))
+                if not output_path.is_file() or output_path.stat().st_size == 0:
+                    raise _EmptyAudioError()
+                return
             except retry_exceptions as exc:
                 output_path.unlink(missing_ok=True)
-                if attempt + 1 >= max_retries:
-                    raise
-                wait_seconds = 2.0 * (attempt + 1)
+                if attempt + 1 >= _EDGE_MAX_ATTEMPTS:
+                    raise DomainError(
+                        ErrorType.TTS_FAILED,
+                        "tts failed: no audio received from speech service",
+                        retry_after_seconds=3.0,
+                    ) from exc
+                wait_seconds = self._retry_backoff_seconds * (attempt + 1)
                 logger.warning(
                     "edge_tts_client_retry: attempt %d/%d failed with %s, retrying in %.1fs",
                     attempt + 1,
-                    max_retries,
+                    _EDGE_MAX_ATTEMPTS,
                     type(exc).__name__,
                     wait_seconds,
                 )
                 await asyncio.sleep(wait_seconds)
-            except Exception:
+            except BaseException:
                 output_path.unlink(missing_ok=True)
                 raise
-            finally:
-                await asyncio.sleep(0.3)
+
+
+class _EmptyAudioError(Exception):
+    """Edge returned without writing any audio bytes."""
 
 
 def _to_voice(record: Mapping[str, Any]) -> Voice:

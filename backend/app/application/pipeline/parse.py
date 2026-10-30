@@ -93,9 +93,40 @@ def strip_srt(text: str) -> str:
                 lines.append(cleaned)
         if lines:
             block_text = " ".join(lines)
-            if not cleaned_blocks or cleaned_blocks[-1] != block_text:
+            merged = _merge_rolling_cue(cleaned_blocks[-1], block_text) if cleaned_blocks else None
+            if merged is None:
                 cleaned_blocks.append(block_text)
+            else:
+                cleaned_blocks[-1] = merged
     return "\n\n".join(cleaned_blocks).strip()
+
+
+_MIN_ROLLING_OVERLAP_WORDS = 2
+
+
+def _merge_rolling_cue(previous: str, current: str) -> str | None:
+    """Collapse progressive/rolling captions into one block.
+
+    Identical consecutive cues are dropped (so a repeated "No." / "No." is narrated once),
+    a cue that extends the previous one replaces it, and a cue whose first words repeat
+    at least ``_MIN_ROLLING_OVERLAP_WORDS`` trailing words of the previous one is appended
+    without the overlap. Returns ``None`` when the cues are unrelated.
+    """
+    prev_words = previous.split()
+    cur_words = current.split()
+    if cur_words[: len(prev_words)] == prev_words:
+        return current
+    if (
+        _MIN_ROLLING_OVERLAP_WORDS <= len(cur_words) <= len(prev_words)
+        and prev_words[-len(cur_words) :] == cur_words
+    ):
+        return previous
+    for overlap in range(min(len(prev_words), len(cur_words)) - 1, 0, -1):
+        if overlap < _MIN_ROLLING_OVERLAP_WORDS:
+            break
+        if prev_words[-overlap:] == cur_words[:overlap]:
+            return " ".join(prev_words + cur_words[overlap:])
+    return None
 
 
 async def parse_source(

@@ -230,13 +230,49 @@ export function stripSrtToText(raw: string): string {
 
     if (cueLines.length > 0) {
       const blockText = cueLines.join(" ");
-      if (cleanedBlocks.length === 0 || cleanedBlocks[cleanedBlocks.length - 1] !== blockText) {
+      const merged =
+        cleanedBlocks.length > 0
+          ? mergeRollingCue(cleanedBlocks[cleanedBlocks.length - 1], blockText)
+          : null;
+      if (merged === null) {
         cleanedBlocks.push(blockText);
+      } else {
+        cleanedBlocks[cleanedBlocks.length - 1] = merged;
       }
     }
   }
 
   return cleanedBlocks.join("\n\n").trim();
+}
+
+const MIN_ROLLING_OVERLAP_WORDS = 2;
+
+// Mirrors backend parse._merge_rolling_cue: collapse progressive/rolling captions.
+function mergeRollingCue(previous: string, current: string): string | null {
+  const prevWords = previous.split(/\s+/);
+  const curWords = current.split(/\s+/);
+  const sameWords = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((word, idx) => word === b[idx]);
+  if (sameWords(curWords.slice(0, prevWords.length), prevWords)) {
+    return current;
+  }
+  if (
+    curWords.length >= MIN_ROLLING_OVERLAP_WORDS &&
+    curWords.length <= prevWords.length &&
+    sameWords(prevWords.slice(-curWords.length), curWords)
+  ) {
+    return previous;
+  }
+  for (
+    let overlap = Math.min(prevWords.length, curWords.length) - 1;
+    overlap >= MIN_ROLLING_OVERLAP_WORDS;
+    overlap--
+  ) {
+    if (sameWords(prevWords.slice(-overlap), curWords.slice(0, overlap))) {
+      return [...prevWords, ...curWords.slice(overlap)].join(" ");
+    }
+  }
+  return null;
 }
 
 export type TextMetrics = {

@@ -1050,6 +1050,38 @@ def test_strip_srt_strips_ass_tags_and_sound_effects() -> None:
     assert result == "Hello brave world!\n\nWelcome to the show."
 
 
+def _srt(*cues: str) -> str:
+    return "\n\n".join(
+        f"{idx}\n00:00:{idx:02d},000 --> 00:00:{idx:02d},900\n{cue}"
+        for idx, cue in enumerate(cues, start=1)
+    )
+
+
+def test_strip_srt_collapses_rolling_captions() -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    srt = _srt("Hello there", "Hello there my friend", "my friend how are you")
+    assert strip_srt(srt) == "Hello there my friend how are you"
+
+
+def test_strip_srt_keeps_cues_sharing_a_single_word() -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    srt = _srt("I saw you.", "you never listen.")
+    assert strip_srt(srt) == "I saw you.\n\nyou never listen."
+    assert strip_srt(_srt("I saw you.", "you.")) == "I saw you.\n\nyou."
+    assert strip_srt(_srt("Hello there my friend", "my friend")) == "Hello there my friend"
+
+
+def test_strip_srt_drops_identical_consecutive_cues() -> None:
+    # Deliberate: back-to-back identical cues are treated as a rendering repeat,
+    # so a genuinely repeated short line ("No." / "No.") is narrated once.
+    from app.application.pipeline.parse import strip_srt
+
+    srt = _srt("No.", "No.", "Fine.", "No.")
+    assert strip_srt(srt) == "No.\n\nFine.\n\nNo."
+
+
 def test_plain_txt_with_embedded_timecode_and_chapter_numbers_is_not_stripped(
     tmp_path: Path,
 ) -> None:

@@ -120,6 +120,21 @@ describe("jobUi", () => {
     expect(stripSrtToText(srt)).toBe("Hello world.\n\nSecond line.");
   });
 
+  it("collapses rolling captions matching backend strip_srt", () => {
+    const srt = (...cues: string[]) =>
+      cues
+        .map((cue, idx) => `${idx + 1}\n00:00:0${idx + 1},000 --> 00:00:0${idx + 1},900\n${cue}`)
+        .join("\n\n");
+    expect(stripSrtToText(srt("Hello there", "Hello there my friend", "my friend how are you"))).toBe(
+      "Hello there my friend how are you",
+    );
+    expect(stripSrtToText(srt("I saw you.", "you never listen."))).toBe(
+      "I saw you.\n\nyou never listen.",
+    );
+    expect(stripSrtToText(srt("I saw you.", "you."))).toBe("I saw you.\n\nyou.");
+    expect(stripSrtToText(srt("No.", "No.", "Fine.", "No."))).toBe("No.\n\nFine.\n\nNo.");
+  });
+
   it("strips ASS tags and drops sound-effect cues matching backend strip_srt", () => {
     const srt = [
       "1",
