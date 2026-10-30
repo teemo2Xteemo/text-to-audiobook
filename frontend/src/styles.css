@@ -1566,6 +1566,28 @@ audio {
   margin-top: 0.75rem;
 }
 
+.srt-timing-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.srt-timing-options legend {
+  width: 100%;
+  padding: 0;
+  margin-bottom: 0.25rem;
+}
+
+.srt-timing-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
 /* Analysis Panel */
 .analysis-panel {
   margin-top: 1rem;

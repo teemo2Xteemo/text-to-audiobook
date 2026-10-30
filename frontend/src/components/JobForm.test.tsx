@@ -100,7 +100,31 @@ describe("JobForm", () => {
     await user.type(screen.getByLabelText("Paste story"), srtText);
 
     expect(screen.getByText("SRT · Continuous Narration")).toBeInTheDocument();
-    expect(screen.getByText("Subtitles will be converted to continuous narration")).toBeInTheDocument();
+    expect(screen.getByLabelText("Continuous narration")).toBeChecked();
+    expect(screen.getByLabelText("Match subtitle timestamps")).not.toBeChecked();
+  });
+
+  it("sends srt_timing only for narrated subtitles", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    const srtFile = new File(
+      ["1\n00:00:01,000 --> 00:00:03,000\nHello world.\n"],
+      "captions.srt",
+      { type: "application/x-subrip" },
+    );
+    await user.upload(screen.getByLabelText(/upload a/i), srtFile);
+
+    // Translate mode never offers or sends a timing choice.
+    expect(screen.queryByLabelText("Match subtitle timestamps")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Narrate/i }));
+    await user.click(screen.getByLabelText("Match subtitle timestamps"));
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const payload = onSubmit.mock.calls[0]?.[0] as { mode?: string; srt_timing?: string };
+    expect(payload.mode).toBe("narrate");
+    expect(payload.srt_timing).toBe("aligned");
   });
 
   it("provides an accessible swap button that exchanges source and target languages", async () => {

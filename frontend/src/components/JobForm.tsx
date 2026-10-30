@@ -7,6 +7,7 @@ import type {
   CreateJobInput,
   JobMode,
   OutputFormat,
+  SrtTiming,
   Voice,
 } from "../api/types";
 import {
@@ -100,6 +101,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   const [voiceId, setVoiceId] = useState("");
   const [speed, setSpeed] = useState(SPEED_DEFAULT);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("mp3");
+  const [srtTiming, setSrtTiming] = useState<SrtTiming>("continuous");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -223,6 +225,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   );
 
   const metrics = useMemo(() => estimateTextMetrics(text), [text]);
+  const isSubtitleInput = metrics.isSrt || /\.(srt|vtt)$/i.test(file?.name ?? "");
 
   useEffect(() => {
     setTranslationProfileId((current) => {
@@ -458,6 +461,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
       translation_profile_id:
         mode === "narrate" ? undefined : (translationProfileId || undefined),
       mode,
+      srt_timing: mode === "narrate" && isSubtitleInput ? srtTiming : undefined,
     };
     if (file) {
       input.file = file;
@@ -638,11 +642,33 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
 
           {mode === "narrate" ? (
             <div className="narrate-mode-note">
-              <span className="muted italic text-sm">
-                {metrics.isSrt
-                  ? "Subtitles will be converted to continuous narration"
-                  : "No translation needed"}
-              </span>
+              {isSubtitleInput ? (
+                <fieldset className="srt-timing-options" disabled={disabled}>
+                  <legend className="muted text-sm">Subtitle timing</legend>
+                  <label>
+                    <input
+                      type="radio"
+                      name="srt-timing"
+                      value="continuous"
+                      checked={srtTiming === "continuous"}
+                      onChange={() => setSrtTiming("continuous")}
+                    />
+                    Continuous narration
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="srt-timing"
+                      value="aligned"
+                      checked={srtTiming === "aligned"}
+                      onChange={() => setSrtTiming("aligned")}
+                    />
+                    Match subtitle timestamps
+                  </label>
+                </fieldset>
+              ) : (
+                <span className="muted italic text-sm">No translation needed</span>
+              )}
             </div>
           ) : (
             profileOptions.length > 0 && (
@@ -799,7 +825,11 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
             <div className="editor-metrics" aria-live="polite">
               {metrics.isSrt ? (
                 <span className="srt-badge">
-                  {mode === "narrate" ? "SRT · Continuous Narration" : "SRT Timecodes Detected"}
+                  {mode !== "narrate"
+                    ? "SRT Timecodes Detected"
+                    : srtTiming === "aligned"
+                      ? "SRT · Timed Narration"
+                      : "SRT · Continuous Narration"}
                 </span>
               ) : null}
               <span className="metric-item">{metrics.chars.toLocaleString()} chars</span>

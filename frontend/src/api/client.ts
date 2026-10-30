@@ -132,6 +132,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
     if (input.mode) {
       form.set("mode", input.mode);
     }
+    if (input.srt_timing) {
+      form.set("srt_timing", input.srt_timing);
+    }
     form.set("file", input.file);
     const response = await fetch(requestUrl("/api/jobs"), {
       method: "POST",
@@ -155,6 +158,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
   }
   if (input.mode) {
     body.mode = input.mode;
+  }
+  if (input.srt_timing) {
+    body.srt_timing = input.srt_timing;
   }
   const response = await fetch(requestUrl("/api/jobs"), {
     method: "POST",
