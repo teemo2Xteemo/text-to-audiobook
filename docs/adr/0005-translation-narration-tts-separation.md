@@ -58,3 +58,30 @@ Users often wish to generate audiobooks from source text directly without transl
 - Checkpoint persistence and resume behavior remain completely unified across both modes.
 - Narration text processing continues to clean symbols, format numbers, and insert natural punctuation pauses before TTS synthesis.
 
+
+## Addendum: Subtitle Timing, Chapter Pauses & Speech Normalization (2026-10-31)
+
+### Context
+
+Issue #28 Phases 2 and 4 extend narrate mode for subtitles and long books, and add an optional
+LLM pass that turns numbers, dates and abbreviations into spoken words.
+
+### Decision
+
+1. **Continuous subtitles by default:** narrate + `.srt`/`.vtt` joins cues into paragraphs and
+   breaks only after a > 2 s gap that follows a finished sentence (`strip_srt`), so cue boundaries
+   never cause mid-sentence pauses.
+2. **Per-job `srt_timing`:** `aligned` routes narrate + subtitles through the existing cue timeline
+   (`_run_srt` with pass-through). Translate mode keeps the timeline and rejects the field.
+3. **Chapter pauses:** chunks carry their chapter ordinal; the narrate merge inserts
+   `NARRATE_CHAPTER_PAUSE_MS` of silence at chapter boundaries. Per-chapter files stay with #29.
+4. **Speech normalization is a separate, opt-in port:** `TextNormalizer` runs inside the narration
+   stage before `NarrationProcessor`, only when the job sets `normalize_text`. It never translates.
+   Results are cached under their own `normalization` cache operation keyed by normalizer
+   provider/model, independent of the translation and TTS keys.
+
+### Consequences
+
+- Narrate stays model-free unless a job opts into normalization; the UI labels that cost.
+- The worker builds the normalizer only for opted-in jobs, so a missing LLM key cannot fail other jobs.
+- Only OpenAI-compatible chat providers (Groq, OpenRouter) implement `TextNormalizer` today.

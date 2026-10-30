@@ -194,6 +194,7 @@ curl -sS http://127.0.0.1:8000/api/capabilities
 - `voices`: Available voices with `id`, `language`, and `label`. Filterable via query parameter: `?language=<bcp47>`.
 - `translation_profiles`: Configured translation profiles (`id`, `provider`, `model`, `label`, `badge`, `description`, `is_default`, `supported_languages`).
 - `estimate_defaults`: Default duration calculation parameters (`chars_per_second`, `preview_wpm`).
+- `text_normalization`: `true` when `TEXT_NORMALIZER_PROVIDER` is set, so jobs may request `normalize_text`.
 
 ---
 
@@ -298,6 +299,8 @@ Creates an asynchronous generation job. Accepts JSON (`CreateJobJsonBody`) or mu
 | `speed` | float | `1.0` | Speech rate multiplier (`0.5` to `2.0`). |
 | `output_format` | string | `"mp3"` | Audio output container: `"mp3"` or `"wav"`. |
 | `translation_profile_id` | string | `null` | Optional translation profile from capabilities. Allowed in `translate` mode; rejected in `narrate` mode. |
+| `srt_timing` | string | `"continuous"` | Narrate mode with `.srt`/`.vtt` input only. `"continuous"` reads the subtitles as one story (cues joined; a new paragraph after a > 2 s pause that ends a sentence). `"aligned"` voices each cue on its timestamp and also writes timed subtitles. Rejected in `translate` mode, which always uses the cue timeline. |
+| `normalize_text` | boolean | `false` | Rewrite numbers, dates and abbreviations as spoken words with an LLM before narration (no translation). Requires `TEXT_NORMALIZER_PROVIDER` (`groq` or `openrouter`, reusing that provider's key and model); otherwise `PROVIDER_CONFIGURATION_ERROR`. Adds model cost. |
 
 **Narrate Mode Example (Direct Narration Without Translation):**
 ```bash
@@ -324,6 +327,8 @@ curl -sS -X POST http://127.0.0.1:8000/api/jobs \
   }'
 ```
 *Note:* In `translate` mode, if `source_language == target_language`, translation is automatically bypassed using pass-through checkpoints.
+
+*Note:* Narrating chaptered text inserts `NARRATE_CHAPTER_PAUSE_MS` (default 1500 ms, `0` disables) of silence between chapters in the merged audio.
 
 #### 2. Get Job Status (`GET /api/jobs/{job_id}`)
 
