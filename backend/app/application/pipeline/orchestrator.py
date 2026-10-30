@@ -47,6 +47,7 @@ from app.domain.ports import (
     JobStore,
     LanguageDetector,
     NarrationProcessor,
+    TextNormalizer,
     TranslationProvider,
     TTSProvider,
 )
@@ -74,6 +75,7 @@ class PipelineOrchestrator:
         translation_concurrency: int = 1,
         tts_concurrency: int = 1,
         chapter_pause_ms: int = 0,
+        text_normalizer: TextNormalizer | None = None,
     ) -> None:
         self._translation = translation
         self._tts = tts
@@ -91,6 +93,7 @@ class PipelineOrchestrator:
         self._translation_concurrency = max(1, translation_concurrency)
         self._tts_concurrency = max(1, tts_concurrency)
         self._chapter_pause_ms = max(0, chapter_pause_ms)
+        self._text_normalizer = text_normalizer
         self._active_chunk_id: str | None = None
 
     async def run(self, job: Job, text: str, *, workspace: Path) -> Job:
@@ -586,8 +589,11 @@ class PipelineOrchestrator:
             source = workspace / "chunks" / f"{chunk.id}.translated.txt"
             path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
             if not checkpoints.is_complete(chunk.id, STAGE_NARRATED):
+                spoken = source.read_text(encoding="utf-8")
+                if job.normalize_text:
+                    spoken = await self._normalize_for_speech(job, chunk, spoken, workspace)
                 narrated = narrate_chunk(
-                    source.read_text(encoding="utf-8"),
+                    spoken,
                     language=job.target_language,
                     processor=self._narration,
                 )
@@ -606,6 +612,49 @@ class PipelineOrchestrator:
                 extra={"job_id": job.id, "chunk_id": chunk.id, "stage": STAGE_NARRATED},
             )
         return job
+
+    async def _normalize_for_speech(
+        self, job: Job, chunk: Chunk, text: str, workspace: Path
+    ) -> str:
+        if self._text_normalizer is None:
+            raise DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                "text normalization is not configured on this server",
+            )
+        path = workspace / "chunks" / f"{chunk.id}.normalized.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cache = self._artifact_cache
+        if cache is not None and cache.fill_normalization(
+            text=text,
+            language=job.target_language,
+            destination=path,
+            job_id=job.id,
+            chunk_id=chunk.id,
+        ):
+            return path.read_text(encoding="utf-8")
+        normalizer = self._text_normalizer
+
+        async def _normalize() -> str:
+            return await normalizer.normalize(text, job.target_language)
+
+        normalized = await with_chunk_retry(
+            _normalize,
+            policy=self._retry_policy,
+            sleep=self._sleep,
+            job_id=job.id,
+            chunk_id=chunk.id,
+            stage=STAGE_NARRATED,
+        )
+        path.write_text(normalized, encoding="utf-8")
+        if cache is not None:
+            cache.store_normalization(
+                text=text,
+                language=job.target_language,
+                source=path,
+                job_id=job.id,
+                chunk_id=chunk.id,
+            )
+        return normalized
 
     async def _generate_audio(
         self,
@@ -773,7 +822,11 @@ class PipelineOrchestrator:
         sources: list[Path] = []
         pause: Path | None = None
         for position, chunk in enumerate(chunks):
-            if self._chapter_pause_ms and position and chunk.chapter != chunks[position - 1].chapter:
+            if (
+                self._chapter_pause_ms
+                and position
+                and chunk.chapter != chunks[position - 1].chapter
+            ):
                 if pause is None:
                     pause = workspace / "audio" / f"chapter-pause.{ext}"
                     await self._audio.generate_silence(

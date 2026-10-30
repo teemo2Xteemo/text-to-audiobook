@@ -18,6 +18,8 @@ class CacheIdentity:
     translation_model: str
     tts_provider: str
     tts_model: str
+    normalizer_provider: str = ""
+    normalizer_model: str = ""
 
 
 class PipelineArtifactCache:
@@ -81,6 +83,40 @@ class PipelineArtifactCache:
             source=source,
             job_id=job_id,
             chunk_id=chunk_id,
+        )
+
+    def fill_normalization(
+        self, *, text: str, language: str, destination: Path, job_id: str, chunk_id: str
+    ) -> bool:
+        return self._fill(
+            operation="normalization",
+            key=self._normalization_key(text, language),
+            destination=destination,
+            job_id=job_id,
+            chunk_id=chunk_id,
+        )
+
+    def store_normalization(
+        self, *, text: str, language: str, source: Path, job_id: str, chunk_id: str
+    ) -> None:
+        self._store_blob(
+            operation="normalization",
+            key=self._normalization_key(text, language),
+            source=source,
+            job_id=job_id,
+            chunk_id=chunk_id,
+        )
+
+    def _normalization_key(self, text: str, language: str) -> str:
+        return build_cache_key(
+            operation="normalization",
+            text=text,
+            source_language=language,
+            target_language=language,
+            provider=self._identity.normalizer_provider,
+            model=self._identity.normalizer_model,
+            voice="",
+            settings={},
         )
 
     def fill_tts(

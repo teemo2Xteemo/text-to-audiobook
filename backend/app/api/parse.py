@@ -148,6 +148,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
         translation_profile_id=parsed.translation_profile_id,
         mode=parsed.mode,
         srt_timing=parsed.srt_timing,
+        normalize_text=parsed.normalize_text,
     )
 
 
@@ -177,7 +178,9 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
     try:
         srt_timing = SrtTiming(timing_raw)
     except ValueError:
-        raise DomainError(ErrorType.INVALID_INPUT, f"invalid srt_timing: {timing_raw[:32]}") from None
+        raise DomainError(
+            ErrorType.INVALID_INPUT, f"invalid srt_timing: {timing_raw[:32]}"
+        ) from None
 
     speed_raw = form.get("speed")
     output_raw = form.get("output_format")
@@ -199,6 +202,7 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         translation_profile_id=_optional_form_string(form.get("translation_profile_id")),
         mode=mode,
         srt_timing=srt_timing,
+        normalize_text=_parse_bool(form.get("normalize_text"), "normalize_text"),
     )
 
 
@@ -408,6 +412,15 @@ def _optional_form_string(value: object) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _parse_bool(value: object, field: str) -> bool:
+    raw = (_optional_form_string(value) or "false").lower()
+    if raw in {"true", "1"}:
+        return True
+    if raw in {"false", "0"}:
+        return False
+    raise DomainError(ErrorType.INVALID_INPUT, f"{field} must be true or false")
 
 
 def _parse_speed(value: object) -> float:

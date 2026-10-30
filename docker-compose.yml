@@ -53,6 +53,7 @@ services:
       CHUNK_MAX_CHARS: ${CHUNK_MAX_CHARS:-1200}
       EDGE_TTS_MAX_CHARS: ${EDGE_TTS_MAX_CHARS:-500}
       EDGE_TTS_TIMEOUT_SECONDS: ${EDGE_TTS_TIMEOUT_SECONDS:-90}
+      TEXT_NORMALIZER_PROVIDER: ${TEXT_NORMALIZER_PROVIDER:-none}
     volumes:
       # Image code only. A live source mount lives in docker-compose.dev.yml.
       - ./storage:/data/storage
@@ -112,6 +113,7 @@ services:
       CHUNK_MAX_CHARS: ${CHUNK_MAX_CHARS:-1200}
       EDGE_TTS_MAX_CHARS: ${EDGE_TTS_MAX_CHARS:-500}
       EDGE_TTS_TIMEOUT_SECONDS: ${EDGE_TTS_TIMEOUT_SECONDS:-90}
+      TEXT_NORMALIZER_PROVIDER: ${TEXT_NORMALIZER_PROVIDER:-none}
       NARRATE_CHAPTER_PAUSE_MS: ${NARRATE_CHAPTER_PAUSE_MS:-1500}
       HF_HOME: /data/huggingface
     volumes:

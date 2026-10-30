@@ -136,6 +136,7 @@ class Job:
     recovery_attempts: int = 0
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
+    normalize_text: bool = False
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -178,6 +179,8 @@ class Job:
             payload["recovery_attempts"] = self.recovery_attempts
         if self.srt_timing is not SrtTiming.CONTINUOUS:
             payload["srt_timing"] = self.srt_timing.value
+        if self.normalize_text:
+            payload["normalize_text"] = True
         return payload
 
     @classmethod
@@ -213,4 +216,5 @@ class Job:
             recovery_attempts=int(data.get("recovery_attempts", 0)),
             mode=mode,
             srt_timing=srt_timing,
+            normalize_text=data.get("normalize_text") is True,
         )

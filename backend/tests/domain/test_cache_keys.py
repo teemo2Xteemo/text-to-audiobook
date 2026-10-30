@@ -68,7 +68,7 @@ def test_operation_separates_translation_and_tts() -> None:
     assert translation != tts
 
 
-def test_operations_are_translation_and_tts_only() -> None:
-    assert CACHE_OPERATIONS == frozenset({"translation", "tts"})
+def test_operations_are_translation_tts_and_normalization_only() -> None:
+    assert CACHE_OPERATIONS == frozenset({"translation", "tts", "normalization"})
     with pytest.raises(ValueError, match="unsupported cache operation"):
         _key(operation="narration")

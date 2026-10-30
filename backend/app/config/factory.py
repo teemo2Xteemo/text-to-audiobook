@@ -20,6 +20,7 @@ from app.domain.ports import (
     LanguageDetector,
     NarrationProcessor,
     NullTranslationProvider,
+    TextNormalizer,
     TranslationProvider,
     TTSProvider,
 )
@@ -69,6 +70,7 @@ def build_job_service(settings: Settings) -> JobService:
         tts=tts,
         detector=build_language_detector(settings),
         language_confirm_threshold=settings.language_confirm_threshold,
+        text_normalization_available=settings.text_normalization_enabled,
     )
 
 
@@ -331,6 +333,7 @@ def build_orchestrator(
     *,
     for_mode: JobMode | None = None,
     translation_provider: TranslationProvider | None = None,
+    with_text_normalizer: bool = False,
 ) -> PipelineOrchestrator:
     filesystem, store, _queue = _infrastructure(settings)
     del filesystem
@@ -357,6 +360,8 @@ def build_orchestrator(
         translation_concurrency=settings.chunk_translation_concurrency,
         tts_concurrency=settings.chunk_tts_concurrency,
         chapter_pause_ms=settings.narrate_chapter_pause_ms,
+        # Built only for jobs that opted in, so a missing LLM key never fails other jobs.
+        text_normalizer=build_text_normalizer(settings) if with_text_normalizer else None,
     )
 
 
@@ -480,6 +485,27 @@ def build_audio_processor(settings: Settings) -> AudioProcessor:
     )
 
 
+def _text_normalizer_settings(settings: Settings) -> Settings | None:
+    if not settings.text_normalization_enabled:
+        return None
+    return settings.model_copy(update={"translation_provider": settings.text_normalizer_provider})
+
+
+def build_text_normalizer(settings: Settings) -> TextNormalizer | None:
+    """Reuse the chat provider's own settings (key, model, URL) for normalization."""
+    normalizer_settings = _text_normalizer_settings(settings)
+    if normalizer_settings is None:
+        return None
+    from app.providers.translation.openai_compatible import OpenAICompatibleTranslationProvider
+
+    provider = build_translation_provider(normalizer_settings)
+    if not isinstance(provider, OpenAICompatibleTranslationProvider):
+        raise ProviderConfigurationError(
+            f"TEXT_NORMALIZER_PROVIDER={settings.text_normalizer_provider} cannot normalize text"
+        )
+    return provider
+
+
 def build_artifact_cache(settings: Settings) -> PipelineArtifactCache:
     return PipelineArtifactCache(
         FilesystemArtifactCache(settings.storage_path / "cache"),
@@ -562,11 +588,19 @@ def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
         translation_model = settings.openrouter_translation_model
     else:
         translation_model = "fake"
+    normalizer_settings = _text_normalizer_settings(settings)
+    normalizer_provider, normalizer_model = (
+        translation_pin_from_settings(normalizer_settings)
+        if normalizer_settings is not None
+        else ("", "")
+    )
     return CacheIdentity(
         translation_provider=translation,
         translation_model=translation_model,
         tts_provider=tts,
         tts_model=tts,
+        normalizer_provider=normalizer_provider,
+        normalizer_model=normalizer_model,
     )
 
 

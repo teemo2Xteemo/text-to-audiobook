@@ -141,6 +141,7 @@ def _orchestrator(
     sleep: _RecordingSleep | None = None,
     artifact_cache: PipelineArtifactCache | None = None,
     chapter_pause_ms: int = 0,
+    text_normalizer: object | None = None,
 ) -> tuple[
     PipelineOrchestrator,
     Path,
@@ -171,6 +172,7 @@ def _orchestrator(
         "retry_policy": retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0),
         "sleep": sleep if sleep is not None else _RecordingSleep(),
         "chapter_pause_ms": chapter_pause_ms,
+        "text_normalizer": text_normalizer,
     }
     if artifact_cache is not None:
         kwargs["artifact_cache"] = artifact_cache
@@ -1362,3 +1364,75 @@ def test_srt_with_narrate_mode_produces_audio_successfully(tmp_path: Path) -> No
     assert result.error_type is None
     saved = asyncio.run(jobs.get(job.id))
     assert saved is not None and saved.status is JobStatus.COMPLETED
+
+
+class _SpellingNormalizer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def normalize(self, text: str, language: str) -> str:
+        self.calls.append((text, language))
+        return text.replace("20", "twenty")
+
+
+def _normalize_job(job_id: str, *, normalize_text: bool = True) -> Job:
+    return _job(
+        id=job_id,
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+        normalize_text=normalize_text,
+    )
+
+
+def test_normalize_text_feeds_spoken_form_to_narration_and_is_cached(tmp_path: Path) -> None:
+    normalizer = _SpellingNormalizer()
+    cache = _pipeline_cache(tmp_path)
+    for job_id in ("normalize-a", "normalize-b"):
+        job = _normalize_job(job_id)
+        orchestrator, workspace, translation, narration, _, _, _, _ = _orchestrator(
+            tmp_path,
+            job=job,
+            languages=["en-US"],
+            voices=_voices_for("en-US"),
+            artifact_cache=cache,
+            text_normalizer=normalizer,
+        )
+        result = _run(orchestrator, job, workspace, text="She was 20 years old.")
+
+        assert result.status is JobStatus.COMPLETED
+        assert translation.calls == []
+        assert narration.calls == [("She was twenty years old.", "en-US")]  # type: ignore[attr-defined]
+    # The second job reuses the cached normalization instead of calling the LLM again.
+    assert normalizer.calls == [("She was 20 years old.", "en-US")]
+
+
+def test_normalizer_is_skipped_unless_the_job_opted_in(tmp_path: Path) -> None:
+    normalizer = _SpellingNormalizer()
+    job = _normalize_job("normalize-off", normalize_text=False)
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        text_normalizer=normalizer,
+    )
+    result = _run(orchestrator, job, workspace, text="She was 20 years old.")
+
+    assert result.status is JobStatus.COMPLETED
+    assert normalizer.calls == []
+    assert narration.calls == [("She was 20 years old.", "en-US")]  # type: ignore[attr-defined]
+
+
+def test_normalize_text_without_normalizer_fails_with_configuration_error(
+    tmp_path: Path,
+) -> None:
+    job = _normalize_job("normalize-missing")
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, languages=["en-US"], voices=_voices_for("en-US")
+    )
+    result = _run(orchestrator, job, workspace, text="She was 20 years old.")
+
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR

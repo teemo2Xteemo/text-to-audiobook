@@ -1029,6 +1029,16 @@ def test_post_job_rejects_invalid_or_translate_srt_timing(jobs_client: TestClien
     assert "narrate mode" in res.json()["message"]
 
 
+def test_post_job_rejects_non_boolean_normalize_text(jobs_client: TestClient) -> None:
+    res = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "mode": "narrate", "normalize_text": "maybe"},
+        files={"file": ("story.txt", b"Chapter 20 begins.", "text/plain")},
+    )
+    assert res.status_code == 400
+    assert res.json()["message"] == "normalize_text must be true or false"
+
+
 def test_decode_source_text_small_gbk_and_big5_not_mojibake() -> None:
     from app.api.parse import _decode_source_text
 

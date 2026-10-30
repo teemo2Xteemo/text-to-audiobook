@@ -44,6 +44,12 @@ class NarrationProcessor(Protocol):
     def process(self, text: str, language: str) -> str: ...
 
 
+class TextNormalizer(Protocol):
+    """Rewrites text for speech (numbers, dates, abbreviations) without translating."""
+
+    async def normalize(self, text: str, language: str) -> str: ...
+
+
 class LanguageDetector(Protocol):
     async def detect(self, text: str) -> LanguageDetection: ...
 

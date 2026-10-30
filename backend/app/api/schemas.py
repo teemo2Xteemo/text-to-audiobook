@@ -35,6 +35,7 @@ class JobStatusResponse(BaseModel):
     translation_model: str | None = None
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
+    normalize_text: bool = False
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -68,6 +69,7 @@ class JobStatusResponse(BaseModel):
             translation_model=job.translation_model,
             mode=job.mode,
             srt_timing=job.srt_timing,
+            normalize_text=job.normalize_text,
         )
 
 
@@ -81,6 +83,7 @@ class CreateJobJsonBody(BaseModel):
     translation_profile_id: str | None = None
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
+    normalize_text: bool = False
 
 
 class VoiceResponse(BaseModel):
@@ -110,6 +113,7 @@ class CapabilitiesResponse(BaseModel):
     translation_profiles: list[TranslationProfileResponse] = Field(default_factory=list)
     narrate_languages: list[str] = Field(default_factory=list)
     estimate_defaults: dict[str, float] = Field(default_factory=dict)
+    text_normalization: bool = False
 
 
 class LanguageCandidate(BaseModel):

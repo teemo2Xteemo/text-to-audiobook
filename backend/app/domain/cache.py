@@ -8,7 +8,7 @@ from typing import Any
 
 from app.domain.audio import TTSSettings
 
-CACHE_OPERATIONS = frozenset({"translation", "tts"})
+CACHE_OPERATIONS = frozenset({"translation", "tts", "normalization"})
 
 
 def build_cache_key(
