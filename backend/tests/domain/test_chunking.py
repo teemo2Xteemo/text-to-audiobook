@@ -56,6 +56,24 @@ def test_oversize_sentence_is_hard_split_by_character() -> None:
     assert all(len(chunk.text) <= 1200 for chunk in chunks)
 
 
+def test_oversize_unpunctuated_sentence_splits_on_word_boundaries() -> None:
+    words = [f"word{i}" for i in range(600)]
+    text = " ".join(words)
+    chunks = chunk_text(text, max_chars=500)
+    assert len(chunks) >= 2
+    assert all(len(chunk.text) <= 500 for chunk in chunks)
+    assert "".join(chunk.text for chunk in chunks) == text
+    assert all(chunk.text.endswith(" ") for chunk in chunks[:-1])
+    assert [w for chunk in chunks for w in chunk.text.split()] == words
+
+
+def test_oversize_sentence_prefers_clause_punctuation_over_spaces() -> None:
+    clause = "một hai ba bốn năm sáu bảy tám chín mười, "
+    text = clause * 40
+    chunks = chunk_text(text.strip(), max_chars=200)
+    assert all(chunk.text.rstrip().endswith(",") for chunk in chunks[:-1])
+
+
 def test_default_budget_is_domain_constant() -> None:
     assert CHUNK_MAX_CHARS == 1200
     text = "x" * 1201

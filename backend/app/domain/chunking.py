@@ -86,5 +86,38 @@ def _split_sentences(text: str) -> list[str]:
     return sentences
 
 
+CLAUSE_SEPARATORS = frozenset(",;:，；：、")
+
+
 def _hard_split(text: str, max_chars: int) -> list[str]:
-    return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
+    """Split an oversize sentence without cutting words.
+
+    Cuts after the last clause separator in the back half of the window, else after the
+    last whitespace, else at ``max_chars`` (scripts without spaces). Concatenating the
+    parts reproduces ``text`` exactly.
+    """
+    parts: list[str] = []
+    rest = text
+    while len(rest) > max_chars:
+        cut = _soft_cut(rest[:max_chars], max_chars)
+        parts.append(rest[:cut])
+        rest = rest[cut:]
+    if rest:
+        parts.append(rest)
+    return parts
+
+
+def _soft_cut(window: str, max_chars: int) -> int:
+    clause = max((i for i, ch in enumerate(window) if ch in CLAUSE_SEPARATORS), default=-1)
+    if clause >= max_chars // 2:
+        return _after_spaces(window, clause + 1)
+    space = max((i for i, ch in enumerate(window) if ch.isspace()), default=-1)
+    if space > 0:
+        return space + 1
+    return max_chars
+
+
+def _after_spaces(window: str, index: int) -> int:
+    while index < len(window) and window[index].isspace():
+        index += 1
+    return index

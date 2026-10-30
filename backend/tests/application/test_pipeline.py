@@ -1052,7 +1052,8 @@ def test_strip_srt_strips_ass_tags_and_sound_effects() -> None:
 
 def _srt(*cues: str) -> str:
     return "\n\n".join(
-        f"{idx}\n00:00:{idx:02d},000 --> 00:00:{idx:02d},900\n{cue}"
+        f"{idx}\n00:{idx // 60:02d}:{idx % 60:02d},000 --> 00:{idx // 60:02d}:{idx % 60:02d},900\n"
+        f"{cue}"
         for idx, cue in enumerate(cues, start=1)
     )
 
@@ -1062,6 +1063,19 @@ def test_strip_srt_collapses_rolling_captions() -> None:
 
     srt = _srt("Hello there", "Hello there my friend", "my friend how are you")
     assert strip_srt(srt) == "Hello there my friend how are you"
+
+
+@pytest.mark.parametrize("max_chars", [1200, 500])
+def test_rolling_unpunctuated_captions_chunk_on_word_boundaries(max_chars: int) -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    words = [f"tu{i}" for i in range(302)]
+    cues = [" ".join(words[i : i + 3]) for i in range(300)]
+    stripped = strip_srt(_srt(*cues))
+    assert stripped.split() == words
+    chunks = chunk_text(stripped, max_chars=max_chars)
+    assert len(chunks) > 1
+    assert [w for chunk in chunks for w in chunk.text.split()] == words
 
 
 def test_strip_srt_keeps_cues_sharing_a_single_word() -> None:
