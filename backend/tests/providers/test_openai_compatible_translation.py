@@ -1033,3 +1033,17 @@ async def test_normalize_without_api_key_is_configuration_error() -> None:
     with pytest.raises(DomainError) as exc_info:
         await _provider(api_key=None).normalize("20", "en-US")
     assert exc_info.value.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+
+
+@pytest.mark.anyio
+async def test_normalize_failure_message_names_normalization() -> None:
+    fake_http = FakeOpenAIHttp(
+        {"choices": [{"message": {"role": "assistant", "content": "   "}, "finish_reason": "stop"}]}
+    )
+    with pytest.raises(DomainError) as exc_info:
+        await _provider(http=fake_http).normalize("Chapter 20", "en-US")
+
+    # error_type codes are fixed by the backend rule; the message says which step failed.
+    assert exc_info.value.error_type == ErrorType.TRANSLATION_FAILED
+    assert exc_info.value.message.startswith("text normalization")
+    assert "translation" not in exc_info.value.message

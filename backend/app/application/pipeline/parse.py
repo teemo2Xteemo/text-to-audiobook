@@ -1,7 +1,12 @@
 import re
 
 from app.application.pipeline.merge_srt import is_sentence_terminal
-from app.application.pipeline.parse_srt import parse_timecode_line
+from app.application.pipeline.parse_srt import (
+    INLINE_SOUND_EFFECT_RE,
+    SOUND_EFFECT_RE,
+    merge_rolling_cue,
+    parse_timecode_line,
+)
 from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import resolve_source_language
 from app.domain.ports import LanguageDetector
@@ -81,9 +86,9 @@ def is_srt_document(text_or_blocks: str | list[str]) -> bool:
 def strip_srt(text: str, *, paragraph_gap_ms: int = SRT_PARAGRAPH_GAP_MS) -> str:
     """Turn subtitles into continuous narration text.
 
-    Cues are joined into one paragraph. A new paragraph starts only when the silence
-    before a cue exceeds ``paragraph_gap_ms`` and the previous cue ends a sentence, so
-    TTS never pauses mid-sentence at a cue boundary.
+    Cues are joined into one paragraph. A new paragraph starts when the silence before a
+    cue exceeds ``paragraph_gap_ms`` and the previous cue ends a sentence, or exceeds twice
+    that regardless of punctuation, so TTS does not pause mid-sentence at short cue gaps.
     """
     normalized = _INVISIBLE_CHARS_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n").strip())
     blocks = re.split(r"\n{2,}", normalized)
@@ -103,11 +108,11 @@ def strip_srt(text: str, *, paragraph_gap_ms: int = SRT_PARAGRAPH_GAP_MS) -> str
                 continue
             if _SRT_INDEX_RE.match(line):
                 continue
-            if _SOUND_EFFECT_RE.match(line):
+            if SOUND_EFFECT_RE.match(line):
                 continue
             cleaned = _SRT_HTML_TAG_RE.sub("", line)
             cleaned = _ASS_TAG_RE.sub("", cleaned)
-            cleaned = _INLINE_SOUND_EFFECT_RE.sub("", cleaned)
+            cleaned = INLINE_SOUND_EFFECT_RE.sub("", cleaned)
             cleaned = re.sub(r"^\s*[-–—]\s*", "", cleaned)
             cleaned = re.sub(r"\s+[-–—]\s*", " ", cleaned)
             cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -116,7 +121,7 @@ def strip_srt(text: str, *, paragraph_gap_ms: int = SRT_PARAGRAPH_GAP_MS) -> str
         if not lines:
             continue
         cue = " ".join(lines)
-        merged = _merge_rolling_cue(paragraphs[-1][-1], cue) if paragraphs else None
+        merged = merge_rolling_cue(paragraphs[-1][-1], cue) if paragraphs else None
         if merged is not None:
             paragraphs[-1][-1] = merged
         elif paragraphs and not _starts_paragraph(
@@ -136,37 +141,13 @@ def _starts_paragraph(
     timing: tuple[int, int] | None,
     paragraph_gap_ms: int,
 ) -> bool:
-    if previous_end_ms is None or timing is None or not is_sentence_terminal(previous_cue):
+    if previous_end_ms is None or timing is None:
         return False
-    return timing[0] - previous_end_ms > paragraph_gap_ms
-
-
-_MIN_ROLLING_OVERLAP_WORDS = 2
-
-
-def _merge_rolling_cue(previous: str, current: str) -> str | None:
-    """Collapse progressive/rolling captions into one block.
-
-    Identical consecutive cues are dropped (so a repeated "No." / "No." is narrated once),
-    a cue that extends the previous one replaces it, and a cue whose first words repeat
-    at least ``_MIN_ROLLING_OVERLAP_WORDS`` trailing words of the previous one is appended
-    without the overlap. Returns ``None`` when the cues are unrelated.
-    """
-    prev_words = previous.split()
-    cur_words = current.split()
-    if cur_words[: len(prev_words)] == prev_words:
-        return current
-    if (
-        _MIN_ROLLING_OVERLAP_WORDS <= len(cur_words) <= len(prev_words)
-        and prev_words[-len(cur_words) :] == cur_words
-    ):
-        return previous
-    for overlap in range(min(len(prev_words), len(cur_words)) - 1, 0, -1):
-        if overlap < _MIN_ROLLING_OVERLAP_WORDS:
-            break
-        if prev_words[-overlap:] == cur_words[:overlap]:
-            return " ".join(prev_words + cur_words[overlap:])
-    return None
+    gap = timing[0] - previous_end_ms
+    # Unpunctuated (auto-generated) captions still get breaks at clearly long silences.
+    if gap > 2 * paragraph_gap_ms:
+        return True
+    return gap > paragraph_gap_ms and is_sentence_terminal(previous_cue)
 
 
 async def parse_source(

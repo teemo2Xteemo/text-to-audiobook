@@ -336,8 +336,13 @@ def split_chapters(text: str) -> list[Chapter]:
 def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) -> list[Chunk]:
     chunks: list[Chunk] = []
     global_index = 1
-    for ordinal, chapter in enumerate(chapters, start=1):
+    ordinal = 0
+    for chapter in chapters:
         body = chapter.body.strip()
+        # A heading with no body (e.g. a volume title) belongs to the chapter after it.
+        chunk_chapter = ordinal + 1
+        if body:
+            ordinal += 1
         title = chapter.title.strip()
         if not body:
             # Preserve heading in narration even when body is empty (e.g. volume headings)
@@ -357,7 +362,7 @@ def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) 
                     id=f"chunk-{global_index:03d}",
                     text=c.text,
                     index=global_index,
-                    chapter=ordinal,
+                    chapter=chunk_chapter,
                 )
             )
             global_index += 1

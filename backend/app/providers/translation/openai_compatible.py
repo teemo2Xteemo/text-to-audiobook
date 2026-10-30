@@ -476,6 +476,10 @@ class UrllibOpenAIHttpClient:
         return parsed
 
 
+# Bump when the normalize() prompt changes; it is part of the normalization cache key.
+NORMALIZE_PROMPT_VERSION = 1
+
+
 class OpenAICompatibleTranslationProvider:
     """Base OpenAI-compatible translation adapter for Groq, OpenRouter, and standard endpoints."""
 
@@ -568,9 +572,22 @@ class OpenAICompatibleTranslationProvider:
             "remove anything else; keep every other word, line break and punctuation mark. "
             "Return ONLY the rewritten text without explanations or formatting markdown."
         )
-        return await self._complete(
-            system_prompt, text, log_extra={"language": language, "operation": "normalize"}
-        )
+        try:
+            return await self._complete(
+                system_prompt, text, log_extra={"language": language, "operation": "normalize"}
+            )
+        except DomainError as exc:
+            if exc.error_type is not ErrorType.TRANSLATION_FAILED:
+                raise
+            # error_type codes are a fixed list (backend rule), so the message names the step.
+            message = exc.message.replace("translation", "text normalization")
+            if not message.startswith("text normalization"):
+                message = f"text normalization failed: {message}"
+            raise DomainError(
+                ErrorType.TRANSLATION_FAILED,
+                message,
+                retry_after_seconds=exc.retry_after_seconds,
+            ) from exc
 
     async def _complete(self, system_prompt: str, text: str, *, log_extra: dict[str, str]) -> str:
         payload = {

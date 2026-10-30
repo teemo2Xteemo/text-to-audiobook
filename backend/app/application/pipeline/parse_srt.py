@@ -9,6 +9,12 @@ _TIMECODE_LINE_RE = re.compile(
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
+SOUND_EFFECT_RE = re.compile(r"^\s*(?:\[[^\]]+\]|\([^)]+\)|[♪♫][^♪♫]*[♪♫]|\*+[^*]+\*+)\s*$")
+INLINE_SOUND_EFFECT_RE = re.compile(
+    r"\[(?:Music|Applause|Laughter|Sighs|Gasps|Cheering|Groans|Crying)\]"
+    r"|\((?:applause|cheering|laughter|sighs|music)\)|[♪♫]",
+    re.IGNORECASE,
+)
 
 
 def _timecode_to_ms(hours: str | None, minutes: str, seconds: str, millis: str) -> int:
@@ -77,14 +83,39 @@ def parse_srt_cues(text: str) -> list[SRTCue]:
         )
 
         text_lines: list[str] = []
+        had_text = False
         for line in lines[tc_index + 1 :]:
             cleaned = _HTML_TAG_RE.sub("", line)
             cleaned = _ASS_TAG_RE.sub("", cleaned).strip()
             cleaned = html.unescape(cleaned).strip()
+            if not cleaned:
+                continue
+            had_text = True
+            if SOUND_EFFECT_RE.match(cleaned):
+                continue
+            cleaned = " ".join(INLINE_SOUND_EFFECT_RE.sub("", cleaned).split())
             if cleaned:
                 text_lines.append(cleaned)
 
         cue_text = " ".join(text_lines)
+        if had_text and not cue_text:
+            # Sound-effect-only cue: nothing to voice, its time becomes silence.
+            continue
+        previous = cues[-1] if cues else None
+        merged = (
+            merge_rolling_cue(previous.text, cue_text)
+            if previous and previous.text and cue_text
+            else None
+        )
+        if previous is not None and merged is not None:
+            # Rolling captions repeat earlier words; keep one cue spanning both.
+            cues[-1] = SRTCue(
+                index=previous.index,
+                start_ms=previous.start_ms,
+                end_ms=max(previous.end_ms, end_ms),
+                text=merged,
+            )
+            continue
         cues.append(
             SRTCue(
                 index=cue_index,
@@ -95,6 +126,34 @@ def parse_srt_cues(text: str) -> list[SRTCue]:
         )
 
     return cues
+
+
+_MIN_ROLLING_OVERLAP_WORDS = 2
+
+
+def merge_rolling_cue(previous: str, current: str) -> str | None:
+    """Collapse progressive/rolling captions into one block.
+
+    Identical consecutive cues are dropped (so a repeated "No." / "No." is narrated once),
+    a cue that extends the previous one replaces it, and a cue whose first words repeat
+    at least ``_MIN_ROLLING_OVERLAP_WORDS`` trailing words of the previous one is appended
+    without the overlap. Returns ``None`` when the cues are unrelated.
+    """
+    prev_words = previous.split()
+    cur_words = current.split()
+    if cur_words[: len(prev_words)] == prev_words:
+        return current
+    if (
+        _MIN_ROLLING_OVERLAP_WORDS <= len(cur_words) <= len(prev_words)
+        and prev_words[-len(cur_words) :] == cur_words
+    ):
+        return previous
+    for overlap in range(min(len(prev_words), len(cur_words)) - 1, 0, -1):
+        if overlap < _MIN_ROLLING_OVERLAP_WORDS:
+            break
+        if prev_words[-overlap:] == cur_words[:overlap]:
+            return " ".join(prev_words + cur_words[overlap:])
+    return None
 
 
 def serialize_srt_cues(cues: Sequence[SRTCue]) -> str:

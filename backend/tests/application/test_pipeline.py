@@ -1436,3 +1436,72 @@ def test_normalize_text_without_normalizer_fails_with_configuration_error(
 
     assert result.status is JobStatus.FAILED
     assert result.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+
+
+def test_narrate_srt_aligned_does_not_voice_sound_effects(tmp_path: Path) -> None:
+    from app.domain.jobs import SrtTiming
+
+    job = _job(
+        id="test-narrate-srt-aligned-sfx",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        srt_timing=SrtTiming.ALIGNED,
+    )
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, voices=_voices_for("en-US")
+    )
+    srt_text = (
+        "1\n00:00:01,000 --> 00:00:02,000\n[Music]\n\n"
+        "2\n00:00:03,000 --> 00:00:04,000\nFirst line.\n"
+    )
+    result = _run(orchestrator, job, workspace, text=srt_text)
+
+    assert result.status is JobStatus.COMPLETED
+    narrated = " ".join(text for text, _ in narration.calls)  # type: ignore[attr-defined]
+    assert "Music" not in narrated
+    assert "First line." in narrated
+
+
+def test_volume_heading_gets_no_pause_of_its_own(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-volume-pause",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        chapter_pause_ms=1500,
+    )
+    story = "Book 1\n\nChapter 1: Dawn\n\nThe sun rose.\n\nChapter 2: Dusk\n\nThe sun set."
+    result = _run(orchestrator, job, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    merged = [path.name for path in audio.merge_calls[-1]]
+    chapter_two = next(
+        path.name.removesuffix(".translated.txt")
+        for path in sorted((workspace / "chunks").glob("*.translated.txt"))
+        if "Chapter 2" in path.read_text(encoding="utf-8")
+    )
+    # Only the Chapter 1 -> Chapter 2 boundary pauses; "Book 1" flows into Chapter 1.
+    assert merged.count("chapter-pause.mp3") == 1
+    pause_at = merged.index("chapter-pause.mp3")
+    assert merged[pause_at + 1] == f"{chapter_two}.normalized.mp3"
+
+
+def test_strip_srt_breaks_unpunctuated_captions_on_long_silence() -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    srt = (
+        "1\n00:00:01,000 --> 00:00:02,000\nso we went down\n\n"
+        "2\n00:00:05,000 --> 00:00:06,000\nto the river\n\n"
+        "3\n00:00:11,000 --> 00:00:12,000\nthe next day it rained\n"
+    )
+    # 3 s gap without punctuation still joins; 5 s (> 2 x 2 s) breaks regardless.
+    assert strip_srt(srt) == "so we went down to the river\n\nthe next day it rained"

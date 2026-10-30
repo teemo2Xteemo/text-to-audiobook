@@ -91,7 +91,9 @@ class Settings(BaseSettings):
 
     @property
     def text_normalization_enabled(self) -> bool:
-        return self.text_normalizer_provider != "none"
+        keys = {"groq": self.groq_api_key, "openrouter": self.openrouter_api_key}
+        key = keys.get(self.text_normalizer_provider)
+        return key is not None and bool(key.get_secret_value().strip())
 
     @field_validator("text_normalizer_provider")
     @classmethod

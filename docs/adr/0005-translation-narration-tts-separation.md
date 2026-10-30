@@ -69,16 +69,19 @@ LLM pass that turns numbers, dates and abbreviations into spoken words.
 ### Decision
 
 1. **Continuous subtitles by default:** narrate + `.srt`/`.vtt` joins cues into paragraphs and
-   breaks only after a > 2 s gap that follows a finished sentence (`strip_srt`), so cue boundaries
-   never cause mid-sentence pauses.
+   breaks after a > 2 s gap that follows a finished sentence, or any gap > 4 s (`strip_srt`), so
+   short cue gaps never cause mid-sentence pauses and unpunctuated captions still get breaks.
 2. **Per-job `srt_timing`:** `aligned` routes narrate + subtitles through the existing cue timeline
-   (`_run_srt` with pass-through). Translate mode keeps the timeline and rejects the field.
+   (`_run_srt` with pass-through). Translate mode keeps the timeline and rejects the field. Timed
+   cue parsing (`parse_srt_cues`, both modes) drops sound-effect cues and merges rolling captions.
 3. **Chapter pauses:** chunks carry their chapter ordinal; the narrate merge inserts
    `NARRATE_CHAPTER_PAUSE_MS` of silence at chapter boundaries. Per-chapter files stay with #29.
 4. **Speech normalization is a separate, opt-in port:** `TextNormalizer` runs inside the narration
    stage before `NarrationProcessor`, only when the job sets `normalize_text`. It never translates.
    Results are cached under their own `normalization` cache operation keyed by normalizer
-   provider/model, independent of the translation and TTS keys.
+   provider/model and prompt version, independent of the translation and TTS keys. The normalizer
+   uses live settings, never a job's translation pin. Failures keep the fixed `TRANSLATION_FAILED`
+   code with a message that starts with "text normalization".
 
 ### Consequences
 

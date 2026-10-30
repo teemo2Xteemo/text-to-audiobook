@@ -96,3 +96,21 @@ def test_serialize_srt_cues_collapses_blank_lines_within_cue():
     assert len(parsed) == 2
     assert parsed[0].text == "Line A Line B Line C"
     assert parsed[1].text == "Second cue"
+
+
+def test_parse_srt_cues_drops_sound_effects_and_merges_rolling_captions() -> None:
+    from app.application.pipeline.parse_srt import parse_srt_cues
+
+    srt = (
+        "1\n00:00:01,000 --> 00:00:02,000\n[Music]\n\n"
+        "2\n00:00:03,000 --> 00:00:04,000\nHello there (applause)\n\n"
+        "3\n00:00:04,000 --> 00:00:05,000\nHello there my friend\n\n"
+        "4\n00:00:09,000 --> 00:00:10,000\n\u266a la la \u266a\n\n"
+        "5\n00:00:11,000 --> 00:00:12,000\nGoodbye.\n"
+    )
+    cues = parse_srt_cues(srt)
+
+    assert [(c.start_ms, c.end_ms, c.text) for c in cues] == [
+        (3000, 5000, "Hello there my friend"),
+        (11000, 12000, "Goodbye."),
+    ]
