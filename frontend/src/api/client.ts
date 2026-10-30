@@ -135,6 +135,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
     if (input.srt_timing) {
       form.set("srt_timing", input.srt_timing);
     }
+    if (input.normalize_text) {
+      form.set("normalize_text", "true");
+    }
     form.set("file", input.file);
     const response = await fetch(requestUrl("/api/jobs"), {
       method: "POST",
@@ -143,7 +146,7 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
     return parseJson<JobCreated>(response);
   }
 
-  const body: Record<string, string | number> = {
+  const body: Record<string, string | number | boolean> = {
     text: input.text ?? "",
     source_language: input.source_language,
     target_language: input.target_language,
@@ -161,6 +164,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
   }
   if (input.srt_timing) {
     body.srt_timing = input.srt_timing;
+  }
+  if (input.normalize_text) {
+    body.normalize_text = true;
   }
   const response = await fetch(requestUrl("/api/jobs"), {
     method: "POST",

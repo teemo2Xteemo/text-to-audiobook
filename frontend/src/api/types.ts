@@ -37,6 +37,7 @@ export type Capabilities = {
   translation_profiles?: TranslationProfile[];
   narrate_languages?: string[];
   estimate_defaults?: { chars_per_second?: number; preview_wpm?: number };
+  text_normalization?: boolean;
 };
 
 export type CapabilitiesResponse = Capabilities;
@@ -65,6 +66,7 @@ export type JobStatusResponse = {
   translation_model?: string | null;
   mode?: JobMode;
   srt_timing?: SrtTiming;
+  normalize_text?: boolean;
 };
 
 export type ErrorEnvelope = {
@@ -83,6 +85,7 @@ export type CreateJobInput = {
   translation_profile_id?: string;
   mode?: JobMode;
   srt_timing?: SrtTiming;
+  normalize_text?: boolean;
 };
 
 export type CreateJobPayload = CreateJobInput;

@@ -104,6 +104,29 @@ describe("JobForm", () => {
     expect(screen.getByLabelText("Match subtitle timestamps")).not.toBeChecked();
   });
 
+  it("offers text normalization only when the server supports it", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { rerender } = render(
+      <JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />,
+    );
+    expect(screen.queryByLabelText(/Spell out numbers/i)).not.toBeInTheDocument();
+
+    rerender(
+      <JobForm
+        capabilities={{ ...capabilitiesFixture, text_normalization: true }}
+        disabled={false}
+        onSubmit={onSubmit}
+      />,
+    );
+    await user.click(screen.getByLabelText(/Spell out numbers/i));
+    await user.type(screen.getByLabelText("Paste story"), "It was 20 years ago.");
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+
+    const payload = onSubmit.mock.calls[0]?.[0] as { normalize_text?: boolean };
+    expect(payload.normalize_text).toBe(true);
+  });
+
   it("sends srt_timing only for narrated subtitles", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();

@@ -102,6 +102,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
   const [speed, setSpeed] = useState(SPEED_DEFAULT);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("mp3");
   const [srtTiming, setSrtTiming] = useState<SrtTiming>("continuous");
+  const [normalizeText, setNormalizeText] = useState(false);
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -462,6 +463,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
         mode === "narrate" ? undefined : (translationProfileId || undefined),
       mode,
       srt_timing: mode === "narrate" && isSubtitleInput ? srtTiming : undefined,
+      normalize_text: capabilities.text_normalization && normalizeText ? true : undefined,
     };
     if (file) {
       input.file = file;
@@ -693,6 +695,21 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
               </div>
             )
           )}
+
+          {capabilities.text_normalization ? (
+            <label className="normalize-text-option">
+              <input
+                type="checkbox"
+                checked={normalizeText}
+                disabled={disabled}
+                onChange={(event) => setNormalizeText(event.target.checked)}
+              />
+              <span>
+                Spell out numbers &amp; dates
+                <span className="muted text-sm"> · uses an LLM, model cost applies</span>
+              </span>
+            </label>
+          ) : null}
         </div>
 
         {/* Voice & Mastering */}
