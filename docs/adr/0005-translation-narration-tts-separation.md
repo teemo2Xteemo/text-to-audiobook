@@ -58,3 +58,36 @@ Users often wish to generate audiobooks from source text directly without transl
 - Checkpoint persistence and resume behavior remain completely unified across both modes.
 - Narration text processing continues to clean symbols, format numbers, and insert natural punctuation pauses before TTS synthesis.
 
+
+## Addendum: Subtitle Timing, Chapter Pauses & Speech Normalization (2026-10-31)
+
+### Context
+
+Issue #28 Phases 2 and 4 extend narrate mode for subtitles and long books, and add an optional
+LLM pass that turns numbers, dates and abbreviations into spoken words.
+
+### Decision
+
+1. **Continuous subtitles by default:** narrate + `.srt`/`.vtt` joins cues into paragraphs and
+   breaks after a > 2 s gap that follows a finished sentence, or any gap > 4 s (`strip_srt`), so
+   short cue gaps never cause mid-sentence pauses and unpunctuated captions still get breaks.
+2. **Per-job `srt_timing`:** `aligned` routes narrate + subtitles through the existing cue timeline
+   (`_run_srt` with pass-through). Translate mode keeps the timeline and rejects the field. Timed
+   cue parsing (`parse_srt_cues`, both modes) drops sound-effect cues and merges rolling captions.
+3. **Chapter pauses:** chunks carry their chapter ordinal; the narrate merge inserts
+   `NARRATE_CHAPTER_PAUSE_MS` of silence at chapter boundaries. Per-chapter files stay with #29.
+4. **Speech normalization is a separate, opt-in port:** `TextNormalizer` runs inside the narration
+   stage before `NarrationProcessor`, only for narrate jobs that set `normalize_text` (translate
+   rejects it). It never translates and runs with bounded concurrency. Output that fails a
+   script-agnostic fidelity check (line structure, letter ratio, new script, more digits, changed
+   opening) is discarded: the original chunk is narrated and nothing is cached.
+   Results are cached under their own `normalization` cache operation keyed by normalizer
+   provider/model and prompt version, independent of the translation and TTS keys. The normalizer
+   uses live settings, never a job's translation pin. Failures keep the fixed `TRANSLATION_FAILED`
+   code with a message that starts with "text normalization".
+
+### Consequences
+
+- Narrate stays model-free unless a job opts into normalization; the UI labels that cost.
+- The worker builds the normalizer only for opted-in jobs, so a missing LLM key cannot fail other jobs.
+- Only OpenAI-compatible chat providers (Groq, OpenRouter) implement `TextNormalizer` today.

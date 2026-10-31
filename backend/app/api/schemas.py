@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, model_serializer
 
 from app.domain.audio import SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, Voice
-from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat, SrtTiming
 
 
 class ErrorEnvelope(BaseModel):
@@ -34,6 +34,8 @@ class JobStatusResponse(BaseModel):
     translation_provider: str | None = None
     translation_model: str | None = None
     mode: JobMode = JobMode.TRANSLATE
+    srt_timing: SrtTiming = SrtTiming.CONTINUOUS
+    normalize_text: bool = False
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -66,6 +68,8 @@ class JobStatusResponse(BaseModel):
             translation_provider=job.translation_provider,
             translation_model=job.translation_model,
             mode=job.mode,
+            srt_timing=job.srt_timing,
+            normalize_text=job.normalize_text,
         )
 
 
@@ -78,6 +82,8 @@ class CreateJobJsonBody(BaseModel):
     output_format: str = Field(default=OutputFormat.MP3.value)
     translation_profile_id: str | None = None
     mode: JobMode = JobMode.TRANSLATE
+    srt_timing: SrtTiming = SrtTiming.CONTINUOUS
+    normalize_text: bool = False
 
 
 class VoiceResponse(BaseModel):
@@ -107,6 +113,7 @@ class CapabilitiesResponse(BaseModel):
     translation_profiles: list[TranslationProfileResponse] = Field(default_factory=list)
     narrate_languages: list[str] = Field(default_factory=list)
     estimate_defaults: dict[str, float] = Field(default_factory=dict)
+    text_normalization: bool = False
 
 
 class LanguageCandidate(BaseModel):

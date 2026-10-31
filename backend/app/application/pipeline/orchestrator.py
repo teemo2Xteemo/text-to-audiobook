@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -24,6 +25,7 @@ from app.application.pipeline.normalize import normalize_chunk
 from app.application.pipeline.parse import is_srt_document, parse_source, prepare_narration_text
 from app.application.pipeline.parse_srt import parse_srt_cues, serialize_srt_cues
 from app.application.pipeline.retry import with_chunk_retry
+from app.application.pipeline.speech_normalization import normalization_problem
 from app.application.pipeline.timeline import schedule_srt_timeline
 from app.application.pipeline.translate import translate_chunk
 from app.application.pipeline.tts import select_voice, synthesize_chunk
@@ -35,6 +37,7 @@ from app.domain.jobs import (
     JobMode,
     JobStatus,
     OutputFormat,
+    SrtTiming,
     assert_legal_transition,
     is_at_or_past,
     is_terminal,
@@ -46,6 +49,7 @@ from app.domain.ports import (
     JobStore,
     LanguageDetector,
     NarrationProcessor,
+    TextNormalizer,
     TranslationProvider,
     TTSProvider,
 )
@@ -72,6 +76,8 @@ class PipelineOrchestrator:
         sleep: Callable[[float], Awaitable[None]] | None = None,
         translation_concurrency: int = 1,
         tts_concurrency: int = 1,
+        chapter_pause_ms: int = 0,
+        text_normalizer: TextNormalizer | None = None,
     ) -> None:
         self._translation = translation
         self._tts = tts
@@ -88,6 +94,8 @@ class PipelineOrchestrator:
         self._sleep = sleep or asyncio.sleep
         self._translation_concurrency = max(1, translation_concurrency)
         self._tts_concurrency = max(1, tts_concurrency)
+        self._chapter_pause_ms = max(0, chapter_pause_ms)
+        self._text_normalizer = text_normalizer
         self._active_chunk_id: str | None = None
 
     async def run(self, job: Job, text: str, *, workspace: Path) -> Job:
@@ -104,7 +112,9 @@ class PipelineOrchestrator:
             )
         try:
             job = await self._advance(job, JobStatus.PARSING)
-            if job.mode == JobMode.NARRATE:
+            if job.mode == JobMode.NARRATE and not (
+                job.srt_timing is SrtTiming.ALIGNED and is_srt_document(text)
+            ):
                 return await self._run_narrate(
                     job, text, workspace=workspace, checkpoints=checkpoints
                 )
@@ -249,7 +259,8 @@ class PipelineOrchestrator:
         await self._jobs.save(job)
 
         job = await self._advance(job, JobStatus.TRANSLATING)
-        if job.source_language != job.target_language:
+        # Narrate never translates, even if source/target tags drift apart after resolution.
+        if job.mode is not JobMode.NARRATE and job.source_language != job.target_language:
             job = await self._translate_chunks(job, chunks, workspace, checkpoints)
         else:
             job = await self._pass_through_chunks(
@@ -574,15 +585,18 @@ class PipelineOrchestrator:
             job = replace(job, chunk_current=completed_count)
             await self._jobs.save(job)
 
-        for chunk in chunks:
-            if chunk.id in already_completed_ids:
-                continue
+        pending = [chunk for chunk in chunks if chunk.id not in already_completed_ids]
+        spoken_by_id = (
+            await self._normalize_pending(job, pending, workspace) if job.normalize_text else {}
+        )
+        for chunk in pending:
             self._active_chunk_id = chunk.id
             source = workspace / "chunks" / f"{chunk.id}.translated.txt"
             path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
             if not checkpoints.is_complete(chunk.id, STAGE_NARRATED):
+                spoken = spoken_by_id.get(chunk.id) or source.read_text(encoding="utf-8")
                 narrated = narrate_chunk(
-                    source.read_text(encoding="utf-8"),
+                    spoken,
                     language=job.target_language,
                     processor=self._narration,
                 )
@@ -601,6 +615,122 @@ class PipelineOrchestrator:
                 extra={"job_id": job.id, "chunk_id": chunk.id, "stage": STAGE_NARRATED},
             )
         return job
+
+    async def _normalize_pending(
+        self, job: Job, chunks: list[Chunk], workspace: Path
+    ) -> dict[str, str]:
+        """Normalize chunks with bounded concurrency; narration itself stays sequential."""
+        limit = min(
+            self._translation_concurrency,
+            getattr(self._text_normalizer, "max_concurrency", self._translation_concurrency),
+        )
+        semaphore = asyncio.Semaphore(max(1, limit))
+        spoken_by_id: dict[str, str] = {}
+
+        async def _one(chunk: Chunk) -> None:
+            async with semaphore:
+                source = workspace / "chunks" / f"{chunk.id}.translated.txt"
+                text = source.read_text(encoding="utf-8")
+                try:
+                    spoken_by_id[chunk.id] = await self._normalize_for_speech(
+                        job, chunk, text, workspace
+                    )
+                    logger.info(
+                        "pipeline_chunk_normalized",
+                        extra={
+                            "job_id": job.id,
+                            "chunk_id": chunk.id,
+                            "done": len(spoken_by_id),
+                            "total": len(chunks),
+                        },
+                    )
+                except Exception:
+                    if self._active_chunk_id is None:
+                        self._active_chunk_id = chunk.id
+                    raise
+
+        self._active_chunk_id = None
+        tasks = [asyncio.create_task(_one(chunk)) for chunk in chunks]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return spoken_by_id
+
+    async def _normalize_for_speech(
+        self, job: Job, chunk: Chunk, text: str, workspace: Path
+    ) -> str:
+        if self._text_normalizer is None:
+            raise DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                "text normalization is not configured on this server",
+            )
+        path = workspace / "chunks" / f"{chunk.id}.normalized.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        digest_path = path.with_name(f"{chunk.id}.normalized.src.sha256")
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        # A resumed job reuses its accepted output only if it was made from this exact text;
+        # chunk ids survive re-chunking, so a stale file could otherwise pass the guard.
+        if _nonempty(path):
+            reused = path.read_text(encoding="utf-8")
+            made_from_text = (
+                digest_path.is_file() and digest_path.read_text(encoding="utf-8").strip() == digest
+            )
+            if made_from_text and normalization_problem(text, reused) is None:
+                return reused
+            path.unlink(missing_ok=True)
+            digest_path.unlink(missing_ok=True)
+        cache = self._artifact_cache
+        if cache is not None and cache.fill_normalization(
+            text=text,
+            language=job.target_language,
+            destination=path,
+            job_id=job.id,
+            chunk_id=chunk.id,
+        ):
+            cached = path.read_text(encoding="utf-8")
+            # Entries written before the fidelity guard existed are checked too.
+            if normalization_problem(text, cached) is None:
+                digest_path.write_text(digest, encoding="utf-8")
+                return cached
+            path.unlink(missing_ok=True)
+        normalizer = self._text_normalizer
+
+        async def _normalize() -> str:
+            return await normalizer.normalize(text, job.target_language)
+
+        normalized = await with_chunk_retry(
+            _normalize,
+            policy=self._retry_policy,
+            sleep=self._sleep,
+            job_id=job.id,
+            chunk_id=chunk.id,
+            stage=STAGE_NARRATED,
+        )
+        problem = normalization_problem(text, normalized)
+        if problem is not None:
+            # Never narrate or cache an unfaithful rewrite; the original text is safe to read.
+            logger.warning(
+                "normalization_rejected",
+                extra={"job_id": job.id, "chunk_id": chunk.id, "reason": problem},
+            )
+            return text
+        path.write_text(normalized, encoding="utf-8")
+        # Written after the output: a crash in between leaves no digest, so nothing is reused.
+        digest_path.write_text(digest, encoding="utf-8")
+        if cache is not None:
+            cache.store_normalization(
+                text=text,
+                language=job.target_language,
+                source=path,
+                job_id=job.id,
+                chunk_id=chunk.id,
+            )
+        return normalized
 
     async def _generate_audio(
         self,
@@ -765,7 +895,24 @@ class PipelineOrchestrator:
 
     async def _merge(self, job: Job, chunks: list[Chunk], workspace: Path) -> Job:
         ext = job.output_format.value
-        sources = [workspace / "audio" / f"{chunk.id}.normalized.{ext}" for chunk in chunks]
+        sources: list[Path] = []
+        pause: Path | None = None
+        for position, chunk in enumerate(chunks):
+            if (
+                self._chapter_pause_ms
+                and position
+                and chunk.chapter != chunks[position - 1].chapter
+            ):
+                if pause is None:
+                    pause = workspace / "audio" / f"chapter-pause.{ext}"
+                    await self._audio.generate_silence(
+                        self._chapter_pause_ms,
+                        pause,
+                        output_format=job.output_format,
+                        bitrate_kbps=job.output_bitrate_kbps,
+                    )
+                sources.append(pause)
+            sources.append(workspace / "audio" / f"{chunk.id}.normalized.{ext}")
         destination = workspace / f"output.{ext}"
         await merge_artifacts(
             self._audio,

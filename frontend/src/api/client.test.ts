@@ -44,6 +44,31 @@ describe("api client", () => {
     });
   });
 
+  it("sends srt_timing and normalize_text in multipart and JSON bodies", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => jsonResponse({ job_id: JOB_ID, status: "queued" }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+    const base = {
+      source_language: "en-US",
+      target_language: "en-US",
+      speed: 1,
+      output_format: "mp3" as const,
+      mode: "narrate" as const,
+      srt_timing: "aligned" as const,
+      normalize_text: true,
+    };
+    await createJob({ ...base, file: new File(["1"], "captions.srt") });
+    const form = (fetchMock.mock.calls[0]?.[1] as RequestInit).body as FormData;
+    expect(form.get("srt_timing")).toBe("aligned");
+    expect(form.get("normalize_text")).toBe("true");
+
+    await createJob({ ...base, text: "Chapter 20" });
+    const body = JSON.parse((fetchMock.mock.calls[1]?.[1] as RequestInit).body as string);
+    expect(body.srt_timing).toBe("aligned");
+    expect(body.normalize_text).toBe(true);
+  });
+
   it("POSTs multipart when a file is provided", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({ job_id: JOB_ID, status: "queued" }, 202),

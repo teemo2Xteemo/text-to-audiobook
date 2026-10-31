@@ -21,6 +21,7 @@ from app.domain.jobs import (
     JobMode,
     JobStatus,
     OutputFormat,
+    SrtTiming,
     assert_legal_transition,
     is_terminal,
 )
@@ -48,6 +49,8 @@ class CreateJobCommand:
     output_format: str = OutputFormat.MP3.value
     translation_profile_id: str | None = None
     mode: JobMode = JobMode.TRANSLATE
+    srt_timing: SrtTiming = SrtTiming.CONTINUOUS
+    normalize_text: bool = False
 
 
 class JobService:
@@ -67,6 +70,7 @@ class JobService:
         tts: TTSProvider | None = None,
         detector: LanguageDetector | None = None,
         language_confirm_threshold: float = 0.70,
+        text_normalization_available: bool = False,
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
@@ -85,6 +89,7 @@ class JobService:
         self._tts = tts
         self._detector = detector
         self._language_confirm_threshold = language_confirm_threshold
+        self._text_normalization_available = text_normalization_available
 
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
@@ -95,6 +100,16 @@ class JobService:
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
         output_format = _parse_output_format(command.output_format)
         voice = command.voice.strip() if command.voice and command.voice.strip() else None
+        if command.normalize_text and command.mode is not JobMode.NARRATE:
+            # Translate already runs an LLM; a second rewrite would also stretch SRT timing.
+            raise DomainError(
+                ErrorType.INVALID_INPUT, "normalize_text is only supported in narrate mode"
+            )
+        if command.normalize_text and not self._text_normalization_available:
+            raise DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                "text normalization is not configured on this server",
+            )
 
         if command.mode == JobMode.NARRATE:
             if (
@@ -149,6 +164,11 @@ class JobService:
             target_language = resolved_target
             voice = resolved_voice
         else:
+            if command.srt_timing is not SrtTiming.CONTINUOUS:
+                # Translate mode always voices subtitles on their cue timeline.
+                raise DomainError(
+                    ErrorType.INVALID_INPUT, "srt_timing is only supported in narrate mode"
+                )
             ensure_valid_languages(source_language, target_language)
 
             profile_id = (
@@ -212,6 +232,8 @@ class JobService:
             translation_provider=translation_provider,
             translation_model=translation_model,
             mode=command.mode,
+            srt_timing=command.srt_timing,
+            normalize_text=command.normalize_text,
         )
         try:
             await self._source_storage.write_source(job_id, text)

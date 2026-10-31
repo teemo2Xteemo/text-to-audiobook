@@ -31,6 +31,10 @@ def parse_tts_default_voice_by_language(value: object) -> dict[str, str]:
     raise TypeError("TTS_DEFAULT_VOICE_BY_LANGUAGE must be a string or mapping")
 
 
+# OpenAI-compatible chat providers that implement TextNormalizer; "none" disables it.
+TEXT_NORMALIZER_PROVIDERS = frozenset({"none", "groq", "openrouter"})
+
+
 class Settings(BaseSettings):
     """Runtime settings loaded from the environment. No secrets belong in source."""
 
@@ -78,10 +82,27 @@ class Settings(BaseSettings):
     estimate_translation_expansion: float = Field(default=1.2, gt=0.0)
     estimate_process_time_ratio: float = Field(default=0.15, gt=0.0)
     tts_default_voice_by_language: str = Field(default="")
+    narrate_chapter_pause_ms: int = Field(default=1500, ge=0, le=10_000)
+    text_normalizer_provider: str = Field(default="none")
     retry_max_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
     max_recovery_attempts: int = Field(default=3, ge=1)
     rq_job_timeout_seconds: int = Field(default=1800, ge=1)
+
+    @property
+    def text_normalization_enabled(self) -> bool:
+        keys = {"groq": self.groq_api_key, "openrouter": self.openrouter_api_key}
+        key = keys.get(self.text_normalizer_provider)
+        return key is not None and bool(key.get_secret_value().strip())
+
+    @field_validator("text_normalizer_provider")
+    @classmethod
+    def text_normalizer_provider_supported(cls, value: str) -> str:
+        name = value.strip().lower()
+        if name not in TEXT_NORMALIZER_PROVIDERS:
+            allowed = sorted(TEXT_NORMALIZER_PROVIDERS)
+            raise ValueError(f"TEXT_NORMALIZER_PROVIDER must be one of {allowed}")
+        return name
 
     @field_validator("ollama_base_url")
     @classmethod

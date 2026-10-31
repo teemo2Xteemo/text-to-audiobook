@@ -95,6 +95,7 @@ async def _process_job_async(job_id: str) -> None:
                 orchestrator = build_orchestrator(
                     settings_for_translation_pin(settings, fresh),
                     for_mode=fresh.mode,
+                    normalizer_settings=settings if fresh.normalize_text else None,
                 )
             except ProviderConfigurationError as exc:
                 logger.error(

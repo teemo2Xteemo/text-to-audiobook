@@ -994,3 +994,55 @@ async def test_openrouter_error_finish_reason_is_retried() -> None:
     assert result == "Bản dịch đủ."
     assert calls == 2
     assert slept == [1.0]
+
+
+@pytest.mark.anyio
+async def test_normalize_rewrites_for_speech_in_same_language() -> None:
+    fake_http = FakeOpenAIHttp(
+        {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "ngày hai mươi tháng mười"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+    )
+    provider = _provider(http=fake_http)
+
+    result = await provider.normalize("ngày 20/10", "vi-VN")
+
+    assert result == "ngày hai mươi tháng mười"
+    messages = fake_http.calls[0]["payload"]["messages"]
+    assert "Vietnamese" in messages[0]["content"]
+    assert "Do not translate" in messages[0]["content"]
+    assert messages[1]["content"] == "ngày 20/10"
+
+
+@pytest.mark.anyio
+async def test_normalize_passes_unmapped_language_tag_through() -> None:
+    fake_http = FakeOpenAIHttp()
+
+    await _provider(http=fake_http).normalize("Ch. 3", "xx-YY")
+
+    assert "xx-YY" in fake_http.calls[0]["payload"]["messages"][0]["content"]
+
+
+@pytest.mark.anyio
+async def test_normalize_without_api_key_is_configuration_error() -> None:
+    with pytest.raises(DomainError) as exc_info:
+        await _provider(api_key=None).normalize("20", "en-US")
+    assert exc_info.value.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+
+
+@pytest.mark.anyio
+async def test_normalize_failure_message_names_normalization() -> None:
+    fake_http = FakeOpenAIHttp(
+        {"choices": [{"message": {"role": "assistant", "content": "   "}, "finish_reason": "stop"}]}
+    )
+    with pytest.raises(DomainError) as exc_info:
+        await _provider(http=fake_http).normalize("Chapter 20", "en-US")
+
+    # error_type codes are fixed by the backend rule; the message says which step failed.
+    assert exc_info.value.error_type == ErrorType.TRANSLATION_FAILED
+    assert exc_info.value.message.startswith("text normalization failed: ")

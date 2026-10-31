@@ -20,6 +20,7 @@ from app.domain.ports import (
     LanguageDetector,
     NarrationProcessor,
     NullTranslationProvider,
+    TextNormalizer,
     TranslationProvider,
     TTSProvider,
 )
@@ -69,6 +70,7 @@ def build_job_service(settings: Settings) -> JobService:
         tts=tts,
         detector=build_language_detector(settings),
         language_confirm_threshold=settings.language_confirm_threshold,
+        text_normalization_available=settings.text_normalization_enabled,
     )
 
 
@@ -331,7 +333,9 @@ def build_orchestrator(
     *,
     for_mode: JobMode | None = None,
     translation_provider: TranslationProvider | None = None,
+    normalizer_settings: Settings | None = None,
 ) -> PipelineOrchestrator:
+    """``normalizer_settings`` are the live (unpinned) settings of a job that opted in."""
     filesystem, store, _queue = _infrastructure(settings)
     del filesystem
     if translation_provider is not None:
@@ -347,7 +351,7 @@ def build_orchestrator(
         detector=build_language_detector(settings),
         audio=build_audio_processor(settings),
         jobs=store,
-        artifact_cache=build_artifact_cache(settings),
+        artifact_cache=build_artifact_cache(settings, normalizer_settings=normalizer_settings),
         checkpoint_storage_factory=CheckpointFilesystem,
         max_chars=settings.chunk_max_chars,
         retry_policy=RetryPolicy(
@@ -356,6 +360,11 @@ def build_orchestrator(
         ),
         translation_concurrency=settings.chunk_translation_concurrency,
         tts_concurrency=settings.chunk_tts_concurrency,
+        chapter_pause_ms=settings.narrate_chapter_pause_ms,
+        # Built only for jobs that opted in, so a missing LLM key never fails other jobs.
+        text_normalizer=(
+            build_text_normalizer(normalizer_settings) if normalizer_settings is not None else None
+        ),
     )
 
 
@@ -479,10 +488,33 @@ def build_audio_processor(settings: Settings) -> AudioProcessor:
     )
 
 
-def build_artifact_cache(settings: Settings) -> PipelineArtifactCache:
+def _text_normalizer_settings(settings: Settings) -> Settings | None:
+    if not settings.text_normalization_enabled:
+        return None
+    return settings.model_copy(update={"translation_provider": settings.text_normalizer_provider})
+
+
+def build_text_normalizer(settings: Settings) -> TextNormalizer | None:
+    """Reuse the chat provider's own settings (key, model, URL) for normalization."""
+    normalizer_settings = _text_normalizer_settings(settings)
+    if normalizer_settings is None:
+        return None
+    from app.providers.translation.openai_compatible import OpenAICompatibleTranslationProvider
+
+    provider = build_translation_provider(normalizer_settings)
+    if not isinstance(provider, OpenAICompatibleTranslationProvider):
+        raise ProviderConfigurationError(
+            f"TEXT_NORMALIZER_PROVIDER={settings.text_normalizer_provider} cannot normalize text"
+        )
+    return provider
+
+
+def build_artifact_cache(
+    settings: Settings, *, normalizer_settings: Settings | None = None
+) -> PipelineArtifactCache:
     return PipelineArtifactCache(
         FilesystemArtifactCache(settings.storage_path / "cache"),
-        cache_identity_from_settings(settings),
+        cache_identity_from_settings(settings, normalizer_settings=normalizer_settings),
     )
 
 
@@ -540,7 +572,11 @@ def settings_for_translation_pin(settings: Settings, job: Job) -> Settings:
     raise UnknownProviderError(f"unknown translation pin: {provider}")
 
 
-def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
+def cache_identity_from_settings(
+    settings: Settings, *, normalizer_settings: Settings | None = None
+) -> CacheIdentity:
+    """Translation keys follow ``settings`` (the job pin); normalizer keys follow
+    ``normalizer_settings`` (live settings) so a translation pin never changes them."""
     translation = settings.translation_provider.strip().lower()
     tts = settings.tts_provider.strip().lower()
     if translation == "nllb":
@@ -561,11 +597,24 @@ def cache_identity_from_settings(settings: Settings) -> CacheIdentity:
         translation_model = settings.openrouter_translation_model
     else:
         translation_model = "fake"
+    normalizer_source = _text_normalizer_settings(normalizer_settings or settings)
+    normalizer_provider, normalizer_model = (
+        translation_pin_from_settings(normalizer_source)
+        if normalizer_source is not None
+        else ("", "")
+    )
+    if normalizer_source is not None:
+        from app.providers.translation.openai_compatible import NORMALIZE_PROMPT_VERSION
+
+        # Prompt changes must not replay outputs cached under the old prompt.
+        normalizer_model = f"{normalizer_model}#prompt-v{NORMALIZE_PROMPT_VERSION}"
     return CacheIdentity(
         translation_provider=translation,
         translation_model=translation_model,
         tts_provider=tts,
         tts_model=tts,
+        normalizer_provider=normalizer_provider,
+        normalizer_model=normalizer_model,
     )
 
 

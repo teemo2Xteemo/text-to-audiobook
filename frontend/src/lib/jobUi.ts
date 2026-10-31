@@ -397,6 +397,9 @@ export type FriendlyErrorResult = {
   details?: string;
 };
 
+const NORMALIZATION_FAILED_SUMMARY =
+  "Spelling out numbers and dates failed. Please try again or turn it off.";
+
 const ERROR_SUMMARY_MAP: Record<string, string> = {
   PROVIDER_CONFIGURATION_ERROR:
     "Service configuration issue. The service encountered a configuration error.",
@@ -416,8 +419,11 @@ export function friendlyError(
   const normType = (errorType ?? "").trim();
   const normMessage = (message ?? "").trim();
 
+  // Normalization reuses TRANSLATION_FAILED (fixed error codes); its message names the step.
+  const isNormalization =
+    normType === "TRANSLATION_FAILED" && normMessage.startsWith("text normalization");
   const summary =
-    ERROR_SUMMARY_MAP[normType] ||
+    (isNormalization ? NORMALIZATION_FAILED_SUMMARY : ERROR_SUMMARY_MAP[normType]) ||
     "An unexpected error occurred while processing the request.";
 
   let details: string | undefined;

@@ -180,6 +180,14 @@ describe("jobUi", () => {
   });
 
   describe("friendlyError", () => {
+    it("names text normalization when that step fails", () => {
+      const err = friendlyError("TRANSLATION_FAILED", "text normalization output is empty");
+      expect(err.summary).toMatch(/Spelling out numbers and dates failed/);
+      expect(friendlyError("TRANSLATION_FAILED", "translation output is empty").summary).toMatch(
+        /^Translation failed/,
+      );
+    });
+
     it("maps PROVIDER_CONFIGURATION_ERROR to friendly text", () => {
       const err = friendlyError("PROVIDER_CONFIGURATION_ERROR", "missing key");
       expect(err.summary).toContain("Service configuration issue");

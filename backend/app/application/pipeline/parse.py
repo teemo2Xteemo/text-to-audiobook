@@ -1,10 +1,26 @@
 import re
 
+from app.application.pipeline.merge_srt import is_sentence_terminal
+from app.application.pipeline.parse_srt import (
+    INLINE_SOUND_EFFECT_RE,
+    is_sound_effect_line,
+    merge_rolling_cue,
+    parse_timecode_line,
+)
 from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import resolve_source_language
 from app.domain.ports import LanguageDetector
 
-__all__ = ["is_srt_document", "parse_source", "prepare_narration_text", "strip_srt"]
+__all__ = [
+    "SRT_PARAGRAPH_GAP_MS",
+    "is_srt_document",
+    "parse_source",
+    "prepare_narration_text",
+    "strip_srt",
+]
+
+# Silence between cues that starts a new narration paragraph (spec #28 §7.4).
+SRT_PARAGRAPH_GAP_MS = 2000
 
 _SRT_TIMECODE_RE = re.compile(
     r"^\s*(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3}.*$",
@@ -13,11 +29,6 @@ _SRT_TIMECODE_RE = re.compile(
 _SRT_INDEX_RE = re.compile(r"^\s*\d+\s*$")
 _SRT_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
-_SOUND_EFFECT_RE = re.compile(r"^\s*(?:\[[^\]]+\]|\([^)]+\)|[♪♫][^♪♫]*[♪♫]|\*+[^*]+\*+)\s*$")
-_INLINE_SOUND_EFFECT_RE = re.compile(
-    r"\[(?:Music|Applause|Laughter|Sighs|Gasps|Cheering|Groans|Crying)\]|\((?:applause|cheering|laughter|sighs|music)\)|[♪♫]",
-    re.IGNORECASE,
-)
 _DIVIDER_LINE_RE = re.compile(r"(?m)^\s*([*=-]\s*){3,}\s*$")
 _CONSECUTIVE_NEWLINES_RE = re.compile(r"\n{3,}")
 _INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad\u200e\u200f]")
@@ -67,66 +78,71 @@ def is_srt_document(text_or_blocks: str | list[str]) -> bool:
     return _is_srt_document(blocks)
 
 
-def strip_srt(text: str) -> str:
+def strip_srt(text: str, *, paragraph_gap_ms: int = SRT_PARAGRAPH_GAP_MS) -> str:
+    """Turn subtitles into continuous narration text.
+
+    Cues are joined into one paragraph. A new paragraph starts when the silence before a
+    cue exceeds ``paragraph_gap_ms`` and the previous cue ends a sentence, or exceeds twice
+    that regardless of punctuation, so TTS does not pause mid-sentence at short cue gaps.
+    """
     normalized = _INVISIBLE_CHARS_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n").strip())
     blocks = re.split(r"\n{2,}", normalized)
     if not _is_srt_document(blocks):
         return text
-    cleaned_blocks: list[str] = []
+    paragraphs: list[list[str]] = []
+    previous_end_ms: int | None = None
     for block in blocks:
         lines: list[str] = []
+        timing: tuple[int, int] | None = None
         for raw_line in block.split("\n"):
             line = _INVISIBLE_CHARS_RE.sub("", raw_line).strip()
             if not line or line.upper() == "WEBVTT":
                 continue
-            if _SRT_INDEX_RE.match(line) or _SRT_TIMECODE_RE.match(line):
+            if _SRT_TIMECODE_RE.match(line):
+                timing = parse_timecode_line(line)
                 continue
-            if _SOUND_EFFECT_RE.match(line):
+            if _SRT_INDEX_RE.match(line):
+                continue
+            if is_sound_effect_line(line):
                 continue
             cleaned = _SRT_HTML_TAG_RE.sub("", line)
             cleaned = _ASS_TAG_RE.sub("", cleaned)
-            cleaned = _INLINE_SOUND_EFFECT_RE.sub("", cleaned)
+            cleaned = INLINE_SOUND_EFFECT_RE.sub("", cleaned)
             cleaned = re.sub(r"^\s*[-–—]\s*", "", cleaned)
             cleaned = re.sub(r"\s+[-–—]\s*", " ", cleaned)
             cleaned = re.sub(r"\s+", " ", cleaned).strip()
             if cleaned:
                 lines.append(cleaned)
-        if lines:
-            block_text = " ".join(lines)
-            merged = _merge_rolling_cue(cleaned_blocks[-1], block_text) if cleaned_blocks else None
-            if merged is None:
-                cleaned_blocks.append(block_text)
-            else:
-                cleaned_blocks[-1] = merged
-    return "\n\n".join(cleaned_blocks).strip()
+        if not lines:
+            continue
+        cue = " ".join(lines)
+        merged = merge_rolling_cue(paragraphs[-1][-1], cue) if paragraphs else None
+        if merged is not None:
+            paragraphs[-1][-1] = merged
+        elif paragraphs and not _starts_paragraph(
+            paragraphs[-1][-1], previous_end_ms, timing, paragraph_gap_ms
+        ):
+            paragraphs[-1].append(cue)
+        else:
+            paragraphs.append([cue])
+        if timing is not None:
+            previous_end_ms = timing[1]
+    return "\n\n".join(" ".join(cues) for cues in paragraphs).strip()
 
 
-_MIN_ROLLING_OVERLAP_WORDS = 2
-
-
-def _merge_rolling_cue(previous: str, current: str) -> str | None:
-    """Collapse progressive/rolling captions into one block.
-
-    Identical consecutive cues are dropped (so a repeated "No." / "No." is narrated once),
-    a cue that extends the previous one replaces it, and a cue whose first words repeat
-    at least ``_MIN_ROLLING_OVERLAP_WORDS`` trailing words of the previous one is appended
-    without the overlap. Returns ``None`` when the cues are unrelated.
-    """
-    prev_words = previous.split()
-    cur_words = current.split()
-    if cur_words[: len(prev_words)] == prev_words:
-        return current
-    if (
-        _MIN_ROLLING_OVERLAP_WORDS <= len(cur_words) <= len(prev_words)
-        and prev_words[-len(cur_words) :] == cur_words
-    ):
-        return previous
-    for overlap in range(min(len(prev_words), len(cur_words)) - 1, 0, -1):
-        if overlap < _MIN_ROLLING_OVERLAP_WORDS:
-            break
-        if prev_words[-overlap:] == cur_words[:overlap]:
-            return " ".join(prev_words + cur_words[overlap:])
-    return None
+def _starts_paragraph(
+    previous_cue: str,
+    previous_end_ms: int | None,
+    timing: tuple[int, int] | None,
+    paragraph_gap_ms: int,
+) -> bool:
+    if previous_end_ms is None or timing is None:
+        return False
+    gap = timing[0] - previous_end_ms
+    # Unpunctuated (auto-generated) captions still get breaks at clearly long silences.
+    if gap > 2 * paragraph_gap_ms:
+        return True
+    return gap > paragraph_gap_ms and is_sentence_terminal(previous_cue)
 
 
 async def parse_source(

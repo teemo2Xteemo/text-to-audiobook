@@ -140,6 +140,8 @@ def _orchestrator(
     retry_policy: RetryPolicy | None = None,
     sleep: _RecordingSleep | None = None,
     artifact_cache: PipelineArtifactCache | None = None,
+    chapter_pause_ms: int = 0,
+    text_normalizer: object | None = None,
 ) -> tuple[
     PipelineOrchestrator,
     Path,
@@ -169,6 +171,8 @@ def _orchestrator(
         "checkpoint_storage_factory": CheckpointFilesystem,
         "retry_policy": retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0),
         "sleep": sleep if sleep is not None else _RecordingSleep(),
+        "chapter_pause_ms": chapter_pause_ms,
+        "text_normalizer": text_normalizer,
     }
     if artifact_cache is not None:
         kwargs["artifact_cache"] = artifact_cache
@@ -1026,7 +1030,7 @@ def test_webvtt_with_dot_timecodes_is_stripped() -> None:
         "00:00:01.000 --> 00:00:02.500\nHello <i>there</i>.\n\n"
         "00:00:03.000 --> 00:00:04.000\nSecond line.\n"
     )
-    assert strip_srt(vtt) == "Hello there.\n\nSecond line."
+    assert strip_srt(vtt) == "Hello there. Second line."
 
 
 def test_strip_srt_strips_ass_tags_and_sound_effects() -> None:
@@ -1082,8 +1086,8 @@ def test_strip_srt_keeps_cues_sharing_a_single_word() -> None:
     from app.application.pipeline.parse import strip_srt
 
     srt = _srt("I saw you.", "you never listen.")
-    assert strip_srt(srt) == "I saw you.\n\nyou never listen."
-    assert strip_srt(_srt("I saw you.", "you.")) == "I saw you.\n\nyou."
+    assert strip_srt(srt) == "I saw you. you never listen."
+    assert strip_srt(_srt("I saw you.", "you.")) == "I saw you. you."
     assert strip_srt(_srt("Hello there my friend", "my friend")) == "Hello there my friend"
 
 
@@ -1093,7 +1097,25 @@ def test_strip_srt_drops_identical_consecutive_cues() -> None:
     from app.application.pipeline.parse import strip_srt
 
     srt = _srt("No.", "No.", "Fine.", "No.")
-    assert strip_srt(srt) == "No.\n\nFine.\n\nNo."
+    assert strip_srt(srt) == "No. Fine. No."
+
+
+def test_strip_srt_breaks_paragraph_only_after_long_gap_and_sentence_end() -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    srt = (
+        "1\n00:00:01,000 --> 00:00:02,000\nShe opened the door\n\n"
+        "2\n00:00:05,000 --> 00:00:06,000\nand stepped inside.\n\n"
+        "3\n00:00:06,500 --> 00:00:07,000\nIt was dark.\n\n"
+        "4\n00:00:12,000 --> 00:00:13,000\nMorning came.\n"
+    )
+    # 3 s gap after an unfinished sentence still joins; 5 s gap after "dark." breaks.
+    assert strip_srt(srt) == (
+        "She opened the door and stepped inside. It was dark.\n\nMorning came."
+    )
+    assert strip_srt(srt, paragraph_gap_ms=10_000) == (
+        "She opened the door and stepped inside. It was dark. Morning came."
+    )
 
 
 def test_plain_txt_with_embedded_timecode_and_chapter_numbers_is_not_stripped(
@@ -1174,6 +1196,57 @@ def test_narrate_mode_splits_chapters_and_preserves_titles(tmp_path: Path) -> No
     assert "They traveled across the mountains." in chunk_2_text
 
 
+@pytest.mark.parametrize("pause_ms", [0, 1500])
+def test_narrate_mode_inserts_pause_between_chapters_only(tmp_path: Path, pause_ms: int) -> None:
+    job = _job(
+        id="test-narrate-pause-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        chapter_pause_ms=pause_ms,
+    )
+    story = (
+        "Chapter 1: Dawn\n\n"
+        + "The sun rose slowly over the quiet hills. " * 4
+        + "\n\nChapter 2: Dusk\n\nThe sun set."
+    )
+    result = _run(orchestrator, job, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    merged = [path.name for path in audio.merge_calls[-1]]
+    pause = "chapter-pause.mp3"
+    if pause_ms == 0:
+        assert pause not in merged
+        assert audio.silence_calls == []
+        return
+    # Chapter 1 spans several chunks; the single pause sits only at the chapter boundary.
+    assert merged.count(pause) == 1
+    boundary = merged.index(pause)
+    assert boundary > 1
+    assert merged[boundary + 1] == f"chunk-{boundary + 1:03d}.normalized.mp3"
+    assert audio.silence_calls == [(pause_ms, workspace / "audio" / pause)]
+
+
+def test_translate_mode_never_inserts_chapter_pauses(tmp_path: Path) -> None:
+    job = _job()
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path, job=job, chapter_pause_ms=1500
+    )
+    story = "Chapter 1: A\n\nOne.\n\nChapter 2: B\n\nTwo."
+    result = _run(orchestrator, job, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    assert audio.silence_calls == []
+
+
 def test_narrate_mode_empty_readable_text_raises_invalid_input(tmp_path: Path) -> None:
     job = _job(
         id="test-narrate-empty-1",
@@ -1231,6 +1304,51 @@ def test_unknown_job_mode_fails_pipeline(tmp_path: Path) -> None:
     assert saved is not None and saved.status is JobStatus.FAILED
 
 
+_TWO_CUES_WITH_GAP = (
+    "1\n00:00:01,000 --> 00:00:02,000\nFirst line.\n\n"
+    "2\n00:00:10,000 --> 00:00:11,000\nSecond line.\n"
+)
+
+
+def test_narrate_srt_aligned_follows_cue_timeline_without_translation(tmp_path: Path) -> None:
+    from app.domain.jobs import SrtTiming
+
+    job = _job(
+        id="test-narrate-srt-aligned",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        srt_timing=SrtTiming.ALIGNED,
+    )
+    orchestrator, workspace, translation, _, _, _, audio, _ = _orchestrator(
+        tmp_path, job=job, voices=_voices_for("en-US")
+    )
+    result = _run(orchestrator, job, workspace, text=_TWO_CUES_WITH_GAP)
+
+    assert result.status is JobStatus.COMPLETED
+    assert translation.calls == []
+    # Aligned timing keeps the cue gaps as silence and writes timed subtitles.
+    assert audio.silence_calls
+    assert (workspace / "output.srt").read_text(encoding="utf-8").count("-->") == 2
+
+
+def test_narrate_srt_continuous_is_default_and_has_no_timeline(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-srt-continuous",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+    )
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path, job=job, voices=_voices_for("en-US")
+    )
+    result = _run(orchestrator, job, workspace, text=_TWO_CUES_WITH_GAP)
+
+    assert result.status is JobStatus.COMPLETED
+    assert audio.silence_calls == []
+    assert not (workspace / "output.srt").exists()
+
+
 def test_srt_with_narrate_mode_produces_audio_successfully(tmp_path: Path) -> None:
     job = _job(
         id="test-narrate-srt-1",
@@ -1246,3 +1364,335 @@ def test_srt_with_narrate_mode_produces_audio_successfully(tmp_path: Path) -> No
     assert result.error_type is None
     saved = asyncio.run(jobs.get(job.id))
     assert saved is not None and saved.status is JobStatus.COMPLETED
+
+
+class _SpellingNormalizer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def normalize(self, text: str, language: str) -> str:
+        self.calls.append((text, language))
+        return text.replace("20", "twenty")
+
+
+def _normalize_job(job_id: str, *, normalize_text: bool = True) -> Job:
+    return _job(
+        id=job_id,
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+        normalize_text=normalize_text,
+    )
+
+
+def test_normalize_text_feeds_spoken_form_to_narration_and_is_cached(tmp_path: Path) -> None:
+    normalizer = _SpellingNormalizer()
+    cache = _pipeline_cache(tmp_path)
+    for job_id in ("normalize-a", "normalize-b"):
+        job = _normalize_job(job_id)
+        orchestrator, workspace, translation, narration, _, _, _, _ = _orchestrator(
+            tmp_path,
+            job=job,
+            languages=["en-US"],
+            voices=_voices_for("en-US"),
+            artifact_cache=cache,
+            text_normalizer=normalizer,
+        )
+        result = _run(orchestrator, job, workspace, text="She was 20 years old.")
+
+        assert result.status is JobStatus.COMPLETED
+        assert translation.calls == []
+        assert narration.calls == [("She was twenty years old.", "en-US")]  # type: ignore[attr-defined]
+    # The second job reuses the cached normalization instead of calling the LLM again.
+    assert normalizer.calls == [("She was 20 years old.", "en-US")]
+
+
+def test_normalizer_is_skipped_unless_the_job_opted_in(tmp_path: Path) -> None:
+    normalizer = _SpellingNormalizer()
+    job = _normalize_job("normalize-off", normalize_text=False)
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        text_normalizer=normalizer,
+    )
+    result = _run(orchestrator, job, workspace, text="She was 20 years old.")
+
+    assert result.status is JobStatus.COMPLETED
+    assert normalizer.calls == []
+    assert narration.calls == [("She was 20 years old.", "en-US")]  # type: ignore[attr-defined]
+
+
+def test_normalize_text_without_normalizer_fails_with_configuration_error(
+    tmp_path: Path,
+) -> None:
+    job = _normalize_job("normalize-missing")
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, languages=["en-US"], voices=_voices_for("en-US")
+    )
+    result = _run(orchestrator, job, workspace, text="She was 20 years old.")
+
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+
+
+def test_narrate_srt_aligned_does_not_voice_sound_effects(tmp_path: Path) -> None:
+    from app.domain.jobs import SrtTiming
+
+    job = _job(
+        id="test-narrate-srt-aligned-sfx",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        srt_timing=SrtTiming.ALIGNED,
+    )
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, voices=_voices_for("en-US")
+    )
+    srt_text = (
+        "1\n00:00:01,000 --> 00:00:02,000\n[Music]\n\n"
+        "2\n00:00:03,000 --> 00:00:04,000\nFirst line.\n"
+    )
+    result = _run(orchestrator, job, workspace, text=srt_text)
+
+    assert result.status is JobStatus.COMPLETED
+    narrated = " ".join(text for text, _ in narration.calls)  # type: ignore[attr-defined]
+    assert "Music" not in narrated
+    assert "First line." in narrated
+
+
+def test_volume_heading_gets_no_pause_of_its_own(tmp_path: Path) -> None:
+    job = _job(
+        id="test-narrate-volume-pause",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        chapter_pause_ms=1500,
+    )
+    story = "Book 1\n\nChapter 1: Dawn\n\nThe sun rose.\n\nChapter 2: Dusk\n\nThe sun set."
+    result = _run(orchestrator, job, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    merged = [path.name for path in audio.merge_calls[-1]]
+    chapter_two = next(
+        path.name.removesuffix(".translated.txt")
+        for path in sorted((workspace / "chunks").glob("*.translated.txt"))
+        if "Chapter 2" in path.read_text(encoding="utf-8")
+    )
+    # Only the Chapter 1 -> Chapter 2 boundary pauses; "Book 1" flows into Chapter 1.
+    assert merged.count("chapter-pause.mp3") == 1
+    pause_at = merged.index("chapter-pause.mp3")
+    assert merged[pause_at + 1] == f"{chapter_two}.normalized.mp3"
+
+
+def test_strip_srt_breaks_unpunctuated_captions_on_long_silence() -> None:
+    from app.application.pipeline.parse import strip_srt
+
+    srt = (
+        "1\n00:00:01,000 --> 00:00:02,000\nso we went down\n\n"
+        "2\n00:00:05,000 --> 00:00:06,000\nto the river\n\n"
+        "3\n00:00:11,000 --> 00:00:12,000\nthe next day it rained\n"
+    )
+    # 3 s gap without punctuation still joins; 5 s (> 2 x 2 s) breaks regardless.
+    assert strip_srt(srt) == "so we went down to the river\n\nthe next day it rained"
+
+
+class _FixedNormalizer:
+    def __init__(self, output: str) -> None:
+        self.output = output
+
+    async def normalize(self, text: str, language: str) -> str:
+        return self.output
+
+
+@pytest.mark.parametrize(
+    "bad_output",
+    [
+        "She was twenty.",  # truncated: second line dropped
+        "Here is the rewritten text:\nShe was twenty years old.\nHe was thirty.",  # preamble
+        "她二十岁。\n他三十岁。",  # answered in another script
+    ],
+)
+def test_rejected_normalization_narrates_original_and_is_not_cached(
+    tmp_path: Path, bad_output: str
+) -> None:
+    original = "She was 20 years old.\nHe was 30."
+    job = _normalize_job("normalize-rejected")
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        artifact_cache=_pipeline_cache(tmp_path),
+        text_normalizer=_FixedNormalizer(bad_output),
+    )
+    result = _run(orchestrator, job, workspace, text=original)
+
+    assert result.status is JobStatus.COMPLETED
+    assert narration.calls == [(original, "en-US")]  # type: ignore[attr-defined]
+    assert not any((tmp_path / "cache" / "normalization").glob("*"))
+
+
+class _ConcurrencyNormalizer:
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def normalize(self, text: str, language: str) -> str:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.01)
+        self.in_flight -= 1
+        return text.replace("20", "twenty")
+
+
+def test_normalization_runs_with_bounded_concurrency(tmp_path: Path) -> None:
+    normalizer = _ConcurrencyNormalizer()
+    job = _normalize_job("normalize-concurrent")
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        text_normalizer=normalizer,
+    )
+    orchestrator._translation_concurrency = 2
+    story = "\n\n".join(
+        f"Paragraph {i} says she was 20 at the time of the story." for i in range(6)
+    )
+    result = _run(orchestrator, job, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    assert normalizer.max_in_flight == 2
+    narrated = " ".join(text for text, _ in narration.calls)  # type: ignore[attr-defined]
+    assert " 20 " not in narrated
+    assert narrated.count("twenty") == 6
+
+
+def test_narrate_srt_never_translates_even_if_tags_differ(tmp_path: Path) -> None:
+    from app.domain.jobs import SrtTiming
+
+    job = _job(
+        id="test-narrate-srt-tag-drift",
+        source_language="en-US",
+        target_language="en-GB",
+        mode=JobMode.NARRATE,
+        srt_timing=SrtTiming.ALIGNED,
+    )
+    orchestrator, workspace, translation, _, _, _, _, _ = _orchestrator(
+        tmp_path, job=job, languages=["en-US", "en-GB"], voices=_voices_for("en-GB")
+    )
+    result = _run(orchestrator, job, workspace, text=_TWO_CUES_WITH_GAP)
+
+    assert result.status is JobStatus.COMPLETED
+    assert translation.calls == []
+
+
+def test_unfaithful_cached_normalization_is_recomputed(tmp_path: Path) -> None:
+    original = "She was 20 years old."
+    cache = _pipeline_cache(tmp_path)
+    poisoned = tmp_path / "poisoned.txt"
+    poisoned.write_text("Here is the text: She was twenty years old.", encoding="utf-8")
+    cache.store_normalization(
+        text=original, language="en-US", source=poisoned, job_id="seed", chunk_id="seed"
+    )
+    normalizer = _SpellingNormalizer()
+    job = _normalize_job("normalize-poisoned-cache")
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        artifact_cache=cache,
+        text_normalizer=normalizer,
+    )
+    result = _run(orchestrator, job, workspace, text=original)
+
+    assert result.status is JobStatus.COMPLETED
+    assert normalizer.calls == [(original, "en-US")]
+    assert narration.calls == [("She was twenty years old.", "en-US")]  # type: ignore[attr-defined]
+
+
+class _FailingOnNormalizer(_SpellingNormalizer):
+    def __init__(self, marker: str) -> None:
+        super().__init__()
+        self.marker = marker
+
+    async def normalize(self, text: str, language: str) -> str:
+        if self.marker in text:
+            raise DomainError(ErrorType.INVALID_INPUT, "normalizer refused")
+        return await super().normalize(text, language)
+
+
+def test_resume_reuses_normalized_chunks_on_disk_without_cache(tmp_path: Path) -> None:
+    from dataclasses import replace as dc_replace
+
+    line = "says she was 20 at the time of the story."
+    story = "\n\n".join(f"Paragraph {i} {line}" for i in range(5))
+    job = _normalize_job("normalize-resume")
+    failing = _FailingOnNormalizer("Paragraph 2 ")
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        text_normalizer=failing,
+    )
+    failed = _run(orchestrator, job, workspace, text=story)
+    assert failed.status is JobStatus.FAILED
+    accepted = {text.split(" ")[1] for text, _ in failing.calls}
+    assert "2" not in accepted and {"0", "1"} <= accepted
+
+    retry = dc_replace(failed, status=JobStatus.QUEUED, error_type=None, message=None)
+    resumed_normalizer = _SpellingNormalizer()
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=retry,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        text_normalizer=resumed_normalizer,
+    )
+    result = _run(orchestrator, retry, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    # Chunks accepted before the failure are read back from disk, not sent to the LLM again.
+    retried = {text.split(" ")[1] for text, _ in resumed_normalizer.calls}
+    assert retried == {"0", "1", "2", "3", "4"} - accepted
+
+
+def test_stale_normalized_file_from_other_text_is_not_reused(tmp_path: Path) -> None:
+    job = _normalize_job("normalize-stale-file")
+    workspace = tmp_path / "jobs" / job.id
+    stale = workspace / "chunks" / "chunk-001.normalized.txt"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    # Same chunk id and opening word, but made from a different passage (pre-re-chunking).
+    stale.write_text("She stood still in the yard and counted three disciples.", encoding="utf-8")
+    normalizer = _SpellingNormalizer()
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        text_normalizer=normalizer,
+    )
+    original = "She walked into the great hall and saw 20 elders."
+    result = _run(orchestrator, job, workspace, text=original)
+
+    assert result.status is JobStatus.COMPLETED
+    assert normalizer.calls == [(original, "en-US")]
+    assert narration.calls == [  # type: ignore[attr-defined]
+        ("She walked into the great hall and saw twenty elders.", "en-US")
+    ]

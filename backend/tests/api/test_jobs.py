@@ -980,6 +980,65 @@ def test_post_narrate_accepts_srt_phase_2(jobs_client: TestClient) -> None:
     assert body["mode"] == "narrate"
 
 
+_SRT_SAMPLE = "1\n00:00:01,000 --> 00:00:04,000\nHello subtitle world.\n"
+
+
+def test_post_narrate_srt_timing_json_and_multipart(jobs_client: TestClient) -> None:
+    res = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": _SRT_SAMPLE,
+            "mode": "narrate",
+            "source_language": "en-US",
+            "srt_timing": "aligned",
+        },
+    )
+    assert res.status_code == 202
+    body = jobs_client.get(f"/api/jobs/{res.json()['job_id']}").json()
+    assert body["srt_timing"] == "aligned"
+
+    res = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "mode": "narrate", "srt_timing": "aligned"},
+        files={"file": ("captions.srt", _SRT_SAMPLE.encode(), "application/x-subrip")},
+    )
+    assert res.status_code == 202
+    body = jobs_client.get(f"/api/jobs/{res.json()['job_id']}").json()
+    assert body["srt_timing"] == "aligned"
+
+
+def test_post_job_rejects_invalid_or_translate_srt_timing(jobs_client: TestClient) -> None:
+    res = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "mode": "narrate", "srt_timing": "sideways"},
+        files={"file": ("captions.srt", _SRT_SAMPLE.encode(), "application/x-subrip")},
+    )
+    assert res.status_code == 400
+    assert res.json()["error_type"] == "INVALID_INPUT"
+
+    res = jobs_client.post(
+        "/api/jobs",
+        json={
+            "text": _SRT_SAMPLE,
+            "source_language": "en-US",
+            "target_language": "ko-KR",
+            "srt_timing": "aligned",
+        },
+    )
+    assert res.status_code == 400
+    assert "narrate mode" in res.json()["message"]
+
+
+def test_post_job_rejects_non_boolean_normalize_text(jobs_client: TestClient) -> None:
+    res = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "mode": "narrate", "normalize_text": "maybe"},
+        files={"file": ("story.txt", b"Chapter 20 begins.", "text/plain")},
+    )
+    assert res.status_code == 400
+    assert res.json()["message"] == "normalize_text must be true or false"
+
+
 def test_decode_source_text_small_gbk_and_big5_not_mojibake() -> None:
     from app.api.parse import _decode_source_text
 

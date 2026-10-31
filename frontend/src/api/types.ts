@@ -12,6 +12,8 @@ export type JobMode = "translate" | "narrate";
 
 export type OutputFormat = "mp3" | "wav";
 
+export type SrtTiming = "continuous" | "aligned";
+
 export type Voice = {
   id: string;
   language: string;
@@ -35,6 +37,7 @@ export type Capabilities = {
   translation_profiles?: TranslationProfile[];
   narrate_languages?: string[];
   estimate_defaults?: { chars_per_second?: number; preview_wpm?: number };
+  text_normalization?: boolean;
 };
 
 export type CapabilitiesResponse = Capabilities;
@@ -62,6 +65,8 @@ export type JobStatusResponse = {
   translation_provider?: string | null;
   translation_model?: string | null;
   mode?: JobMode;
+  srt_timing?: SrtTiming;
+  normalize_text?: boolean;
 };
 
 export type ErrorEnvelope = {
@@ -79,6 +84,8 @@ export type CreateJobInput = {
   file?: File;
   translation_profile_id?: string;
   mode?: JobMode;
+  srt_timing?: SrtTiming;
+  normalize_text?: boolean;
 };
 
 export type CreateJobPayload = CreateJobInput;

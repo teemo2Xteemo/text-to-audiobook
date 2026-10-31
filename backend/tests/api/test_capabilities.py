@@ -174,3 +174,73 @@ def test_capabilities_includes_narrate_languages(client: TestClient) -> None:
     assert "narrate_languages" in data
     assert "estimate_defaults" in data
     assert len(data["narrate_languages"]) >= len(data["languages"])
+
+
+@pytest.mark.parametrize(
+    ("provider", "key", "expected"),
+    [("none", "gsk-test", False), ("groq", None, False), ("groq", "gsk-test", True)],
+)
+def test_capabilities_reports_text_normalization(
+    tmp_path: Path, provider: str, key: str | None, expected: bool
+) -> None:
+    # Without the provider's API key the option must not be offered (jobs would fail later).
+    settings = Settings(
+        _env_file=None, storage_path=tmp_path, text_normalizer_provider=provider, groq_api_key=key
+    )
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/capabilities").json()["text_normalization"] is expected
+
+
+def test_text_normalizer_provider_must_be_supported(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, storage_path=tmp_path, text_normalizer_provider="gemini")
+
+
+def test_build_text_normalizer_reuses_chat_provider_settings(tmp_path: Path) -> None:
+    from app.config.factory import (
+        build_text_normalizer,
+        cache_identity_from_settings,
+        settings_for_translation_pin,
+    )
+    from app.domain.jobs import Job, JobStatus, OutputFormat
+
+    off = Settings(_env_file=None, storage_path=tmp_path)
+    assert build_text_normalizer(off) is None
+    assert cache_identity_from_settings(off).normalizer_provider == ""
+
+    keyless = Settings(_env_file=None, storage_path=tmp_path, text_normalizer_provider="groq")
+    assert build_text_normalizer(keyless) is None
+
+    configured = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        text_normalizer_provider="openrouter",
+        openrouter_api_key="sk-or-test",
+    )
+    assert build_text_normalizer(configured) is not None
+    identity = cache_identity_from_settings(configured)
+    assert identity.normalizer_provider == "openrouter"
+    model = configured.openrouter_translation_model
+    assert identity.normalizer_model == f"{model}#prompt-v1"
+    # The translation side of the cache key is untouched by the normalizer choice.
+    assert identity.translation_provider == "fake"
+
+    # A job pinned to another OpenRouter model must not change the normalizer model or key.
+    pinned_job = Job(
+        id="pinned",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="vi-VN",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        translation_provider="openrouter",
+        translation_model="other/model",
+    )
+    pinned = settings_for_translation_pin(configured, pinned_job)
+    pinned_identity = cache_identity_from_settings(pinned, normalizer_settings=configured)
+    assert pinned_identity.translation_model == "other/model"
+    assert pinned_identity.normalizer_model == f"{model}#prompt-v1"

@@ -476,6 +476,10 @@ class UrllibOpenAIHttpClient:
         return parsed
 
 
+# Bump when the normalize() prompt changes; it is part of the normalization cache key.
+NORMALIZE_PROMPT_VERSION = 1
+
+
 class OpenAICompatibleTranslationProvider:
     """Base OpenAI-compatible translation adapter for Groq, OpenRouter, and standard endpoints."""
 
@@ -544,7 +548,45 @@ class OpenAICompatibleTranslationProvider:
             "flow. Return ONLY the translated text without explanations, greetings, or "
             "formatting markdown."
         )
+        return await self._complete(
+            system_prompt,
+            text,
+            log_extra={"source_language": source_language, "target_language": target_language},
+        )
 
+    async def normalize(self, text: str, language: str) -> str:
+        """Rewrite numbers, dates and abbreviations as spoken words, in the same language."""
+        if not self._api_key:
+            raise DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                "API key is not configured or empty",
+            )
+        # Narrate covers every TTS locale, so an unmapped tag is passed through as its own name.
+        _, language_name = _BCP47_TO_OPENAI.get(language, (language, language))
+        if len(text) > _MAX_INPUT_CHARS:
+            raise DomainError(ErrorType.INVALID_INPUT, "text exceeds model context")
+        system_prompt = (
+            f"You prepare {language_name} text for an audiobook narrator. Rewrite numbers, "
+            "dates, times, currencies, units, symbols and abbreviations as the words a "
+            f"narrator would say aloud in {language_name}. Do not translate, summarize, add or "
+            "remove anything else; keep every other word, line break and punctuation mark. "
+            "Return ONLY the rewritten text without explanations or formatting markdown."
+        )
+        try:
+            return await self._complete(
+                system_prompt, text, log_extra={"language": language, "operation": "normalize"}
+            )
+        except DomainError as exc:
+            if exc.error_type is not ErrorType.TRANSLATION_FAILED:
+                raise
+            # error_type codes are a fixed list (backend rule), so the message names the step.
+            raise DomainError(
+                ErrorType.TRANSLATION_FAILED,
+                f"text normalization failed: {exc.message}",
+                retry_after_seconds=exc.retry_after_seconds,
+            ) from exc
+
+    async def _complete(self, system_prompt: str, text: str, *, log_extra: dict[str, str]) -> str:
         payload = {
             "model": self._model,
             "messages": [
@@ -581,8 +623,7 @@ class OpenAICompatibleTranslationProvider:
                 "model": self._model,
                 "served_model": served_model if isinstance(served_model, str) else None,
                 "base_url": self._base_url,
-                "source_language": source_language,
-                "target_language": target_language,
+                **log_extra,
             },
         )
 

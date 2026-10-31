@@ -27,6 +27,7 @@ def _service(
     tts: TTSProvider | None = None,
     detector: LanguageDetector | None = None,
     language_confirm_threshold: float = 0.70,
+    text_normalization_available: bool = False,
 ) -> tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue | FailingQueue]:
     store = jobs or InMemoryJobStore()
     storage = source or InMemorySourceStorage()
@@ -43,6 +44,7 @@ def _service(
         tts=tts,
         detector=detector,
         language_confirm_threshold=language_confirm_threshold,
+        text_normalization_available=text_normalization_available,
     )
     return service, store, storage, queued
 
@@ -1056,3 +1058,43 @@ def test_create_narrate_job_low_detection_confidence_raises() -> None:
         )
     assert exc.value.error_type == ErrorType.INVALID_INPUT
     assert "below threshold" in exc.value.message
+
+
+def test_create_normalize_text_requires_configured_normalizer() -> None:
+    from app.domain.jobs import JobMode
+
+    command = CreateJobCommand(
+        text="Hello 20",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        normalize_text=True,
+    )
+    service, store, _, _ = _service()
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(service.create(command))
+    assert exc.value.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert store.jobs == {}
+
+    service, _, _, _ = _service(text_normalization_available=True)
+    job = asyncio.run(service.create(command))
+    assert job.normalize_text is True
+    assert Job.from_dict(job.to_dict()).normalize_text is True
+
+
+def test_create_rejects_normalize_text_in_translate_mode() -> None:
+    service, store, _, _ = _service(text_normalization_available=True)
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(
+            service.create(
+                CreateJobCommand(
+                    text="Hello 20",
+                    source_language="en-US",
+                    target_language="ko-KR",
+                    normalize_text=True,
+                )
+            )
+        )
+    assert exc.value.error_type is ErrorType.INVALID_INPUT
+    assert "narrate mode" in exc.value.message
+    assert store.jobs == {}
