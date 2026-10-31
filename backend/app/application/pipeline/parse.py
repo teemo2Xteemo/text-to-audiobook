@@ -3,7 +3,7 @@ import re
 from app.application.pipeline.merge_srt import is_sentence_terminal
 from app.application.pipeline.parse_srt import (
     INLINE_SOUND_EFFECT_RE,
-    SOUND_EFFECT_RE,
+    is_sound_effect_line,
     merge_rolling_cue,
     parse_timecode_line,
 )
@@ -29,11 +29,6 @@ _SRT_TIMECODE_RE = re.compile(
 _SRT_INDEX_RE = re.compile(r"^\s*\d+\s*$")
 _SRT_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
-_SOUND_EFFECT_RE = re.compile(r"^\s*(?:\[[^\]]+\]|\([^)]+\)|[♪♫][^♪♫]*[♪♫]|\*+[^*]+\*+)\s*$")
-_INLINE_SOUND_EFFECT_RE = re.compile(
-    r"\[(?:Music|Applause|Laughter|Sighs|Gasps|Cheering|Groans|Crying)\]|\((?:applause|cheering|laughter|sighs|music)\)|[♪♫]",
-    re.IGNORECASE,
-)
 _DIVIDER_LINE_RE = re.compile(r"(?m)^\s*([*=-]\s*){3,}\s*$")
 _CONSECUTIVE_NEWLINES_RE = re.compile(r"\n{3,}")
 _INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad\u200e\u200f]")
@@ -108,7 +103,7 @@ def strip_srt(text: str, *, paragraph_gap_ms: int = SRT_PARAGRAPH_GAP_MS) -> str
                 continue
             if _SRT_INDEX_RE.match(line):
                 continue
-            if SOUND_EFFECT_RE.match(line):
+            if is_sound_effect_line(line):
                 continue
             cleaned = _SRT_HTML_TAG_RE.sub("", line)
             cleaned = _ASS_TAG_RE.sub("", cleaned)

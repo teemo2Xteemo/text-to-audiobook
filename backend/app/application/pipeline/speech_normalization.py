@@ -18,6 +18,9 @@ _MAX_LETTER_RATIO = 3.0
 # Below this many letters a single spelled-out number skews the ratio too much to judge.
 _MIN_LETTERS_FOR_RATIO = 40
 _WORD_RE = re.compile(r"\w+")
+# Output words in which an original opening word must appear (preamble check).
+_OPENING_WINDOW = 3
+_WORDS_PER_EXPANDED_TOKEN = 6
 
 
 def normalization_problem(original: str, normalized: str) -> str | None:
@@ -59,12 +62,24 @@ def _scripts(text: str) -> set[str]:
 
 
 def _keeps_opening(original: str, normalized: str) -> bool:
-    expected = [
-        token.casefold()
-        for token in _WORD_RE.findall(original)
-        if not any(ch.isdigit() for ch in token)
-    ][:2]
+    """One of the original's first two plain words must open the output.
+
+    Leading numbers and abbreviations ("1984", "TP.HCM") expand into several spoken words, so
+    each of them widens the window; a chunk that starts with a plain word keeps a tight window,
+    which is what catches an added preamble.
+    """
+    raw = _WORD_RE.findall(original)
+    lead = 0
+    while lead < len(raw) and _expands_when_spoken(raw[lead]):
+        lead += 1
+    expected = [token.casefold() for token in raw[lead : lead + 2]]
     if not expected:
         return True
-    opening = [token.casefold() for token in _WORD_RE.findall(normalized)][:3]
+    window = _OPENING_WINDOW + _WORDS_PER_EXPANDED_TOKEN * lead
+    opening = [token.casefold() for token in _WORD_RE.findall(normalized)][:window]
     return any(token in opening for token in expected)
+
+
+def _expands_when_spoken(token: str) -> bool:
+    # Digits, or an all-caps abbreviation; caseless scripts never count as abbreviations.
+    return any(ch.isdigit() for ch in token) or (len(token) > 1 and token.isupper())

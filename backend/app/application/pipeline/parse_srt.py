@@ -9,18 +9,42 @@ _TIMECODE_LINE_RE = re.compile(
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
-# [..] and ♪..♪ lines are always effects; (..) and *..* only up to 3 words, since fansubs use
-# them for inner thoughts, translator notes and emphasis.
-SOUND_EFFECT_RE = re.compile(
-    r"^\s*(?:\[[^\]]+\]|[♪♫][^♪♫]*[♪♫]"
-    r"|\(\s*[^()\s]+(?:\s+[^()\s]+){0,2}\s*\)"
-    r"|\*+\s*[^*\s]+(?:\s+[^*\s]+){0,2}\s*\*+)\s*$"
-)
+_BRACKET_CUE_RE = re.compile(r"^\s*(?:\[[^\]]+\]|[♪♫][^♪♫]*[♪♫])\s*$")
+_ASIDE_RE = re.compile(r"^\s*(?:\((.+)\)|（(.+)）|\*+(.+?)\*+)\s*$")
+_SPEECH_PUNCTUATION = frozenset(".?!…。？！")
+# Caseless scripts have no word spaces; only very short asides there are sound cues.
+_CASELESS_CUE_MAX_CHARS = 4
+_CASED_CUE_MAX_WORDS = 3
 INLINE_SOUND_EFFECT_RE = re.compile(
     r"\[(?:Music|Applause|Laughter|Sighs|Gasps|Cheering|Groans|Crying)\]"
     r"|\((?:applause|cheering|laughter|sighs|music)\)|[♪♫]",
     re.IGNORECASE,
 )
+
+
+def is_sound_effect_line(line: str) -> bool:
+    """Whole-line sound cue, e.g. ``[Music]``, ``♪ ... ♪``, ``(sighs)``, ``*APPLAUSE*``.
+
+    ``[..]`` and ``♪..♪`` are always cues. ``(..)``/``（..）``/``*..*`` are also used for inner
+    thoughts, notes and emphasis, so they count only when they read like a cue: no sentence
+    punctuation, all-lowercase or all-uppercase (or a single word) in cased scripts, at most
+    ``_CASED_CUE_MAX_WORDS`` words, and at most ``_CASELESS_CUE_MAX_CHARS`` chars in caseless ones.
+    """
+    if _BRACKET_CUE_RE.match(line):
+        return True
+    match = _ASIDE_RE.match(line)
+    if match is None:
+        return False
+    inner = next(group for group in match.groups() if group is not None).strip()
+    if not inner or any(ch in _SPEECH_PUNCTUATION for ch in inner):
+        return False
+    cased = [ch for ch in inner if ch.isupper() or ch.islower()]
+    if not cased:
+        return len(inner.replace(" ", "")) <= _CASELESS_CUE_MAX_CHARS
+    words = inner.split()
+    single_case = all(ch.islower() for ch in cased) or all(ch.isupper() for ch in cased)
+    # Sentence case ("He thinks so") reads as speech; one title-case word ("Sighs") is a cue.
+    return len(words) <= _CASED_CUE_MAX_WORDS and (single_case or len(words) == 1)
 
 
 def _timecode_to_ms(hours: str | None, minutes: str, seconds: str, millis: str) -> int:
@@ -97,7 +121,7 @@ def parse_srt_cues(text: str) -> list[SRTCue]:
             if not cleaned:
                 continue
             had_text = True
-            if SOUND_EFFECT_RE.match(cleaned):
+            if is_sound_effect_line(cleaned):
                 continue
             cleaned = " ".join(INLINE_SOUND_EFFECT_RE.sub("", cleaned).split())
             if cleaned:

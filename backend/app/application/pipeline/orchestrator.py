@@ -634,6 +634,15 @@ class PipelineOrchestrator:
                     spoken_by_id[chunk.id] = await self._normalize_for_speech(
                         job, chunk, text, workspace
                     )
+                    logger.info(
+                        "pipeline_chunk_normalized",
+                        extra={
+                            "job_id": job.id,
+                            "chunk_id": chunk.id,
+                            "done": len(spoken_by_id),
+                            "total": len(chunks),
+                        },
+                    )
                 except Exception:
                     if self._active_chunk_id is None:
                         self._active_chunk_id = chunk.id
@@ -661,6 +670,11 @@ class PipelineOrchestrator:
             )
         path = workspace / "chunks" / f"{chunk.id}.normalized.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
+        # A resumed job reuses the accepted output from its own workspace before the cache.
+        if _nonempty(path):
+            reused = path.read_text(encoding="utf-8")
+            if normalization_problem(text, reused) is None:
+                return reused
         cache = self._artifact_cache
         if cache is not None and cache.fill_normalization(
             text=text,
@@ -669,7 +683,11 @@ class PipelineOrchestrator:
             job_id=job.id,
             chunk_id=chunk.id,
         ):
-            return path.read_text(encoding="utf-8")
+            cached = path.read_text(encoding="utf-8")
+            # Entries written before the fidelity guard existed are checked too.
+            if normalization_problem(text, cached) is None:
+                return cached
+            path.unlink(missing_ok=True)
         normalizer = self._text_normalizer
 
         async def _normalize() -> str:

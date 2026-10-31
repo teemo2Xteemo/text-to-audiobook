@@ -1597,3 +1597,77 @@ def test_narrate_srt_never_translates_even_if_tags_differ(tmp_path: Path) -> Non
 
     assert result.status is JobStatus.COMPLETED
     assert translation.calls == []
+
+
+def test_unfaithful_cached_normalization_is_recomputed(tmp_path: Path) -> None:
+    original = "She was 20 years old."
+    cache = _pipeline_cache(tmp_path)
+    poisoned = tmp_path / "poisoned.txt"
+    poisoned.write_text("Here is the text: She was twenty years old.", encoding="utf-8")
+    cache.store_normalization(
+        text=original, language="en-US", source=poisoned, job_id="seed", chunk_id="seed"
+    )
+    normalizer = _SpellingNormalizer()
+    job = _normalize_job("normalize-poisoned-cache")
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        artifact_cache=cache,
+        text_normalizer=normalizer,
+    )
+    result = _run(orchestrator, job, workspace, text=original)
+
+    assert result.status is JobStatus.COMPLETED
+    assert normalizer.calls == [(original, "en-US")]
+    assert narration.calls == [("She was twenty years old.", "en-US")]  # type: ignore[attr-defined]
+
+
+class _FailingOnNormalizer(_SpellingNormalizer):
+    def __init__(self, marker: str) -> None:
+        super().__init__()
+        self.marker = marker
+
+    async def normalize(self, text: str, language: str) -> str:
+        if self.marker in text:
+            raise DomainError(ErrorType.INVALID_INPUT, "normalizer refused")
+        return await super().normalize(text, language)
+
+
+def test_resume_reuses_normalized_chunks_on_disk_without_cache(tmp_path: Path) -> None:
+    from dataclasses import replace as dc_replace
+
+    line = "says she was 20 at the time of the story."
+    story = "\n\n".join(f"Paragraph {i} {line}" for i in range(5))
+    job = _normalize_job("normalize-resume")
+    failing = _FailingOnNormalizer("Paragraph 2 ")
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        text_normalizer=failing,
+    )
+    failed = _run(orchestrator, job, workspace, text=story)
+    assert failed.status is JobStatus.FAILED
+    accepted = {text.split(" ")[1] for text, _ in failing.calls}
+    assert "2" not in accepted and {"0", "1"} <= accepted
+
+    retry = dc_replace(failed, status=JobStatus.QUEUED, error_type=None, message=None)
+    resumed_normalizer = _SpellingNormalizer()
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=retry,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=100,
+        text_normalizer=resumed_normalizer,
+    )
+    result = _run(orchestrator, retry, workspace, text=story)
+
+    assert result.status is JobStatus.COMPLETED
+    # Chunks accepted before the failure are read back from disk, not sent to the LLM again.
+    retried = {text.split(" ")[1] for text, _ in resumed_normalizer.calls}
+    assert retried == {"0", "1", "2", "3", "4"} - accepted

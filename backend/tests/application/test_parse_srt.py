@@ -1,3 +1,5 @@
+import pytest
+
 from app.application.pipeline.parse_srt import (
     format_srt_timecode,
     parse_srt_cues,
@@ -137,3 +139,28 @@ def test_parse_srt_cues_keeps_distant_repeats_and_long_parentheticals() -> None:
         "*đó là lời nói dối lớn nhất*",
     ]
     assert cues[0].end_ms == 2000  # the distant repeat did not stretch the first cue
+
+
+@pytest.mark.parametrize(
+    ("line", "is_effect"),
+    [
+        ("[Music]", True),
+        ("\u266a la la \u266a", True),
+        ("(sighs)", True),
+        ("(Sighs)", True),
+        ("(door slams)", True),
+        ("*APPLAUSE*", True),
+        ("(\u7b11)", True),
+        ("\uff08\u7b11\uff09", True),
+        ("(\u4ed6\u5fc3\u60f3\u8fd9\u7edd\u5bf9\u4e0d\u53ef\u80fd\u662f\u771f\u7684)", False),
+        ("(Thật sao?)", False),
+        ("(Hắn nghĩ vậy)", False),
+        ("*Chạy mau!*", False),
+        ("(Anh ấy nghĩ rằng cô ấy sẽ quay lại)", False),
+        ("Hello there.", False),
+    ],
+)
+def test_is_sound_effect_line_separates_cues_from_asides(line: str, is_effect: bool) -> None:
+    from app.application.pipeline.parse_srt import is_sound_effect_line
+
+    assert is_sound_effect_line(line) is is_effect

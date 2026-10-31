@@ -44,3 +44,21 @@ def test_accepts_faithful_spoken_rewrite() -> None:
 def test_rejects_unfaithful_output(normalized: str, reason: str) -> None:
     problem = normalization_problem(ORIGINAL, normalized)
     assert problem is not None and reason in problem
+
+
+@pytest.mark.parametrize(
+    ("original", "spoken"),
+    [
+        (
+            "1.250.000 linh thạch đã được chuyển vào kho của tông môn.",
+            "Một triệu hai trăm năm mươi nghìn linh thạch đã được chuyển vào kho của tông môn.",
+        ),
+        (
+            "1984 was the year everything changed.",
+            "Nineteen eighty-four was the year everything changed.",
+        ),
+        ("TP.HCM là thành phố lớn nhất.", "Thành phố Hồ Chí Minh là thành phố lớn nhất."),
+    ],
+)
+def test_accepts_rewrites_of_number_or_abbreviation_openings(original: str, spoken: str) -> None:
+    assert normalization_problem(original, spoken) is None
