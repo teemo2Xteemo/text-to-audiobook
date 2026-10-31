@@ -158,6 +158,12 @@ def test_parse_srt_cues_keeps_distant_repeats_and_long_parentheticals() -> None:
         ("*Chạy mau!*", False),
         ("(Anh ấy nghĩ rằng cô ấy sẽ quay lại)", False),
         ("Hello there.", False),
+        ("(sighs) okay (laughs)", False),
+        # Pinned decisions (r2): short single-case or caseless asides are treated as cues.
+        ("(hắn nghĩ vậy)", True),
+        ("(\u4e0d\u53ef\u80fd)", True),
+        ("(2024)", True),
+        ("*KHÔNG*", True),
     ],
 )
 def test_is_sound_effect_line_separates_cues_from_asides(line: str, is_effect: bool) -> None:

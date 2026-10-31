@@ -1671,3 +1671,28 @@ def test_resume_reuses_normalized_chunks_on_disk_without_cache(tmp_path: Path) -
     # Chunks accepted before the failure are read back from disk, not sent to the LLM again.
     retried = {text.split(" ")[1] for text, _ in resumed_normalizer.calls}
     assert retried == {"0", "1", "2", "3", "4"} - accepted
+
+
+def test_stale_normalized_file_from_other_text_is_not_reused(tmp_path: Path) -> None:
+    job = _normalize_job("normalize-stale-file")
+    workspace = tmp_path / "jobs" / job.id
+    stale = workspace / "chunks" / "chunk-001.normalized.txt"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    # Same chunk id and opening word, but made from a different passage (pre-re-chunking).
+    stale.write_text("She stood still in the yard and counted three disciples.", encoding="utf-8")
+    normalizer = _SpellingNormalizer()
+    orchestrator, workspace, _, narration, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        text_normalizer=normalizer,
+    )
+    original = "She walked into the great hall and saw 20 elders."
+    result = _run(orchestrator, job, workspace, text=original)
+
+    assert result.status is JobStatus.COMPLETED
+    assert normalizer.calls == [(original, "en-US")]
+    assert narration.calls == [  # type: ignore[attr-defined]
+        ("She walked into the great hall and saw twenty elders.", "en-US")
+    ]

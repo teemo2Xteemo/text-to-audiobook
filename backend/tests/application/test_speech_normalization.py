@@ -62,3 +62,14 @@ def test_rejects_unfaithful_output(normalized: str, reason: str) -> None:
 )
 def test_accepts_rewrites_of_number_or_abbreviation_openings(original: str, spoken: str) -> None:
     assert normalization_problem(original, spoken) is None
+
+
+def test_all_caps_heading_does_not_disable_preamble_check() -> None:
+    original = "CHƯƠNG 12 HUYẾT CHIẾN THIÊN MA SƠN Lâm Phong rút kiếm."
+    faithful = "CHƯƠNG mười hai HUYẾT CHIẾN THIÊN MA SƠN Lâm Phong rút kiếm."
+    preamble = (
+        "Đây là bản đã chuẩn hóa: chương mười hai huyết chiến thiên ma sơn Lâm Phong rút kiếm."
+    )
+    assert normalization_problem(original, faithful) is None
+    problem = normalization_problem(original, preamble)
+    assert problem is not None and "opening words" in problem

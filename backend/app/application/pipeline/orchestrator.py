@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -670,11 +671,19 @@ class PipelineOrchestrator:
             )
         path = workspace / "chunks" / f"{chunk.id}.normalized.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
-        # A resumed job reuses the accepted output from its own workspace before the cache.
+        digest_path = path.with_name(f"{chunk.id}.normalized.src.sha256")
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        # A resumed job reuses its accepted output only if it was made from this exact text;
+        # chunk ids survive re-chunking, so a stale file could otherwise pass the guard.
         if _nonempty(path):
             reused = path.read_text(encoding="utf-8")
-            if normalization_problem(text, reused) is None:
+            made_from_text = (
+                digest_path.is_file() and digest_path.read_text(encoding="utf-8").strip() == digest
+            )
+            if made_from_text and normalization_problem(text, reused) is None:
                 return reused
+            path.unlink(missing_ok=True)
+            digest_path.unlink(missing_ok=True)
         cache = self._artifact_cache
         if cache is not None and cache.fill_normalization(
             text=text,
@@ -686,6 +695,7 @@ class PipelineOrchestrator:
             cached = path.read_text(encoding="utf-8")
             # Entries written before the fidelity guard existed are checked too.
             if normalization_problem(text, cached) is None:
+                digest_path.write_text(digest, encoding="utf-8")
                 return cached
             path.unlink(missing_ok=True)
         normalizer = self._text_normalizer
@@ -710,6 +720,8 @@ class PipelineOrchestrator:
             )
             return text
         path.write_text(normalized, encoding="utf-8")
+        # Written after the output: a crash in between leaves no digest, so nothing is reused.
+        digest_path.write_text(digest, encoding="utf-8")
         if cache is not None:
             cache.store_normalization(
                 text=text,

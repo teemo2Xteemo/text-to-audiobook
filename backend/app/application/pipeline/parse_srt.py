@@ -10,7 +10,8 @@ _TIMECODE_LINE_RE = re.compile(
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
 _BRACKET_CUE_RE = re.compile(r"^\s*(?:\[[^\]]+\]|[♪♫][^♪♫]*[♪♫])\s*$")
-_ASIDE_RE = re.compile(r"^\s*(?:\((.+)\)|（(.+)）|\*+(.+?)\*+)\s*$")
+# One aside per line: "(sighs) okay (laughs)" is speech with inline cues, not a whole-line cue.
+_ASIDE_RE = re.compile(r"^\s*(?:\(([^()]+)\)|（([^（）]+)）|\*+([^*]+)\*+)\s*$")
 _SPEECH_PUNCTUATION = frozenset(".?!…。？！")
 # Caseless scripts have no word spaces; only very short asides there are sound cues.
 _CASELESS_CUE_MAX_CHARS = 4

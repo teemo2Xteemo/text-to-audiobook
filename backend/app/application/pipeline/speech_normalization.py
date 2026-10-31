@@ -21,6 +21,9 @@ _WORD_RE = re.compile(r"\w+")
 # Output words in which an original opening word must appear (preamble check).
 _OPENING_WINDOW = 3
 _WORDS_PER_EXPANDED_TOKEN = 6
+# Caps keep an all-caps or number-heavy opening from disabling the preamble check.
+_MAX_OPENING_WINDOW = 24
+_MAX_ABBREVIATION_LETTERS = 5
 
 
 def normalization_problem(original: str, normalized: str) -> str | None:
@@ -75,11 +78,14 @@ def _keeps_opening(original: str, normalized: str) -> bool:
     expected = [token.casefold() for token in raw[lead : lead + 2]]
     if not expected:
         return True
-    window = _OPENING_WINDOW + _WORDS_PER_EXPANDED_TOKEN * lead
+    window = min(_OPENING_WINDOW + _WORDS_PER_EXPANDED_TOKEN * lead, _MAX_OPENING_WINDOW)
     opening = [token.casefold() for token in _WORD_RE.findall(normalized)][:window]
     return any(token in opening for token in expected)
 
 
 def _expands_when_spoken(token: str) -> bool:
-    # Digits, or an all-caps abbreviation; caseless scripts never count as abbreviations.
-    return any(ch.isdigit() for ch in token) or (len(token) > 1 and token.isupper())
+    # Digits, or a short all-caps abbreviation ("TP", "HCM"); longer all-caps words are
+    # headings, and caseless scripts never count as abbreviations.
+    if any(ch.isdigit() for ch in token):
+        return True
+    return 1 < len(token) <= _MAX_ABBREVIATION_LETTERS and token.isupper()
