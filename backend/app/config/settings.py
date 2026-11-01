@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=2_000_000)
     translation_provider: str = Field(default="fake")
     tts_provider: str = Field(default="fake")
+    # Comma list of extra engines a job may pin; the default engine is always allowed.
+    tts_engines_enabled: str = Field(default="")
     fish_audio_model: str = Field(default="s2.1-pro-free", min_length=1)
     fish_audio_api_key: SecretStr | None = Field(default=None)
     fish_audio_base_url: str = Field(default="https://api.fish.audio")

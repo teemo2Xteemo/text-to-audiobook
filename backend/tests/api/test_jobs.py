@@ -1103,3 +1103,33 @@ def test_tts_preview_invalid_speed(client: TestClient) -> None:
     assert res.status_code == 400
     assert res.json()["error_type"] == ErrorType.INVALID_INPUT
     assert "speed must be between" in res.json()["message"]
+
+
+def test_json_and_multipart_carry_the_same_tts_engine(tmp_path: Path) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    service = JobService(
+        jobs=InMemoryJobStore(),
+        source_storage=InMemorySourceStorage(),
+        queue=InMemoryQueue(),
+        output_bitrate_kbps=128,
+        storage_path=tmp_path,
+        disk_jobs=FilesystemJobStorage(tmp_path),
+        tts_engines={"fish": FakeTTSProvider()},
+    )
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.job_service = service
+    with TestClient(app) as client:
+        as_json = client.post("/api/jobs", json={**VALID_BODY, "tts_engine": "fish"})
+        as_form = client.post(
+            "/api/jobs",
+            data={"source_language": "en-US", "target_language": "ja-JP", "tts_engine": "fish"},
+            files={"file": ("story.txt", b"Once upon a time", "text/plain")},
+        )
+        bad = client.post("/api/jobs", json={**VALID_BODY, "tts_engine": "nope"})
+        for response in (as_json, as_form):
+            assert response.status_code == 202
+            status = client.get(f"/api/jobs/{response.json()['job_id']}")
+            assert status.json()["tts_engine"] == "fish"
+        assert bad.status_code == 400
+        assert bad.json()["error_type"] == "INVALID_INPUT"

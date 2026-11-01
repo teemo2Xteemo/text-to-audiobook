@@ -36,6 +36,7 @@ class JobStatusResponse(BaseModel):
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
+    tts_engine: str | None = None
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -70,6 +71,7 @@ class JobStatusResponse(BaseModel):
             mode=job.mode,
             srt_timing=job.srt_timing,
             normalize_text=job.normalize_text,
+            tts_engine=job.tts_engine,
         )
 
 
@@ -84,6 +86,7 @@ class CreateJobJsonBody(BaseModel):
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
+    tts_engine: str | None = None
 
 
 class VoiceResponse(BaseModel):

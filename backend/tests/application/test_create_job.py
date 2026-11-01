@@ -1098,3 +1098,67 @@ def test_create_rejects_normalize_text_in_translate_mode() -> None:
     assert exc.value.error_type is ErrorType.INVALID_INPUT
     assert "narrate mode" in exc.value.message
     assert store.jobs == {}
+
+
+def _engine_service(enabled: tuple[str, ...] = ("edge", "fish")) -> JobService:
+    from app.domain.audio import Voice
+    from app.providers.tts.fake import FakeTTSProvider
+
+    providers: dict[str, TTSProvider | None] = {
+        "edge": FakeTTSProvider(voices=[Voice(id="edge-vi", language="vi-VN", label="e")]),
+        "fish": FakeTTSProvider(voices=[Voice(id="fish:abc", language="vi-VN", label="f")]),
+    }
+    return JobService(
+        jobs=InMemoryJobStore(),
+        source_storage=InMemorySourceStorage(),
+        queue=InMemoryQueue(),
+        output_bitrate_kbps=128,
+        storage_path=Path("storage"),
+        tts=providers["edge"],
+        tts_engines={k: providers[k] for k in enabled},
+        default_tts_engine="edge",
+    )
+
+
+def _narrate(**kw: object) -> CreateJobCommand:
+    from app.domain.jobs import JobMode
+
+    return CreateJobCommand(
+        text="Xin chào",
+        source_language="vi-VN",
+        target_language="vi-VN",
+        mode=JobMode.NARRATE,
+        **kw,  # type: ignore[arg-type]
+    )
+
+
+def test_create_with_tts_engine_pin_resolves_voice_against_that_engine() -> None:
+    job = asyncio.run(_engine_service().create(_narrate(tts_engine="Fish", voice="fish:abc")))
+    assert (job.tts_engine, job.voice) == ("fish", "fish:abc")
+
+
+def test_create_unpinned_uses_default_engine_and_stores_no_pin() -> None:
+    job = asyncio.run(_engine_service().create(_narrate()))
+    assert job.tts_engine is None
+    assert job.voice == "edge-vi"
+
+
+def test_create_with_unknown_tts_engine_is_invalid_input() -> None:
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(_engine_service(("edge",)).create(_narrate(tts_engine="fish")))
+    assert exc.value.error_type is ErrorType.INVALID_INPUT
+
+
+@pytest.mark.parametrize("pin", [None, "edge"])
+def test_fish_voice_with_other_engine_is_unsupported(pin: str | None) -> None:
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(_engine_service().create(_narrate(tts_engine=pin, voice="fish:abc")))
+    assert exc.value.error_type is ErrorType.UNSUPPORTED_LANGUAGE
+
+
+def test_create_with_unbuilt_engine_is_configuration_error() -> None:
+    service = _engine_service()
+    service._tts_engines = {**service._tts_engines, "fish": None}
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(service.create(_narrate(tts_engine="fish")))
+    assert exc.value.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR

@@ -52,10 +52,8 @@ def build_job_service(settings: Settings) -> JobService:
     filesystem, store, queue = _infrastructure(settings)
     provider, model = translation_pin_from_settings(settings)
     profiles = build_available_translation_profiles(settings)
-    try:
-        tts: TTSProvider | None = build_tts_provider(settings)
-    except ProviderConfigurationError:
-        tts = None
+    engines = build_tts_engines(settings)
+    default_engine = settings.tts_provider.strip().lower()
     return JobService(
         jobs=store,
         source_storage=filesystem,
@@ -67,7 +65,9 @@ def build_job_service(settings: Settings) -> JobService:
         translation_provider=provider,
         translation_model=model,
         available_profiles=profiles,
-        tts=tts,
+        tts=engines.get(default_engine),
+        tts_engines=engines,
+        default_tts_engine=default_engine,
         detector=build_language_detector(settings),
         language_confirm_threshold=settings.language_confirm_threshold,
         text_normalization_available=settings.text_normalization_enabled,
@@ -457,6 +457,28 @@ def build_language_detector(settings: Settings) -> LanguageDetector:
     from app.providers.language_detection.cpu import CpuLanguageDetector
 
     return CpuLanguageDetector(min_confidence=settings.language_detect_min_confidence)
+
+
+def enabled_tts_engines(settings: Settings) -> list[str]:
+    """Default engine first, then ``TTS_ENGINES_ENABLED`` (lowercased, deduped)."""
+    names = [settings.tts_provider, *settings.tts_engines_enabled.split(",")]
+    return list(dict.fromkeys(n.strip().lower() for n in names if n.strip()))
+
+
+def build_tts_engines(settings: Settings) -> dict[str, TTSProvider | None]:
+    engines: dict[str, TTSProvider | None] = {}
+    for name in enabled_tts_engines(settings):
+        try:
+            engines[name] = build_tts_provider(settings.model_copy(update={"tts_provider": name}))
+        except ProviderConfigurationError:
+            engines[name] = None
+    return engines
+
+
+def settings_for_tts_pin(settings: Settings, job: Job) -> Settings:
+    if job.tts_engine is None:
+        return settings
+    return settings.model_copy(update={"tts_provider": job.tts_engine})
 
 
 def build_tts_provider(settings: Settings) -> TTSProvider:
