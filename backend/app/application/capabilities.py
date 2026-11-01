@@ -145,11 +145,20 @@ class CapabilitiesService:
         )
 
 
-async def refresh_engine_voices(provider: TTSProvider) -> None:
-    """Let providers with remote voice lists (VieNeu) fetch them off the event loop."""
+async def refresh_engine_voices(
+    provider: TTSProvider, *, backoff_seconds: float | None = None
+) -> None:
+    """Let providers with remote voice lists (VieNeu) fetch them off the event loop.
+
+    ``backoff_seconds=None`` keeps the provider's default (capabilities polling); user
+    actions and retries pass 0 so a recovered sidecar is seen at once."""
     refresh = getattr(provider, "refresh_voices", None)
-    if refresh is not None:
+    if refresh is None:
+        return
+    if backoff_seconds is None:
         await refresh()
+    else:
+        await refresh(backoff_seconds=backoff_seconds)
 
 
 async def _no() -> bool:

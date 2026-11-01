@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from shutil import copyfile, rmtree
 
+from app.application.capabilities import refresh_engine_voices
 from app.application.pipeline.artifact_cache import PipelineArtifactCache
 from app.application.pipeline.chapters import chunk_by_chapter, split_chapters
 from app.application.pipeline.checkpoint import (
@@ -763,9 +764,7 @@ class PipelineOrchestrator:
                 if not checkpoints.is_complete(chunk.id, STAGE_TTS):
 
                     async def _pick() -> str:
-                        refresh = getattr(self._tts, "refresh_voices", None)
-                        if refresh is not None:
-                            await refresh(backoff_seconds=0)
+                        await refresh_engine_voices(self._tts, backoff_seconds=0)
                         try:
                             return select_voice(self._tts, job.target_language, job.voice)
                         except DomainError as exc:

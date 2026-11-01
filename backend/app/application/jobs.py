@@ -127,7 +127,7 @@ class JobService:
                     f"{engine_label(tts_engine)} is not available right now",
                 )
         if tts is not None:
-            await refresh_engine_voices(tts)
+            await refresh_engine_voices(tts, backoff_seconds=0)
         if command.normalize_text and command.mode is not JobMode.NARRATE:
             # Translate already runs an LLM; a second rewrite would also stretch SRT timing.
             raise DomainError(

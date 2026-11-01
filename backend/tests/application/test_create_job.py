@@ -1252,3 +1252,22 @@ def test_translate_pinned_engine_without_voice_checks_target_language() -> None:
     with pytest.raises(DomainError) as exc:
         asyncio.run(_engine_service().create(command))
     assert exc.value.error_type is ErrorType.UNSUPPORTED_LANGUAGE
+
+
+def test_create_refreshes_voices_without_capabilities_backoff() -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    class _Refreshing(FakeTTSProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.refreshes: list[float] = []
+
+        async def refresh_voices(self, *, backoff_seconds: float = 30.0) -> None:
+            self.refreshes.append(backoff_seconds)
+
+    service = _engine_service()
+    probe = _Refreshing()
+    service._tts = probe
+    asyncio.run(service.create(_narrate()))
+    # A user action must not inherit the 30 s capabilities backoff after a blip.
+    assert probe.refreshes == [0]
