@@ -6,7 +6,7 @@ _MAX_UPLOAD_BYTES = 2_000_000
 
 
 def test_sample_fixtures_exist_and_fit_upload_limit() -> None:
-    for name in ("sample-zh-CN.txt", "sample-en-US.txt"):
+    for name in ("sample-zh-CN.txt", "sample-en-US.txt", "narrate-mixed-vi-en.txt"):
         data = (FIXTURES / name).read_bytes()
         assert data.strip()
         assert len(data) < _MAX_UPLOAD_BYTES
