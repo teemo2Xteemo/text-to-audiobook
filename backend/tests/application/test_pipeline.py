@@ -1164,6 +1164,75 @@ def test_narrate_mode_executes_zero_translation_calls(tmp_path: Path) -> None:
     assert saved is not None and saved.status is JobStatus.COMPLETED
 
 
+def _narrate_vi_job(job_id: str, **overrides: object) -> Job:
+    return _job(
+        id=job_id,
+        source_language="vi-VN",
+        target_language="vi-VN",
+        mode=JobMode.NARRATE,
+        voice="voice-vi-VN",
+        **overrides,
+    )
+
+
+def test_narrate_writes_no_translation_cache_entries(tmp_path: Path) -> None:
+    job = _narrate_vi_job("test-narrate-cache-1")
+    recorder = _RecordingCache(FilesystemArtifactCache(tmp_path / "cache"))
+    orchestrator, workspace, translation, *_ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["vi-VN"],
+        voices=_voices_for("vi-VN"),
+        artifact_cache=_pipeline_cache(tmp_path, recorder),
+    )
+    result = _run(orchestrator, job, workspace, text="Đây là văn bản thử nghiệm không cần dịch.")
+
+    assert result.status is JobStatus.COMPLETED
+    assert len(translation.calls) == 0
+    ops = [op for op, _ in recorder.puts]
+    assert "translation" not in ops
+    assert "tts" in ops  # the cache was live, so its silence on translation is meaningful
+    assert not (tmp_path / "cache" / "translation").exists()
+
+
+def test_narrate_job_resumes_from_checkpoints_after_failure(tmp_path: Path) -> None:
+    text = "Một câu. Hai câu. Ba câu. Bốn câu. Năm câu."
+    chunks = chunk_text(text, max_chars=20)
+    assert len(chunks) >= 3
+    job = _narrate_vi_job("test-narrate-resume-1")
+    voices = _voices_for("vi-VN")
+    flaky = _FlakyByTextTTS(
+        voices,
+        tmp_path / "tts-scratch",
+        fail_on_text=chunks[2].text,
+        error=DomainError(ErrorType.INVALID_INPUT, "boom"),  # non-retryable
+    )
+    orchestrator, workspace, translation, *_ = _orchestrator(
+        tmp_path, job=job, languages=["vi-VN"], voices=voices, tts=flaky, max_chars=20
+    )
+    first = _run(orchestrator, job, workspace, text=text)
+    assert first.status is JobStatus.FAILED
+
+    healthy_tts = FakeTTSProvider(voices, tmp_path / "tts-scratch-2")
+    resume_job = _narrate_vi_job("test-narrate-resume-1", status=JobStatus.GENERATING_AUDIO)
+    orchestrator2, workspace2, translation2, *_ = _orchestrator(
+        tmp_path,
+        job=resume_job,
+        languages=["vi-VN"],
+        voices=voices,
+        tts=healthy_tts,
+        translation=translation,
+        max_chars=20,
+    )
+    assert workspace2 == workspace
+    second = _run(orchestrator2, resume_job, workspace2, text=text)
+
+    assert second.status is JobStatus.COMPLETED
+    assert len(translation.calls) == 0  # across both runs
+    assert len(healthy_tts.calls) == second.chunk_total - 2  # finished chunks not re-synthesized
+    assert (workspace / "output.mp3").is_file()
+
+
 def test_narrate_mode_splits_chapters_and_preserves_titles(tmp_path: Path) -> None:
     job = _job(
         id="test-narrate-chapters-1",
