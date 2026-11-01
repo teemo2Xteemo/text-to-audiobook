@@ -46,3 +46,37 @@ async def test_retry_after_hint_capped() -> None:
 async def test_other_errors_keep_base_policy() -> None:
     waits = await _run(DomainError(ErrorType.TTS_FAILED, "boom"))
     assert waits == [1.0, 2.0]
+
+
+async def _run_sequence(errors: list[ErrorType]) -> tuple[str, list[float]]:
+    waits: list[float] = []
+    pending = list(errors)
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    async def op() -> str:
+        if pending:
+            raise DomainError(pending.pop(0), "x")
+        return "ok"
+
+    result = await with_chunk_retry(
+        op, policy=_POLICY, sleep=sleep, job_id="j", chunk_id="c", stage="tts"
+    )
+    return result, waits
+
+
+@pytest.mark.anyio
+async def test_rate_limits_do_not_consume_base_budget() -> None:
+    rl, tts = ErrorType.PROVIDER_RATE_LIMIT, ErrorType.TTS_FAILED
+    result, waits = await _run_sequence([rl, rl, rl, rl, tts])
+    assert result == "ok"
+    assert waits == [5.0, 10.0, 20.0, 40.0, 1.0]
+
+
+@pytest.mark.anyio
+async def test_base_errors_do_not_inflate_rate_limit_backoff() -> None:
+    rl, tts = ErrorType.PROVIDER_RATE_LIMIT, ErrorType.TTS_FAILED
+    result, waits = await _run_sequence([tts, tts, rl])
+    assert result == "ok"
+    assert waits == [1.0, 2.0, 5.0]
