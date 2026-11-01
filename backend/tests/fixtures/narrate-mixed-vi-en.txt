@@ -1,0 +1,61 @@
+Chương 12: Cổng Thiên Diễn
+
+Ngày 14 tháng 3 năm 2087, lúc 03:47 sáng, Lâm Phong Vân đứng trước cánh cổng cuối cùng của tòa tháp Thiên Diễn. Anh đã leo suốt 1.247 bậc thang, mỗi bậc cách nhau đúng 0,35 mét, và đôi chân giờ nặng như đeo chì.
+
+Trước mắt anh, một khung giao diện màu xanh nhạt hiện lên giữa không trung.
+
+[System] Chúc mừng người chơi Lâm Phong Vân đã đạt Level 47. Điểm kinh nghiệm hiện tại: 98.450 / 100.000.
+[System] Nhiệm vụ ẩn đã được kích hoạt: "Bí mật của Hoàng Long Đế". Thời gian còn lại: 02:15:30.
+
+Phong Vân khẽ thở dài. Anh đã chơi game này suốt ba năm, từ bản beta đầu tiên, nhưng chưa bao giờ thấy thông báo nào như vậy.
+
+"Lại là một cái bug nữa sao?" anh lẩm bẩm.
+
+"Không phải bug đâu." Một giọng nữ trong trẻo vang lên sau lưng. Anh quay lại và thấy Tô Nguyệt Hà, người đồng đội cũ, đang dựa vào cột đá, tay cầm một chiếc tablet phát sáng. "Em vừa kiểm tra server log. Đây là một hidden quest thật sự, do chính team developer cài vào từ patch 3.2.1."
+
+"Em theo dõi anh từ lúc nào vậy?"
+
+"Từ khi anh login lúc nửa đêm. Anh quên là em có quyền admin ở guild à?" Nguyệt Hà mỉm cười, nhưng ánh mắt cô rất nghiêm túc. "Phong Vân, anh nghe cho kỹ. Tòa tháp này không phải dungeon bình thường. Theo tài liệu của Trần Thiên Long để lại, nó là cổng kết nối với một server thử nghiệm đã bị xóa từ năm 2079."
+
+Phong Vân im lặng một lúc lâu. Cái tên Trần Thiên Long khiến anh nhớ đến vị giáo sư già từng dạy anh môn trí tuệ nhân tạo ở đại học, người đã biến mất không dấu vết sau vụ cháy phòng lab.
+
+Trên cánh cổng, những dòng chữ cổ bắt đầu sáng lên:
+
+【Thiên Diễn Chi Môn】
+【Kẻ nào mang theo ký ức của người đã khuất, kẻ ấy được phép bước qua.】
+
+"Ký ức của người đã khuất?" Nguyệt Hà cau mày. "Em nghĩ đó là một câu đố. Hoặc là một password."
+
+Phong Vân đưa tay vào túi áo, lấy ra một chiếc USB cũ kỹ. Đó là món quà cuối cùng thầy Thiên Long gửi cho anh, kèm một mảnh giấy ghi dòng chữ: "Đừng mở trước ngày 14/03/2087."
+
+"Hôm nay chính là ngày đó," anh nói khẽ. "Anh đã đợi tám năm."
+
+Anh cắm chiếc USB vào khe sáng bên cạnh cánh cổng. Màn hình hiện ra một thanh tiến trình chạy chậm rãi: 10%... 35%... 72%... rồi dừng lại ở 99%.
+
+[System] Cảnh báo: Phát hiện kết nối trái phép từ địa chỉ 192.168.7.42. Firewall đang được kích hoạt.
+[System] Lỗi 0x80070057: Không thể xác thực chứng chỉ SSL. Vui lòng thử lại sau 30 giây.
+
+"Có người đang chặn kết nối của chúng ta," Nguyệt Hà nói nhanh, ngón tay lướt trên tablet. "Là Hắc Phong Minh. Bọn chúng dùng một con botnet khoảng 5.000 node để làm nghẽn băng thông."
+
+"Bao lâu thì em phá được?"
+
+"Nếu may mắn thì hai phút. Còn không thì..." Cô nhún vai. "Anh biết rồi đấy, brute force thì cần thời gian."
+
+Phong Vân nhìn thanh tiến trình đang đứng yên, rồi nhìn cánh cổng đá khổng lồ. Anh nhớ lại lời thầy Thiên Long từng nói trong buổi học cuối cùng: "Một hệ thống thông minh nhất không phải là hệ thống không bao giờ lỗi, mà là hệ thống biết tự sửa lỗi của chính mình."
+
+"Nguyệt Hà, em còn nhớ recovery key mà thầy hay đọc không?"
+
+"Cái chuỗi dài dòng đó á? Em chỉ nhớ đoạn đầu: Alpha, Seven, Nine, Zulu..."
+
+"Đủ rồi." Phong Vân gõ nhanh lên bàn phím ảo. "Alpha-Seven-Nine-Zulu. Thầy dùng chính ngày sinh của con gái mình làm khóa: 07/09/2051."
+
+Thanh tiến trình nhấp nháy. Một âm thanh trầm vang lên, như tiếng chuông cổ ngân dài trong sương sớm.
+
+[System] Xác thực thành công. Chào mừng trở lại, Giáo sư Trần Thiên Long.
+[System] Cổng Thiên Diễn đang mở. Ước tính thời gian tải: 00:00:08.
+
+Cánh cổng đá từ từ tách đôi, ánh sáng trắng tràn ra khiến cả hai phải che mắt. Nguyệt Hà nắm chặt tay áo anh, giọng run run: "Phong Vân, nếu bên trong là thứ em đang nghĩ..."
+
+"Thì mình vẫn phải bước vào," anh đáp. Rồi anh mỉm cười, nụ cười đầu tiên sau nhiều tháng. "Dù sao thì, đây cũng là quest cuối cùng của season này mà."
+
+Hai bóng người bước qua ngưỡng cửa, và cánh cổng Thiên Diễn khép lại sau lưng họ, lặng lẽ như chưa từng tồn tại.

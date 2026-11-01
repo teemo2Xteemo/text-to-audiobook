@@ -54,6 +54,20 @@ services:
       EDGE_TTS_MAX_CHARS: ${EDGE_TTS_MAX_CHARS:-500}
       EDGE_TTS_TIMEOUT_SECONDS: ${EDGE_TTS_TIMEOUT_SECONDS:-90}
       TEXT_NORMALIZER_PROVIDER: ${TEXT_NORMALIZER_PROVIDER:-none}
+      TTS_ENGINES_ENABLED: ${TTS_ENGINES_ENABLED:-}
+      FISH_AUDIO_API_KEY: ${FISH_AUDIO_API_KEY:-}
+      FISH_AUDIO_MODEL: ${FISH_AUDIO_MODEL:-s2.1-pro-free}
+      FISH_AUDIO_BASE_URL: ${FISH_AUDIO_BASE_URL:-https://api.fish.audio}
+      FISH_AUDIO_VOICES: ${FISH_AUDIO_VOICES:-}
+      FISH_AUDIO_HTTP_TIMEOUT_SECONDS: ${FISH_AUDIO_HTTP_TIMEOUT_SECONDS:-120}
+      FISH_AUDIO_MAX_CONCURRENCY: ${FISH_AUDIO_MAX_CONCURRENCY:-2}
+      RETRY_RATE_LIMIT_MAX_ATTEMPTS: ${RETRY_RATE_LIMIT_MAX_ATTEMPTS:-6}
+      RETRY_RATE_LIMIT_BACKOFF_SECONDS: ${RETRY_RATE_LIMIT_BACKOFF_SECONDS:-5}
+      VIENEU_BASE_URL: ${VIENEU_BASE_URL:-http://vieneu:8000/v1}
+      VIENEU_MODEL: ${VIENEU_MODEL:-vieneu-v3-turbo}
+      VIENEU_HTTP_TIMEOUT_SECONDS: ${VIENEU_HTTP_TIMEOUT_SECONDS:-300}
+      VIENEU_MAX_CONCURRENCY: ${VIENEU_MAX_CONCURRENCY:-1}
+      VIENEU_PRECISION: ${VIENEU_PRECISION:-fp32}
     volumes:
       # Image code only. A live source mount lives in docker-compose.dev.yml.
       - ./storage:/data/storage
@@ -114,6 +128,20 @@ services:
       EDGE_TTS_MAX_CHARS: ${EDGE_TTS_MAX_CHARS:-500}
       EDGE_TTS_TIMEOUT_SECONDS: ${EDGE_TTS_TIMEOUT_SECONDS:-90}
       TEXT_NORMALIZER_PROVIDER: ${TEXT_NORMALIZER_PROVIDER:-none}
+      TTS_ENGINES_ENABLED: ${TTS_ENGINES_ENABLED:-}
+      FISH_AUDIO_API_KEY: ${FISH_AUDIO_API_KEY:-}
+      FISH_AUDIO_MODEL: ${FISH_AUDIO_MODEL:-s2.1-pro-free}
+      FISH_AUDIO_BASE_URL: ${FISH_AUDIO_BASE_URL:-https://api.fish.audio}
+      FISH_AUDIO_VOICES: ${FISH_AUDIO_VOICES:-}
+      FISH_AUDIO_HTTP_TIMEOUT_SECONDS: ${FISH_AUDIO_HTTP_TIMEOUT_SECONDS:-120}
+      FISH_AUDIO_MAX_CONCURRENCY: ${FISH_AUDIO_MAX_CONCURRENCY:-2}
+      RETRY_RATE_LIMIT_MAX_ATTEMPTS: ${RETRY_RATE_LIMIT_MAX_ATTEMPTS:-6}
+      RETRY_RATE_LIMIT_BACKOFF_SECONDS: ${RETRY_RATE_LIMIT_BACKOFF_SECONDS:-5}
+      VIENEU_BASE_URL: ${VIENEU_BASE_URL:-http://vieneu:8000/v1}
+      VIENEU_MODEL: ${VIENEU_MODEL:-vieneu-v3-turbo}
+      VIENEU_HTTP_TIMEOUT_SECONDS: ${VIENEU_HTTP_TIMEOUT_SECONDS:-300}
+      VIENEU_MAX_CONCURRENCY: ${VIENEU_MAX_CONCURRENCY:-1}
+      VIENEU_PRECISION: ${VIENEU_PRECISION:-fp32}
       NARRATE_CHAPTER_PAUSE_MS: ${NARRATE_CHAPTER_PAUSE_MS:-1500}
       HF_HOME: /data/huggingface
     volumes:
@@ -159,5 +187,33 @@ services:
       retries: 5
       start_period: 10s
 
+  # Optional VieNeu-TTS CPU sidecar: `docker compose --profile vieneu up`.
+  # Built from upstream (no published image) at a pinned commit; bumping the SHA is a
+  # manual, reviewed change. First start downloads the model.
+  vieneu:
+    profiles: ["vieneu"]
+    build:
+      context: https://github.com/pnnbao97/VieNeu-TTS.git#04044e1b8f822f946bafb2c88b716459f4164152
+      dockerfile: docker/Dockerfile.cpu
+    command: ["python", "-m", "apps.openai_speech"]
+    environment:
+      VIENEU_PRECISION: ${VIENEU_PRECISION:-fp32}
+    volumes:
+      - ${VIENEU_MODEL_DIR:-vieneu-models}:/home/app/.cache/huggingface
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+
 volumes:
   huggingface-cache:
+  vieneu-models:

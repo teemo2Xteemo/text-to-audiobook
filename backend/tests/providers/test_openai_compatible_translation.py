@@ -4,7 +4,6 @@ import asyncio
 import json
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
 from email.message import Message
 from io import BytesIO
 from typing import Any
@@ -20,7 +19,6 @@ from app.providers.translation.openai_compatible import (
     OpenAICompatibleTranslationProvider,
     OpenRouterTranslationProvider,
     UrllibOpenAIHttpClient,
-    _parse_retry_after,
     bcp47_to_openai_lang,
     canonical_groq_model,
     groq_completion_options,
@@ -528,17 +526,6 @@ async def test_context_size_guard_is_invalid_input_and_not_retried() -> None:
     assert slept == []
 
 
-def test_retry_after_delta_is_capped_and_http_date_is_honored() -> None:
-    assert _parse_retry_after("30") == 30.0
-    assert _parse_retry_after("  120 ") == 60.0
-    assert _parse_retry_after("-5") == 0.0
-    assert _parse_retry_after("soon") is None
-    now = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
-    parsed = _parse_retry_after("Tue, 27 Oct 2026 12:00:15 GMT", now=now)
-    assert parsed is not None
-    assert 14 <= parsed <= 16
-
-
 @pytest.mark.anyio
 async def test_retry_after_extends_chunk_backoff() -> None:
     from app.application.pipeline.retry import with_chunk_retry
@@ -562,7 +549,7 @@ async def test_retry_after_extends_chunk_backoff() -> None:
     with pytest.raises(DomainError) as exc_info:
         await with_chunk_retry(
             _op,
-            policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
+            policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0, rate_limit_max_attempts=2),
             sleep=_sleep,
             job_id="job-1",
             chunk_id="chunk-1",
@@ -908,7 +895,7 @@ async def test_http_503_honors_retry_after() -> None:
 
     result = await with_chunk_retry(
         _op,
-        policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
+        policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0, rate_limit_max_attempts=2),
         sleep=_sleep,
         job_id="job-1",
         chunk_id="chunk-1",
@@ -985,7 +972,7 @@ async def test_openrouter_error_finish_reason_is_retried() -> None:
     calls = 0
     result = await with_chunk_retry(
         _op,
-        policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
+        policy=RetryPolicy(max_attempts=2, backoff_seconds=1.0, rate_limit_max_attempts=2),
         sleep=_sleep,
         job_id="job-1",
         chunk_id="chunk-1",

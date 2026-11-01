@@ -1,8 +1,14 @@
 import { AUTO_SOURCE_LANGUAGE, SPEED_MAX, SPEED_MIN } from "./constants";
 import type { JobMode, JobStatus, Voice } from "../api/types";
 
-export function voicesForTarget(voices: readonly Voice[], targetLanguage: string): Voice[] {
-  return voices.filter((voice) => voice.language === targetLanguage);
+export function voicesForTarget(
+  voices: readonly Voice[],
+  targetLanguage: string,
+  engine?: string,
+): Voice[] {
+  return voices.filter(
+    (voice) => voice.language === targetLanguage && (!engine || voice.engine === engine),
+  );
 }
 
 export function resolveSourceDefault(envSource: string, languages: readonly string[]): string {
@@ -405,7 +411,8 @@ const ERROR_SUMMARY_MAP: Record<string, string> = {
     "Service configuration issue. The service encountered a configuration error.",
   UNSUPPORTED_LANGUAGE: "This language or voice is currently not supported.",
   TIMEOUT: "The request timed out. Please try again with shorter text.",
-  PROVIDER_RATE_LIMIT: "The service is temporarily busy. Please try again shortly.",
+  PROVIDER_RATE_LIMIT:
+    "The voice service is limiting free usage right now. Try again later or switch to Edge.",
   TTS_FAILED: "Speech synthesis failed. Please try again or choose a different voice.",
   TRANSLATION_FAILED: "Translation failed. Please try again or select a different engine.",
   INVALID_INPUT: "The provided input is invalid. Please check your text or file.",

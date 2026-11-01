@@ -13,6 +13,7 @@ from app.config.factory import (
     build_job_service,
     build_orchestrator,
     settings_for_translation_pin,
+    settings_for_tts_pin,
 )
 from app.config.settings import Settings
 from app.domain.errors import DomainError, ErrorType
@@ -93,7 +94,7 @@ async def _process_job_async(job_id: str) -> None:
             text = await filesystem.read_source(job_id)
             try:
                 orchestrator = build_orchestrator(
-                    settings_for_translation_pin(settings, fresh),
+                    settings_for_translation_pin(settings_for_tts_pin(settings, fresh), fresh),
                     for_mode=fresh.mode,
                     normalizer_settings=settings if fresh.normalize_text else None,
                 )

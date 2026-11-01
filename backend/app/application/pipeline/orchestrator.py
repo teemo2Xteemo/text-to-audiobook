@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from shutil import copyfile, rmtree
 
+from app.application.capabilities import refresh_engine_voices
 from app.application.pipeline.artifact_cache import PipelineArtifactCache
 from app.application.pipeline.chapters import chunk_by_chapter, split_chapters
 from app.application.pipeline.checkpoint import (
@@ -761,7 +762,32 @@ class PipelineOrchestrator:
                 narrated = narrated_path.read_text(encoding="utf-8")
                 raw_path = workspace / "audio" / f"{chunk.id}.{ext}"
                 if not checkpoints.is_complete(chunk.id, STAGE_TTS):
-                    selected_voice = select_voice(self._tts, job.target_language, job.voice)
+
+                    async def _pick() -> str:
+                        await refresh_engine_voices(self._tts, backoff_seconds=0)
+                        try:
+                            return select_voice(self._tts, job.target_language, job.voice)
+                        except DomainError as exc:
+                            # Engine supports the language but listed no voices: its voice
+                            # service is down, which is transient (retryable), not unsupported.
+                            if (
+                                exc.error_type is ErrorType.UNSUPPORTED_LANGUAGE
+                                and self._tts.languages()
+                                and not self._tts.all_voices()
+                            ):
+                                raise DomainError(
+                                    ErrorType.TTS_FAILED, "voice service unavailable"
+                                ) from exc
+                            raise
+
+                    selected_voice = await with_chunk_retry(
+                        _pick,
+                        policy=self._retry_policy,
+                        sleep=self._sleep,
+                        job_id=job.id,
+                        chunk_id=chunk.id,
+                        stage=STAGE_TTS,
+                    )
                     filled = False
                     if self._artifact_cache is not None:
                         filled = self._artifact_cache.fill_tts(
@@ -831,6 +857,17 @@ class PipelineOrchestrator:
                         raise DomainError(
                             ErrorType.AUDIO_PROCESSING_FAILED, "audio normalize failed"
                         )
+                    if settings.speed != 1.0 and not getattr(self._tts, "honours_speed", True):
+                        # Engine ignores `speed`: apply it as tempo (cache keeps raw audio).
+                        sped = normalized_path.with_name(f"{chunk.id}.speed.{ext}")
+                        await self._audio.adjust_tempo(
+                            normalized_path,
+                            sped,
+                            settings.speed,
+                            output_format=job.output_format,
+                            bitrate_kbps=job.output_bitrate_kbps,
+                        )
+                        _place_artifact(sped, normalized_path)
                     async with lock:
                         checkpoints.record(chunk.id, STAGE_NORMALIZED, normalized_path)
 

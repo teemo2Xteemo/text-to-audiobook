@@ -154,6 +154,7 @@ export default function App() {
             <JobForm
               capabilities={capabilities.data}
               disabled={busy}
+              createErrorType={job.status === "error" && !job.job ? job.error.error_type : null}
               onSubmit={(input) => void job.submit(input)}
             />
           ) : null}

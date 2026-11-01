@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from app.config.factory import (
     cache_identity_from_settings,
     settings_for_translation_pin,
     translation_pin_from_settings,
+    tts_model_identity,
 )
 from app.config.settings import Settings
 from app.domain.jobs import Job, JobStatus, OutputFormat
@@ -732,9 +734,62 @@ def test_factory_wires_job_service_and_capabilities_for_narrate(tmp_path: Path) 
     assert job_service._detector is not None
 
     capabilities_service = build_capabilities_service(settings)
-    caps = capabilities_service.get()
+    caps = asyncio.run(capabilities_service.get())
     assert len(caps.narrate_languages) > 0
     assert caps.estimate_defaults == {
         "chars_per_second": 18.5,
         "preview_wpm": 160.0,
     }
+
+
+@pytest.mark.parametrize(
+    ("provider", "extra", "expected"),
+    [
+        ("edge", {}, "edge"),
+        ("fake", {}, "fake"),
+        ("fish", {"fish_audio_model": "s2.1-pro-free"}, "s2.1-pro-free"),
+        ("vieneu", {"vieneu_precision": "int8"}, "vieneu-v3-turbo:int8"),
+        ("vieneu", {}, "vieneu-v3-turbo:fp32"),
+        ("vieneu", {"vieneu_model": "m2", "vieneu_precision": "int8"}, "m2:int8"),
+    ],
+)
+def test_tts_model_identity(provider, extra, expected):
+    settings = Settings(tts_provider=provider, **extra)
+    assert tts_model_identity(settings) == expected
+    assert cache_identity_from_settings(settings).tts_model == expected
+
+
+def test_enabled_tts_engines_default_first_lowercased_deduped() -> None:
+    from app.config.factory import enabled_tts_engines
+
+    settings = Settings(
+        _env_file=None, tts_provider="Edge", tts_engines_enabled=" fish,EDGE, vieneu,,"
+    )
+    assert enabled_tts_engines(settings) == ["edge", "fish", "vieneu"]
+
+
+def test_build_tts_engines_and_pin_rewrites_provider(tmp_path: Path) -> None:
+    from app.config.factory import build_tts_engines, settings_for_tts_pin
+    from app.providers.tts.fish import FishTTSProvider
+
+    settings = Settings(
+        _env_file=None, storage_path=tmp_path, tts_provider="fake", tts_engines_enabled="fish,nope"
+    )
+    engines = build_tts_engines(settings)
+    assert isinstance(engines["fish"], FishTTSProvider)
+    assert engines["fake"] is not None
+    assert engines["nope"] is None
+    job = Job(
+        id="x",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="en-US",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+    )
+    assert settings_for_tts_pin(settings, job) is settings
+    from dataclasses import replace
+
+    assert settings_for_tts_pin(settings, replace(job, tts_engine="fish")).tts_provider == "fish"

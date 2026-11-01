@@ -17,6 +17,7 @@ import {
   SPEED_DEFAULT,
   SPEED_MAX,
   SPEED_MIN,
+  TTS_ENGINE_STORAGE_KEY,
 } from "../lib/constants";
 import { envDefaultSourceLanguage, envDefaultTargetLanguage } from "../lib/env";
 import {
@@ -38,7 +39,17 @@ type JobFormProps = {
   capabilities: Capabilities;
   disabled: boolean;
   onSubmit: (input: CreateJobInput) => void;
+  /** error_type of the last failed create request, if any. */
+  createErrorType?: string | null;
 };
+
+function readStoredEngine(): string {
+  try {
+    return localStorage.getItem(TTS_ENGINE_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 const SPEED_PRESETS = [0.75, 1.0, 1.25, 1.5] as const;
 
@@ -70,7 +81,7 @@ function formatFileSize(bytes: number): string {
   return `${(kb / 1024).toFixed(2)} MB`;
 }
 
-export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
+export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: JobFormProps) {
   const [mode, setMode] = useState<JobMode>("translate");
 
   const narrateLanguages = useMemo(
@@ -138,6 +149,23 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
     setMode(nextMode);
   }
 
+  const engines = useMemo(() => capabilities.tts_engines ?? [], [capabilities.tts_engines]);
+  const showEnginePicker = engines.length > 1;
+  const defaultEngineId = engines[0]?.id ?? "";
+  const [storedEngine, setStoredEngine] = useState(readStoredEngine);
+  // Fall back to the default when the stored engine is gone or not configured.
+  const ttsEngine =
+    engines.find((e) => e.id === storedEngine && e.available)?.id ?? defaultEngineId;
+
+  function handleEngineChange(next: string) {
+    setStoredEngine(next);
+    try {
+      localStorage.setItem(TTS_ENGINE_STORAGE_KEY, next);
+    } catch {
+      // Ignore restricted localStorage access
+    }
+  }
+
   const activeVoiceLanguage =
     mode === "narrate"
       ? sourceLanguage === AUTO_SOURCE_LANGUAGE
@@ -145,8 +173,8 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
         : sourceLanguage
       : targetLanguage;
   const targetVoices = useMemo(
-    () => voicesForTarget(capabilities.voices, activeVoiceLanguage),
-    [capabilities.voices, activeVoiceLanguage],
+    () => voicesForTarget(capabilities.voices, activeVoiceLanguage, ttsEngine || undefined),
+    [capabilities.voices, activeVoiceLanguage, ttsEngine],
   );
 
   const sourceOptions = useMemo<StudioSelectOption[]>(() => {
@@ -191,6 +219,19 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
         };
       }),
     [targetVoices],
+  );
+
+  const engineOptions = useMemo<StudioSelectOption[]>(
+    () =>
+      engines.map((e) => ({
+        value: e.id,
+        label: `${e.label} · ${e.cost_label}${e.available ? "" : " · Not configured"}`,
+        displayLabel: e.label,
+        badge: e.kind.toUpperCase(),
+        description: e.available ? e.cost_label : `${e.cost_label} · Not configured`,
+        disabled: !e.available,
+      })),
+    [engines],
   );
 
   const formatOptions = useMemo<StudioSelectOption[]>(
@@ -424,6 +465,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
         text: sample,
         voice: voiceId,
         speed,
+        tts_engine: ttsEngine || undefined,
       });
       const dataUrl = `data:${res.mime_type};base64,${res.audio_base64}`;
       if (previewAudioRef.current) {
@@ -462,6 +504,7 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
       translation_profile_id:
         mode === "narrate" ? undefined : (translationProfileId || undefined),
       mode,
+      ttsEngine: ttsEngine && ttsEngine !== defaultEngineId ? ttsEngine : undefined,
       srt_timing: mode === "narrate" && isSubtitleInput ? srtTiming : undefined,
       normalize_text:
         mode === "narrate" && capabilities.text_normalization && normalizeText ? true : undefined,
@@ -739,6 +782,30 @@ export function JobForm({ capabilities, disabled, onSubmit }: JobFormProps) {
               {activeVoiceLanguage}
             </span>
           </div>
+
+          {showEnginePicker ? (
+            <div className="field-voice">
+              <StudioSelect
+                id="tts-engine"
+                label="Voice engine"
+                value={ttsEngine}
+                options={engineOptions}
+                disabled={disabled}
+                onChange={handleEngineChange}
+              />
+              {createErrorType === "PROVIDER_CONFIGURATION_ERROR" &&
+              ttsEngine !== "edge" &&
+              engines.some((e) => e.id === "edge" && e.available) ? (
+                <button
+                  type="button"
+                  className="btn-ghost btn-xs"
+                  onClick={() => handleEngineChange("edge")}
+                >
+                  Use Edge instead
+                </button>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="voice-mastering-grid">
             <div className="field-voice">

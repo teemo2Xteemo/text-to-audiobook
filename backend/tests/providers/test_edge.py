@@ -165,7 +165,9 @@ def test_timeout_maps_to_timeout(tmp_path: Path) -> None:
 def test_nllb_edge_capabilities_are_not_a_single_pair(tmp_path: Path) -> None:
     translation = NllbTranslationProvider(model_id="test-model")
     provider, _client = _provider(tmp_path)
-    languages = CapabilitiesService(translation=translation, tts=provider).get().languages
+    languages = asyncio.run(
+        CapabilitiesService(translation=translation, tts=provider).get()
+    ).languages
     assert "vi-VN" in languages
     assert "ja-JP" in languages
     assert "en-US" in languages

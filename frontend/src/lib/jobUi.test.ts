@@ -23,6 +23,21 @@ const voices: Voice[] = [
 ];
 
 describe("jobUi", () => {
+  it("filters voices by engine when given", () => {
+    const vs: Voice[] = [
+      { id: "a", language: "en-US", label: "A", engine: "edge" },
+      { id: "fish:b", language: "en-US", label: "B", engine: "fish" },
+    ];
+    expect(voicesForTarget(vs, "en-US", "fish").map((v) => v.id)).toEqual(["fish:b"]);
+    expect(voicesForTarget(vs, "en-US").map((v) => v.id)).toEqual(["a", "fish:b"]);
+  });
+
+  it("explains rate limits with an Edge hint", () => {
+    expect(friendlyError("PROVIDER_RATE_LIMIT", "x").summary).toBe(
+      "The voice service is limiting free usage right now. Try again later or switch to Edge.",
+    );
+  });
+
   it("filters voices by target language", () => {
     expect(voicesForTarget(voices, "ja-JP").map((voice) => voice.id)).toEqual(["fake-ja"]);
     expect(voicesForTarget(voices, "en-US").map((voice) => voice.id)).toEqual(["fake-en"]);
@@ -202,7 +217,7 @@ describe("jobUi", () => {
         "The request timed out. Please try again with shorter text.",
       );
       expect(friendlyError("PROVIDER_RATE_LIMIT", null).summary).toBe(
-        "The service is temporarily busy. Please try again shortly.",
+        "The voice service is limiting free usage right now. Try again later or switch to Edge.",
       );
       expect(friendlyError("TTS_FAILED", "synth err").summary).toBe(
         "Speech synthesis failed. Please try again or choose a different voice.",

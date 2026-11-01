@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,6 +52,19 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=2_000_000)
     translation_provider: str = Field(default="fake")
     tts_provider: str = Field(default="fake")
+    # Comma list of extra engines a job may pin; the default engine is always allowed.
+    tts_engines_enabled: str = Field(default="")
+    fish_audio_model: str = Field(default="s2.1-pro-free", min_length=1)
+    fish_audio_api_key: SecretStr | None = Field(default=None)
+    fish_audio_base_url: str = Field(default="https://api.fish.audio")
+    fish_audio_voices: str = Field(default="")
+    fish_audio_http_timeout_seconds: float = Field(default=120.0, gt=0)
+    fish_audio_max_concurrency: int = Field(default=2, ge=1)
+    vieneu_base_url: str = Field(default="http://vieneu:8000/v1")
+    vieneu_model: str = Field(default="vieneu-v3-turbo", min_length=1)
+    vieneu_http_timeout_seconds: float = Field(default=300.0, gt=0)
+    vieneu_max_concurrency: int = Field(default=1, ge=1)
+    vieneu_precision: Literal["fp32", "int8"] = Field(default="fp32")
     worker_concurrency: int = Field(default=1, ge=1)
     chunk_translation_concurrency: int = Field(default=2, ge=1)
     chunk_tts_concurrency: int = Field(default=2, ge=1)
@@ -86,6 +100,8 @@ class Settings(BaseSettings):
     text_normalizer_provider: str = Field(default="none")
     retry_max_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
+    retry_rate_limit_max_attempts: int = Field(default=6, ge=1)
+    retry_rate_limit_backoff_seconds: float = Field(default=5.0, ge=0.0)
     max_recovery_attempts: int = Field(default=3, ge=1)
     rq_job_timeout_seconds: int = Field(default=1800, ge=1)
 

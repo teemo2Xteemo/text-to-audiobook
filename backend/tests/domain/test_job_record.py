@@ -242,3 +242,12 @@ def test_job_srt_timing_round_trip_and_legacy_default() -> None:
     assert Job.from_dict(legacy).srt_timing is SrtTiming.CONTINUOUS
     assert "srt_timing" not in Job.from_dict(legacy).to_dict()
     assert Job.from_dict({**data, "srt_timing": "future"}).srt_timing is SrtTiming.CONTINUOUS
+
+
+def test_tts_engine_roundtrips_and_is_omitted_when_unset() -> None:
+    old = Job.from_dict(_legacy_job_payload())
+    assert old.tts_engine is None
+    assert "tts_engine" not in old.to_dict()
+    pinned = Job.from_dict({**_legacy_job_payload(), "tts_engine": "fish"})
+    assert pinned.tts_engine == "fish"
+    assert Job.from_dict(pinned.to_dict()) == pinned

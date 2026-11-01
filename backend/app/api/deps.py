@@ -6,6 +6,7 @@ from app.config.factory import (
     build_capabilities_service,
     build_job_service,
     build_language_detector,
+    build_tts_engines,
     build_tts_provider,
 )
 from app.config.settings import Settings
@@ -49,4 +50,13 @@ def get_tts_provider(request: Request) -> TTSProvider:
         return existing
     created = build_tts_provider(request.app.state.settings)
     request.app.state.tts_provider = created
+    return created
+
+
+def get_tts_engines(request: Request) -> dict[str, TTSProvider | None]:
+    existing = getattr(request.app.state, "tts_engines", None)
+    if existing is not None:
+        return existing
+    created = build_tts_engines(request.app.state.settings)
+    request.app.state.tts_engines = created
     return created

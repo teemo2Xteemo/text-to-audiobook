@@ -52,10 +52,8 @@ def build_job_service(settings: Settings) -> JobService:
     filesystem, store, queue = _infrastructure(settings)
     provider, model = translation_pin_from_settings(settings)
     profiles = build_available_translation_profiles(settings)
-    try:
-        tts: TTSProvider | None = build_tts_provider(settings)
-    except ProviderConfigurationError:
-        tts = None
+    engines = build_tts_engines(settings)
+    default_engine = settings.tts_provider.strip().lower()
     return JobService(
         jobs=store,
         source_storage=filesystem,
@@ -67,7 +65,9 @@ def build_job_service(settings: Settings) -> JobService:
         translation_provider=provider,
         translation_model=model,
         available_profiles=profiles,
-        tts=tts,
+        tts=engines.get(default_engine),
+        tts_engines=engines,
+        default_tts_engine=default_engine,
         detector=build_language_detector(settings),
         language_confirm_threshold=settings.language_confirm_threshold,
         text_normalization_available=settings.text_normalization_enabled,
@@ -315,11 +315,14 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
 
 def build_capabilities_service(settings: Settings) -> CapabilitiesService:
     translation = build_translation_provider(settings)
-    tts = build_tts_provider(settings)
+    engines = build_tts_engines(settings)
+    default_engine = settings.tts_provider.strip().lower()
     profiles = build_available_translation_profiles(settings)
     return CapabilitiesService(
         translation=translation,
-        tts=tts,
+        tts=engines.get(default_engine) or build_tts_provider(settings),
+        tts_engines=engines,
+        default_tts_engine=default_engine,
         translation_profiles=profiles,
         estimate_defaults={
             "chars_per_second": float(settings.estimate_chars_per_second),
@@ -357,6 +360,8 @@ def build_orchestrator(
         retry_policy=RetryPolicy(
             max_attempts=settings.retry_max_attempts,
             backoff_seconds=settings.retry_backoff_seconds,
+            rate_limit_max_attempts=settings.retry_rate_limit_max_attempts,
+            rate_limit_backoff_seconds=settings.retry_rate_limit_backoff_seconds,
         ),
         translation_concurrency=settings.chunk_translation_concurrency,
         tts_concurrency=settings.chunk_tts_concurrency,
@@ -457,6 +462,28 @@ def build_language_detector(settings: Settings) -> LanguageDetector:
     return CpuLanguageDetector(min_confidence=settings.language_detect_min_confidence)
 
 
+def enabled_tts_engines(settings: Settings) -> list[str]:
+    """Default engine first, then ``TTS_ENGINES_ENABLED`` (lowercased, deduped)."""
+    names = [settings.tts_provider, *settings.tts_engines_enabled.split(",")]
+    return list(dict.fromkeys(n.strip().lower() for n in names if n.strip()))
+
+
+def build_tts_engines(settings: Settings) -> dict[str, TTSProvider | None]:
+    engines: dict[str, TTSProvider | None] = {}
+    for name in enabled_tts_engines(settings):
+        try:
+            engines[name] = build_tts_provider(settings.model_copy(update={"tts_provider": name}))
+        except ProviderConfigurationError:
+            engines[name] = None
+    return engines
+
+
+def settings_for_tts_pin(settings: Settings, job: Job) -> Settings:
+    if job.tts_engine is None:
+        return settings
+    return settings.model_copy(update={"tts_provider": job.tts_engine})
+
+
 def build_tts_provider(settings: Settings) -> TTSProvider:
     name = settings.tts_provider.strip().lower()
     if name == "fake":
@@ -471,6 +498,30 @@ def build_tts_provider(settings: Settings) -> TTSProvider:
             ),
             max_chars=settings.edge_tts_max_chars,
             timeout_seconds=settings.edge_tts_timeout_seconds,
+        )
+    if name == "fish":
+        from app.providers.tts.fish import FishTTSProvider, parse_fish_voices
+
+        key = settings.fish_audio_api_key
+        # A missing key must not fail the build: capabilities reports it via check_available().
+        return FishTTSProvider(
+            output_dir=_tts_tmp_dir(settings.storage_path),
+            api_key=key.get_secret_value() if key else None,
+            base_url=settings.fish_audio_base_url,
+            model=settings.fish_audio_model,
+            voices=parse_fish_voices(settings.fish_audio_voices),
+            timeout_seconds=settings.fish_audio_http_timeout_seconds,
+            max_concurrency=settings.fish_audio_max_concurrency,
+        )
+    if name == "vieneu":
+        from app.providers.tts.vieneu import VieneuTTSProvider
+
+        return VieneuTTSProvider(
+            output_dir=_tts_tmp_dir(settings.storage_path),
+            base_url=settings.vieneu_base_url,
+            model=settings.vieneu_model,
+            timeout_seconds=settings.vieneu_http_timeout_seconds,
+            max_concurrency=settings.vieneu_max_concurrency,
         )
     raise UnknownProviderError(f"unknown TTS_PROVIDER: {settings.tts_provider}")
 
@@ -572,6 +623,16 @@ def settings_for_translation_pin(settings: Settings, job: Job) -> Settings:
     raise UnknownProviderError(f"unknown translation pin: {provider}")
 
 
+def tts_model_identity(settings: Settings) -> str:
+    """Engine-specific TTS cache model id; unknown names keep the provider name."""
+    tts = settings.tts_provider.strip().lower()
+    if tts == "fish":
+        return settings.fish_audio_model
+    if tts == "vieneu":
+        return f"{settings.vieneu_model}:{settings.vieneu_precision}"
+    return tts
+
+
 def cache_identity_from_settings(
     settings: Settings, *, normalizer_settings: Settings | None = None
 ) -> CacheIdentity:
@@ -612,7 +673,7 @@ def cache_identity_from_settings(
         translation_provider=translation,
         translation_model=translation_model,
         tts_provider=tts,
-        tts_model=tts,
+        tts_model=tts_model_identity(settings),
         normalizer_provider=normalizer_provider,
         normalizer_model=normalizer_model,
     )

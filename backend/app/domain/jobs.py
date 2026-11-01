@@ -137,6 +137,7 @@ class Job:
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
+    tts_engine: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -181,6 +182,8 @@ class Job:
             payload["srt_timing"] = self.srt_timing.value
         if self.normalize_text:
             payload["normalize_text"] = True
+        if self.tts_engine is not None:
+            payload["tts_engine"] = self.tts_engine
         return payload
 
     @classmethod
@@ -217,4 +220,5 @@ class Job:
             mode=mode,
             srt_timing=srt_timing,
             normalize_text=data.get("normalize_text") is True,
+            tts_engine=_optional_pin_value(data, "tts_engine"),
         )

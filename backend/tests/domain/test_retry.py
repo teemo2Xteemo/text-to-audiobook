@@ -39,3 +39,12 @@ def test_delay_for_rejects_negative_attempt() -> None:
     policy = RetryPolicy(max_attempts=3, backoff_seconds=1.0)
     with pytest.raises(ValueError, match="failed_attempt_index"):
         delay_for(-1, policy)
+
+
+def test_rejects_invalid_rate_limit_fields() -> None:
+    with pytest.raises(ValueError, match="rate_limit_max_attempts"):
+        RetryPolicy(max_attempts=3, backoff_seconds=1.0, rate_limit_max_attempts=0)
+    with pytest.raises(ValueError, match="rate_limit_backoff_seconds"):
+        RetryPolicy(max_attempts=3, backoff_seconds=1.0, rate_limit_backoff_seconds=-1.0)
+    with pytest.raises(ValueError, match="max_wait_seconds"):
+        RetryPolicy(max_attempts=3, backoff_seconds=1.0, max_wait_seconds=-1.0)

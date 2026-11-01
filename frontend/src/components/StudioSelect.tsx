@@ -6,6 +6,7 @@ export type StudioSelectOption = {
   displayLabel?: string;
   badge?: string;
   description?: string;
+  disabled?: boolean;
 };
 
 type StudioSelectProps = {
@@ -157,7 +158,7 @@ export function StudioSelect({
     } else if (event.key === "Enter") {
       event.preventDefault();
       const targetOption = filteredOptions[highlightedIndex] ?? filteredOptions[0];
-      if (targetOption) {
+      if (targetOption && !targetOption.disabled) {
         handleSelectOption(targetOption.value);
       }
     } else if (event.key === "Escape") {
@@ -199,7 +200,7 @@ export function StudioSelect({
           }}
         >
           {options.map((opt) => (
-            <option key={opt.value} value={opt.value}>
+            <option key={opt.value} value={opt.value} disabled={opt.disabled}>
               {opt.label}
             </option>
           ))}
@@ -293,13 +294,16 @@ export function StudioSelect({
                       }}
                       role="option"
                       aria-selected={isSelected}
-                      className={`studio-select-item ${
+                      aria-disabled={opt.disabled || undefined}
+                      className={`studio-select-item ${opt.disabled ? "studio-select-item-disabled" : ""} ${
                         isSelected ? "studio-select-item-selected" : ""
                       } ${isHighlighted ? "studio-select-item-highlighted" : ""}`}
                       onMouseEnter={() => setHighlightedIndex(index)}
                       onClick={(event) => {
                         event.stopPropagation();
-                        handleSelectOption(opt.value);
+                        if (!opt.disabled) {
+                          handleSelectOption(opt.value);
+                        }
                       }}
                     >
                       <div className="studio-select-item-main">

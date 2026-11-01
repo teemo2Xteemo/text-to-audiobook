@@ -7,12 +7,15 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 from app.domain.errors import DomainError, ErrorType
 from app.domain.languages import AUTO_SOURCE_LANGUAGE
+from app.providers.http_retry import (
+    MAX_RETRY_AFTER_SECONDS,
+    parse_retry_after,
+    retry_after_header,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +89,6 @@ _THINK_OPEN = re.compile(r"<think>.*\Z", re.IGNORECASE | re.DOTALL)
 _ERROR_BODY_LIMIT = 2048
 _DETAIL_LIMIT = 200
 _CLIENT_MESSAGE_LIMIT = 300
-_MAX_RETRY_AFTER_SECONDS = 60.0
 _OPENROUTER_HTTP_REFERER = "https://github.com/teemo2Xteemo/text-to-audiobook"
 _SECRET_RE = re.compile(
     r"(?i)\b(?:bearer\s+)[a-z0-9._\-]{8,}\b|(?:gsk_|sk-or-|sk-)[a-z0-9._\-]{8,}"
@@ -252,61 +254,6 @@ def _provider_detail(exc: urllib.error.HTTPError) -> str:
     return _sanitize_provider_detail(text)
 
 
-def _parse_retry_after(value: str | None, *, now: datetime | None = None) -> float | None:
-    if value is None:
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    try:
-        seconds = float(text)
-    except ValueError:
-        seconds = _retry_after_http_date(text, now=now)
-        if seconds is None:
-            return None
-    if seconds < 0:
-        return 0.0
-    return min(seconds, _MAX_RETRY_AFTER_SECONDS)
-
-
-def _retry_after_http_date(value: str, *, now: datetime | None) -> float | None:
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError, IndexError, OverflowError):
-        return None
-    if when is None:
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=UTC)
-    clock = now or datetime.now(UTC)
-    return (when - clock).total_seconds()
-
-
-def _retry_after_header(exc: urllib.error.HTTPError) -> str | None:
-    headers = getattr(exc, "headers", None)
-    if headers is None:
-        return None
-    for name in (
-        "Retry-After",
-        "retry-after",
-        "x-ratelimit-reset-tokens",
-        "x-ratelimit-reset-requests",
-    ):
-        value = headers.get(name)
-        if value is not None:
-            raw = str(value).strip()
-            if raw.endswith("s") and not raw.endswith("ms"):
-                raw = raw[:-1].strip()
-            return raw
-    ms_val = headers.get("retry-after-ms")
-    if ms_val is not None:
-        try:
-            return str(float(ms_val) / 1000.0)
-        except ValueError:
-            pass
-    return None
-
-
 def _http_client_message(code: int, detail: str, *, model: str | None) -> str:
     head = f"HTTP {code}"
     if code == 404 and model:
@@ -340,9 +287,7 @@ def _map_openai_error(
     mapped: DomainError
     if isinstance(exc, urllib.error.HTTPError):
         detail = _provider_detail(exc)
-        retry_after = (
-            _parse_retry_after(_retry_after_header(exc)) if exc.code in (429, 503) else None
-        )
+        retry_after = parse_retry_after(retry_after_header(exc)) if exc.code in (429, 503) else None
         if exc.code == 429:
             message = _http_client_message(exc.code, detail or "rate limit exceeded", model=None)
             if retry_after is None and detail:
@@ -353,7 +298,7 @@ def _map_openai_error(
                 )
                 if match:
                     try:
-                        retry_after = min(float(match.group(1)), _MAX_RETRY_AFTER_SECONDS)
+                        retry_after = min(float(match.group(1)), MAX_RETRY_AFTER_SECONDS)
                     except ValueError:
                         pass
             if retry_after is None:

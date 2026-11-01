@@ -1696,3 +1696,67 @@ def test_stale_normalized_file_from_other_text_is_not_reused(tmp_path: Path) -> 
     assert narration.calls == [  # type: ignore[attr-defined]
         ("She walked into the great hall and saw twenty elders.", "en-US")
     ]
+
+
+class _NoSpeedTTS(FakeTTSProvider):
+    honours_speed = False
+
+
+@pytest.mark.parametrize(("honours", "expected_calls"), [(False, True), (True, False)])
+def test_speed_fallback_uses_tempo_when_engine_ignores_speed(
+    tmp_path: Path, honours: bool, expected_calls: bool
+) -> None:
+    job = _job(speed=1.25)
+    voices = _voices_for(job.target_language)
+    tts = (FakeTTSProvider if honours else _NoSpeedTTS)(voices, tmp_path / "tts-scratch")
+    orch, workspace, *_, audio, _ = _orchestrator(tmp_path, job=job, tts=tts)
+    _run(orch, job, workspace)
+    assert bool(audio.tempo_calls) is expected_calls
+    if expected_calls:
+        assert {c[2] for c in audio.tempo_calls} == {1.25}
+
+
+class _VoiceServiceTTS(FakeTTSProvider):
+    """Declares a language but lists no voices while ``down`` (sidecar blip)."""
+
+    down = True
+
+    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.refreshes: list[float] = []
+
+    async def refresh_voices(self, *, backoff_seconds: float = 30.0) -> None:
+        self.refreshes.append(backoff_seconds)
+
+    def all_voices(self):  # type: ignore[no-untyped-def]
+        return [] if self.down else super().all_voices()
+
+    def voices_for(self, language: str):  # type: ignore[no-untyped-def]
+        return [] if self.down else super().voices_for(language)
+
+    def languages(self) -> set[str]:
+        return {"ko-KR"}
+
+
+def test_voice_service_blip_is_retried_not_unsupported_language(tmp_path: Path) -> None:
+    job = _job()
+    tts = _VoiceServiceTTS(_voices_for(job.target_language), tmp_path / "tts-scratch")
+
+    async def recover(_seconds: float) -> None:
+        tts.down = False
+
+    orchestrator, workspace, *_ = _orchestrator(tmp_path, job=job, tts=tts, sleep=recover)  # type: ignore[arg-type]
+    result = _run(orchestrator, job, workspace)
+    assert result.status is JobStatus.COMPLETED
+    # each selection attempt re-fetches voices first, without the capabilities backoff
+    assert tts.refreshes and set(tts.refreshes) == {0}
+    assert len(tts.refreshes) >= 2
+
+
+def test_voice_service_down_persistently_fails_with_tts_failed(tmp_path: Path) -> None:
+    job = _job()
+    tts = _VoiceServiceTTS(_voices_for(job.target_language), tmp_path / "tts-scratch")
+    orchestrator, workspace, *_ = _orchestrator(tmp_path, job=job, tts=tts)
+    result = _run(orchestrator, job, workspace)
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.TTS_FAILED

@@ -646,3 +646,85 @@ def test_process_job_narrate_mode_fails_cleanly_when_tts_provider_fails(
     assert fs_job is not None
     assert fs_job.status == JobStatus.FAILED
     assert fs_job.error_type == ErrorType.PROVIDER_CONFIGURATION_ERROR
+
+
+def test_process_job_pinned_fish_rate_limit_fails_job_keeps_checkpoints_and_never_uses_edge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from app.domain.audio import Voice
+    from app.domain.errors import DomainError, ErrorType
+    from app.providers.tts.edge import EdgeTTSProvider
+
+    job = Job(
+        id="dddd1111-2222-3333-4444-555566667777",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="en-US",
+        voice="fish:abc",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+        tts_engine="fish",
+    )
+    _persist_job(tmp_path, job, "\n\n".join(f"Paragraph {i}. " + "word " * 25 for i in range(5)))
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        tts_provider="edge",
+        tts_engines_enabled="fish",
+        chunk_max_chars=100,
+        chunk_tts_concurrency=1,
+    )
+    edge_calls: list[str] = []
+
+    async def _edge_spy(self: object, text: str, *a: object, **k: object) -> object:
+        edge_calls.append(text)
+        raise AssertionError("edge must not be used for a fish-pinned job")
+
+    monkeypatch.setattr(EdgeTTSProvider, "synthesize", _edge_spy)
+
+    class _RateLimitedFish(FakeTTSProvider):
+        async def synthesize(self, text: str, language: str, voice: str, settings: Any) -> Any:
+            if len(self.calls) >= 2:
+                raise DomainError(ErrorType.PROVIDER_RATE_LIMIT, "busy")
+            return await super().synthesize(text, language, voice, settings)
+
+    fish = _RateLimitedFish(
+        voices=[Voice(id="fish:abc", language="en-US", label="f")], output_dir=tmp_path / "tts"
+    )
+    seen: dict[str, str] = {}
+
+    def _build(effective: Settings, **kw: Any) -> PipelineOrchestrator:
+        seen["tts_provider"] = effective.tts_provider
+        orchestrator = build_orchestrator(effective, **kw)
+        if effective.tts_provider == "fish":
+            orchestrator._tts = fish
+        orchestrator._audio = FakeAudioProcessor()
+        return orchestrator
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    def _build_fast(effective: Settings, **kw: Any) -> PipelineOrchestrator:
+        orchestrator = _build(effective, **kw)
+        orchestrator._sleep = _no_sleep
+        return orchestrator
+
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", _build_fast)
+
+    process_job(job.id)
+
+    assert seen["tts_provider"] == "fish"
+    done = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job.id))
+    assert done is not None
+    assert done.status is JobStatus.FAILED
+    assert done.error_type is ErrorType.PROVIDER_RATE_LIMIT
+    assert len(fish.calls) == 2
+    checkpoints = list((tmp_path / "jobs" / job.id).rglob("checkpoint.json"))
+    assert checkpoints, "finished chunks must stay checkpointed"
+    assert len(json.loads(checkpoints[0].read_text())) >= 1
+    assert edge_calls == []

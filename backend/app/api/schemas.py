@@ -36,6 +36,7 @@ class JobStatusResponse(BaseModel):
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
+    tts_engine: str | None = None
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -70,6 +71,7 @@ class JobStatusResponse(BaseModel):
             mode=job.mode,
             srt_timing=job.srt_timing,
             normalize_text=job.normalize_text,
+            tts_engine=job.tts_engine,
         )
 
 
@@ -84,16 +86,28 @@ class CreateJobJsonBody(BaseModel):
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
+    tts_engine: str | None = None
 
 
 class VoiceResponse(BaseModel):
     id: str
     language: str
     label: str
+    engine: str = ""
 
     @classmethod
     def from_voice(cls, voice: Voice) -> VoiceResponse:
-        return cls(id=voice.id, language=voice.language, label=voice.label)
+        return cls(id=voice.id, language=voice.language, label=voice.label, engine=voice.engine)
+
+
+class TtsEngineResponse(BaseModel):
+    id: str
+    label: str
+    kind: str
+    cost_label: str
+    available: bool
+    languages: list[str]
+    max_concurrency: int
 
 
 class TranslationProfileResponse(BaseModel):
@@ -114,6 +128,7 @@ class CapabilitiesResponse(BaseModel):
     narrate_languages: list[str] = Field(default_factory=list)
     estimate_defaults: dict[str, float] = Field(default_factory=dict)
     text_normalization: bool = False
+    tts_engines: list[TtsEngineResponse] = Field(default_factory=list)
 
 
 class LanguageCandidate(BaseModel):
@@ -156,6 +171,7 @@ class TTSPreviewRequest(BaseModel):
     text: str
     voice: str
     speed: float = 1.0
+    tts_engine: str | None = None
 
 
 class TTSPreviewResponse(BaseModel):

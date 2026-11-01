@@ -35,6 +35,7 @@ class Voice:
     label: str = ""
     name: str = ""
     gender: str = ""
+    engine: str = ""
 
     def __post_init__(self) -> None:
         if not self.label:

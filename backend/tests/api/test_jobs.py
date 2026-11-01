@@ -1103,3 +1103,152 @@ def test_tts_preview_invalid_speed(client: TestClient) -> None:
     assert res.status_code == 400
     assert res.json()["error_type"] == ErrorType.INVALID_INPUT
     assert "speed must be between" in res.json()["message"]
+
+
+def test_json_and_multipart_carry_the_same_tts_engine(tmp_path: Path) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    service = JobService(
+        jobs=InMemoryJobStore(),
+        source_storage=InMemorySourceStorage(),
+        queue=InMemoryQueue(),
+        output_bitrate_kbps=128,
+        storage_path=tmp_path,
+        disk_jobs=FilesystemJobStorage(tmp_path),
+        tts_engines={"fish": FakeTTSProvider()},
+    )
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.job_service = service
+    with TestClient(app) as client:
+        as_json = client.post("/api/jobs", json={**VALID_BODY, "tts_engine": "fish"})
+        as_form = client.post(
+            "/api/jobs",
+            data={"source_language": "en-US", "target_language": "ja-JP", "tts_engine": "fish"},
+            files={"file": ("story.txt", b"Once upon a time", "text/plain")},
+        )
+        bad = client.post("/api/jobs", json={**VALID_BODY, "tts_engine": "nope"})
+        for response in (as_json, as_form):
+            assert response.status_code == 202
+            status = client.get(f"/api/jobs/{response.json()['job_id']}")
+            assert status.json()["tts_engine"] == "fish"
+        assert bad.status_code == 400
+        assert bad.json()["error_type"] == "INVALID_INPUT"
+
+
+def test_translate_cross_engine_voice_is_400_at_create(tmp_path: Path) -> None:
+    from app.domain.audio import Voice
+    from app.providers.tts.fake import FakeTTSProvider
+
+    edge = FakeTTSProvider(voices=[Voice(id="edge-ja", language="ja-JP", label="e")])
+    service = JobService(
+        jobs=InMemoryJobStore(),
+        source_storage=InMemorySourceStorage(),
+        queue=InMemoryQueue(),
+        output_bitrate_kbps=128,
+        storage_path=tmp_path,
+        disk_jobs=FilesystemJobStorage(tmp_path),
+        tts=edge,
+        tts_engines={"fake": edge},
+    )
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.job_service = service
+    with TestClient(app) as client:
+        response = client.post("/api/jobs", json={**VALID_BODY, "voice": "fish:abc"})
+        assert response.status_code == 400
+        assert response.json()["error_type"] == "UNSUPPORTED_LANGUAGE"
+
+
+def _preview_app(tmp_path: Path, engines: dict[str, object]) -> TestClient:
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.tts_engines = engines
+    return TestClient(app)
+
+
+def test_preview_with_engine_uses_that_provider_and_cache(tmp_path: Path) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    class _Counting(FakeTTSProvider):
+        calls = 0
+
+        async def synthesize(self, *a: object, **kw: object):  # type: ignore[no-untyped-def]
+            _Counting.calls += 1
+            return await super().synthesize(*a, **kw)  # type: ignore[arg-type]
+
+    fish = _Counting(output_dir=tmp_path / "t")
+    with _preview_app(tmp_path, {"fake": FakeTTSProvider(), "fish": fish}) as client:
+        body = {"text": "hello", "voice": "fish:abc", "tts_engine": "fish"}
+        first = client.post("/api/tts/preview", json=body)
+        second = client.post("/api/tts/preview", json=body)
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert _Counting.calls == 1
+
+
+def test_preview_with_disabled_engine_is_invalid_input(tmp_path: Path) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    with _preview_app(tmp_path, {"fake": FakeTTSProvider()}) as client:
+        res = client.post(
+            "/api/tts/preview", json={"text": "hi", "voice": "v", "tts_engine": "fish"}
+        )
+    assert res.status_code == 400
+    assert res.json()["error_type"] == "INVALID_INPUT"
+
+
+def test_post_job_with_fish_and_no_key_is_provider_configuration_error(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+    from app.providers.tts.fish import FishTTSProvider
+
+    service = memory[0]
+    service._tts_engines = {
+        "fake": FakeTTSProvider(),
+        "fish": FishTTSProvider(
+            tmp_path,
+            api_key=None,
+            base_url="http://x",
+            model="m",
+            voices=[],
+            timeout_seconds=1,
+            max_concurrency=1,
+        ),
+    }
+    res = jobs_client.post("/api/jobs", json={**VALID_BODY, "tts_engine": "fish"})
+    assert res.status_code == 400
+    assert res.json()["error_type"] == "PROVIDER_CONFIGURATION_ERROR"
+
+
+def test_preview_with_vieneu_engine_returns_wav(tmp_path: Path) -> None:
+    import json as _json
+
+    from app.providers.tts.vieneu import VieneuTTSProvider
+
+    class _Resp:
+        def __init__(self, data: bytes) -> None:
+            self.data = data
+
+        def read(self) -> bytes:
+            return self.data
+
+        def __enter__(self) -> "_Resp":
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+    def opener(request, timeout=None):  # type: ignore[no-untyped-def]
+        if request.full_url.endswith("/voices"):
+            return _Resp(_json.dumps({"voices": ["Bao"]}).encode())
+        return _Resp(b"RIFFWAVE")
+
+    vieneu = VieneuTTSProvider(
+        tmp_path / "t", base_url="http://v/v1", model="m", timeout_seconds=5, opener=opener
+    )
+    body = {"text": "xin chao", "voice": "vieneu:Bao", "tts_engine": "vieneu"}
+    with _preview_app(tmp_path, {"vieneu": vieneu}) as client:
+        res = client.post("/api/tts/preview", json=body)
+    assert res.status_code == 200
+    assert res.json()["mime_type"] == "audio/wav"

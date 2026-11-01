@@ -149,6 +149,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
         mode=parsed.mode,
         srt_timing=parsed.srt_timing,
         normalize_text=parsed.normalize_text,
+        tts_engine=parsed.tts_engine,
     )
 
 
@@ -203,6 +204,7 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         mode=mode,
         srt_timing=srt_timing,
         normalize_text=_parse_bool(form.get("normalize_text"), "normalize_text"),
+        tts_engine=_optional_form_string(form.get("tts_engine")),
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -12,6 +12,7 @@ try:
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
+from app.application.capabilities import engine_available, engine_label, refresh_engine_voices
 from app.application.pipeline.parse import is_srt_document, strip_srt
 from app.application.pipeline.tts import resolve_voice
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
@@ -51,6 +52,7 @@ class CreateJobCommand:
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
+    tts_engine: str | None = None
 
 
 class JobService:
@@ -71,6 +73,8 @@ class JobService:
         detector: LanguageDetector | None = None,
         language_confirm_threshold: float = 0.70,
         text_normalization_available: bool = False,
+        tts_engines: Mapping[str, TTSProvider | None] | None = None,
+        default_tts_engine: str = "fake",
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
@@ -87,6 +91,8 @@ class JobService:
             list(available_profiles) if available_profiles is not None else []
         )
         self._tts = tts
+        self._tts_engines = tts_engines if tts_engines is not None else {default_tts_engine: tts}
+        self._default_tts_engine = default_tts_engine
         self._detector = detector
         self._language_confirm_threshold = language_confirm_threshold
         self._text_normalization_available = text_normalization_available
@@ -100,6 +106,28 @@ class JobService:
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
         output_format = _parse_output_format(command.output_format)
         voice = command.voice.strip() if command.voice and command.voice.strip() else None
+        tts_engine = (command.tts_engine or "").strip().lower() or None
+        tts = self._tts
+        if tts_engine is not None:
+            if tts_engine not in self._tts_engines:
+                raise DomainError(
+                    ErrorType.INVALID_INPUT, f"tts_engine is not enabled: {tts_engine[:32]}"
+                )
+            pinned = self._tts_engines[tts_engine]
+            if pinned is None:
+                raise DomainError(
+                    ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                    f"{engine_label(tts_engine)} is not available right now",
+                )
+            tts = pinned
+            # Unpinned jobs keep today's behavior: no preflight.
+            if not await engine_available(tts):
+                raise DomainError(
+                    ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                    f"{engine_label(tts_engine)} is not available right now",
+                )
+        if tts is not None:
+            await refresh_engine_voices(tts, backoff_seconds=0)
         if command.normalize_text and command.mode is not JobMode.NARRATE:
             # Translate already runs an LLM; a second rewrite would also stretch SRT timing.
             raise DomainError(
@@ -153,8 +181,8 @@ class JobService:
 
             resolved_target = resolved_source
 
-            if self._tts is not None:
-                resolved_voice = resolve_voice(self._tts, resolved_source, voice)
+            if tts is not None:
+                resolved_voice = resolve_voice(tts, resolved_source, voice)
             else:
                 resolved_voice = voice
 
@@ -170,6 +198,11 @@ class JobService:
                     ErrorType.INVALID_INPUT, "srt_timing is only supported in narrate mode"
                 )
             ensure_valid_languages(source_language, target_language)
+            if tts is not None and (voice is not None or tts_engine is not None):
+                # A pinned engine must cover the target language before we pay for translation.
+                checked = resolve_voice(tts, target_language, voice)
+                if voice is not None:
+                    voice = checked
 
             profile_id = (
                 command.translation_profile_id.strip()
@@ -234,6 +267,7 @@ class JobService:
             mode=command.mode,
             srt_timing=command.srt_timing,
             normalize_text=command.normalize_text,
+            tts_engine=tts_engine,
         )
         try:
             await self._source_storage.write_source(job_id, text)

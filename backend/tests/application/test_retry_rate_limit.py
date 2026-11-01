@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+import pytest
+
+from app.application.pipeline.retry import with_chunk_retry
+from app.domain.errors import DomainError, ErrorType
+from app.domain.retry import RetryPolicy
+
+_POLICY = RetryPolicy(
+    max_attempts=3,
+    backoff_seconds=1.0,
+    rate_limit_max_attempts=6,
+    rate_limit_backoff_seconds=5.0,
+)
+
+
+async def _run(error: DomainError) -> list[float]:
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    async def op() -> None:
+        raise error
+
+    with pytest.raises(DomainError):
+        await with_chunk_retry(
+            op, policy=_POLICY, sleep=sleep, job_id="j", chunk_id="c", stage="tts"
+        )
+    return waits
+
+
+@pytest.mark.anyio
+async def test_rate_limit_uses_rate_limit_policy() -> None:
+    waits = await _run(DomainError(ErrorType.PROVIDER_RATE_LIMIT, "busy"))
+    assert waits == [5.0, 10.0, 20.0, 40.0, 80.0]
+
+
+@pytest.mark.anyio
+async def test_retry_after_hint_capped() -> None:
+    err = DomainError(ErrorType.PROVIDER_RATE_LIMIT, "busy", retry_after_seconds=500)
+    assert (await _run(err))[0] == 120.0
+
+
+@pytest.mark.anyio
+async def test_other_errors_keep_base_policy() -> None:
+    waits = await _run(DomainError(ErrorType.TTS_FAILED, "boom"))
+    assert waits == [1.0, 2.0]
+
+
+async def _run_sequence(errors: list[ErrorType]) -> tuple[str, list[float]]:
+    waits: list[float] = []
+    pending = list(errors)
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    async def op() -> str:
+        if pending:
+            raise DomainError(pending.pop(0), "x")
+        return "ok"
+
+    result = await with_chunk_retry(
+        op, policy=_POLICY, sleep=sleep, job_id="j", chunk_id="c", stage="tts"
+    )
+    return result, waits
+
+
+@pytest.mark.anyio
+async def test_rate_limits_do_not_consume_base_budget() -> None:
+    rl, tts = ErrorType.PROVIDER_RATE_LIMIT, ErrorType.TTS_FAILED
+    result, waits = await _run_sequence([rl, rl, rl, rl, tts])
+    assert result == "ok"
+    assert waits == [5.0, 10.0, 20.0, 40.0, 1.0]
+
+
+@pytest.mark.anyio
+async def test_base_errors_do_not_inflate_rate_limit_backoff() -> None:
+    rl, tts = ErrorType.PROVIDER_RATE_LIMIT, ErrorType.TTS_FAILED
+    result, waits = await _run_sequence([tts, tts, rl])
+    assert result == "ok"
+    assert waits == [1.0, 2.0, 5.0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("code", [400, 404, 422])
+async def test_provider_rejection_is_not_retried(code: int) -> None:
+    import urllib.error
+    from email.message import Message
+    from io import BytesIO
+
+    from app.providers.tts.http_errors import map_tts_http_error
+
+    calls: list[int] = []
+
+    async def op() -> None:
+        calls.append(code)
+        raise map_tts_http_error(
+            urllib.error.HTTPError("http://x", code, "err", Message(), BytesIO(b"secret story"))
+        )
+
+    async def sleep(_s: float) -> None:
+        return None
+
+    with pytest.raises(DomainError) as ei:
+        await with_chunk_retry(
+            op, policy=_POLICY, sleep=sleep, job_id="j", chunk_id="c", stage="tts"
+        )
+    assert calls == [code]
+    assert "secret story" not in ei.value.message

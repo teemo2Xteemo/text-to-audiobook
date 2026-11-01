@@ -15,5 +15,6 @@ ADRs record *why* a durable choice was made. Add a new file when you change port
 | [0009](0009-cpu-first-mvp.md) | CPU / 16GB / no GPU constraint |
 | [0010](0010-stack-and-project-layout.md) | FastAPI, React, Redis, Compose layout |
 | [0011](0011-ollama-translategemma-optional-translation.md) | Ollama + TranslateGemma first optional LLM translation (NLLB stays default) |
+| [0012](0012-multilingual-tts-engines.md) | Multilingual TTS engines: Edge default, Fish and VieNeu optional (Proposed, pilot pending) |
 
 Status values: Proposed, Accepted, Superseded.

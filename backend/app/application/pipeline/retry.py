@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 
-from app.domain.errors import DomainError
-from app.domain.retry import RetryPolicy, delay_for, is_retryable
+from app.domain.errors import DomainError, ErrorType
+from app.domain.retry import RetryPolicy, is_retryable
 
 logger = logging.getLogger(__name__)
 
@@ -18,16 +18,20 @@ async def with_chunk_retry[T](
     chunk_id: str,
     stage: str,
 ) -> T:
-    last_error: DomainError | None = None
-    for attempt in range(policy.max_attempts):
+    # One budget per error class: a 429 burst must not spend the base retries, nor the reverse.
+    attempts = {True: 0, False: 0}
+    while True:
         try:
             return await operation()
         except DomainError as exc:
-            last_error = exc
-            can_retry = attempt + 1 < policy.max_attempts and is_retryable(exc.error_type)
+            rate_limited = exc.error_type is ErrorType.PROVIDER_RATE_LIMIT
+            max_attempts = policy.rate_limit_max_attempts if rate_limited else policy.max_attempts
+            backoff = policy.rate_limit_backoff_seconds if rate_limited else policy.backoff_seconds
+            attempt = attempts[rate_limited]
+            can_retry = attempt + 1 < max_attempts and is_retryable(exc.error_type)
             if not can_retry:
                 raise
-            retry_count = attempt + 1
+            retry_count = sum(attempts.values()) + 1
             logger.info(
                 "pipeline_chunk_retry",
                 extra={
@@ -39,10 +43,9 @@ async def with_chunk_retry[T](
                     "retry_after_seconds": exc.retry_after_seconds,
                 },
             )
-            wait = delay_for(attempt, policy)
+            wait = backoff * (2**attempt)
             hint = exc.retry_after_seconds
             if hint is not None:
                 wait = max(wait, hint)
-            await sleep(wait)
-    assert last_error is not None
-    raise last_error
+            await sleep(min(wait, policy.max_wait_seconds))
+            attempts[rate_limited] += 1

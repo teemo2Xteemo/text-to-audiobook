@@ -72,3 +72,9 @@ def test_operations_are_translation_tts_and_normalization_only() -> None:
     assert CACHE_OPERATIONS == frozenset({"translation", "tts", "normalization"})
     with pytest.raises(ValueError, match="unsupported cache operation"):
         _key(operation="narration")
+
+
+def test_vieneu_precision_changes_tts_key():
+    assert _key(provider="vieneu", model="vieneu-v3-turbo:fp32") != _key(
+        provider="vieneu", model="vieneu-v3-turbo:int8"
+    )
