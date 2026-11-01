@@ -18,6 +18,17 @@ export type Voice = {
   id: string;
   language: string;
   label: string;
+  engine?: string;
+};
+
+export type TtsEngine = {
+  id: string;
+  label: string;
+  kind: "online" | "local";
+  cost_label: string;
+  available: boolean;
+  languages: string[];
+  max_concurrency: number;
 };
 
 export type TranslationProfile = {
@@ -34,6 +45,7 @@ export type TranslationProfile = {
 export type Capabilities = {
   languages: string[];
   voices: Voice[];
+  tts_engines?: TtsEngine[];
   translation_profiles?: TranslationProfile[];
   narrate_languages?: string[];
   estimate_defaults?: { chars_per_second?: number; preview_wpm?: number };
@@ -86,6 +98,7 @@ export type CreateJobInput = {
   mode?: JobMode;
   srt_timing?: SrtTiming;
   normalize_text?: boolean;
+  ttsEngine?: string;
 };
 
 export type CreateJobPayload = CreateJobInput;
@@ -126,6 +139,7 @@ export type TTSPreviewPayload = {
   text: string;
   voice: string;
   speed?: number;
+  tts_engine?: string;
 };
 
 export type TTSPreviewResponse = {

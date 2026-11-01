@@ -45,7 +45,7 @@ describe("JobProgress", () => {
         })}
       />,
     );
-    expect(screen.getByRole("alert")).toHaveTextContent("The service is temporarily busy");
+    expect(screen.getByRole("alert")).toHaveTextContent("The voice service is limiting free usage");
     expect(screen.getByText("Technical details")).toBeInTheDocument();
     expect(screen.getByText("PROVIDER_RATE_LIMIT: Too many requests")).toBeInTheDocument();
   });

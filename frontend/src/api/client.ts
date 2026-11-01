@@ -138,6 +138,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
     if (input.normalize_text) {
       form.set("normalize_text", "true");
     }
+    if (input.ttsEngine) {
+      form.set("tts_engine", input.ttsEngine);
+    }
     form.set("file", input.file);
     const response = await fetch(requestUrl("/api/jobs"), {
       method: "POST",
@@ -167,6 +170,9 @@ export async function createJob(input: CreateJobInput): Promise<JobCreated> {
   }
   if (input.normalize_text) {
     body.normalize_text = true;
+  }
+  if (input.ttsEngine) {
+    body.tts_engine = input.ttsEngine;
   }
   const response = await fetch(requestUrl("/api/jobs"), {
     method: "POST",

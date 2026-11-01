@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { JobForm } from "./JobForm";
 import type { Capabilities } from "../api/types";
@@ -623,5 +623,119 @@ describe("JobForm", () => {
     const voiceSelect = screen.getByLabelText("Voice");
     expect(await within(voiceSelect).findByText("English A")).toBeInTheDocument();
     expect(generateBtn).toBeEnabled();
+  });
+
+  describe("TTS engine picker", () => {
+    const enginesCaps: Capabilities = {
+      ...capabilitiesFixture,
+      tts_engines: [
+        { id: "edge", label: "Edge", kind: "online", cost_label: "Free", available: true, languages: ["en-US", "ja-JP"], max_concurrency: 4 },
+        { id: "fish", label: "Fish Audio", kind: "online", cost_label: "Paid", available: true, languages: ["en-US"], max_concurrency: 2 },
+        { id: "vieneu", label: "VieNeu", kind: "local", cost_label: "Local", available: false, languages: ["en-US"], max_concurrency: 1 },
+      ],
+      voices: [
+        { id: "fake-en", language: "en-US", label: "English A", engine: "edge" },
+        { id: "fake-ja", language: "ja-JP", label: "Japanese A", engine: "edge" },
+        { id: "fish:en", language: "en-US", label: "Fish English", engine: "fish" },
+      ],
+    };
+
+    beforeEach(() => localStorage.clear());
+
+    it("shows a labelled picker with cost labels and disabled unavailable engines", () => {
+      render(<JobForm capabilities={enginesCaps} disabled={false} onSubmit={() => undefined} />);
+      const picker = screen.getByLabelText("Voice engine");
+      const options = within(picker).getAllByRole("option") as HTMLOptionElement[];
+      expect(options.map((o) => o.textContent)).toEqual([
+        "Edge · Free",
+        "Fish Audio · Paid",
+        "VieNeu · Local · Not configured",
+      ]);
+      expect(options[2]).toBeDisabled();
+      expect(options[1]).toBeEnabled();
+    });
+
+    it("hides the picker with a single engine or none", () => {
+      render(
+        <JobForm
+          capabilities={{ ...enginesCaps, tts_engines: enginesCaps.tts_engines?.slice(0, 1) }}
+          disabled={false}
+          onSubmit={() => undefined}
+        />,
+      );
+      expect(screen.queryByLabelText("Voice engine")).toBeNull();
+    });
+
+    it("filters voices by engine, resets the voice, and sends tts_engine only when not default", async () => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      render(<JobForm capabilities={enginesCaps} disabled={false} onSubmit={onSubmit} />);
+      const voice = screen.getByLabelText("Voice");
+      expect(within(voice).getAllByRole("option").map((o) => o.textContent)).toEqual(["English A"]);
+
+      await user.type(screen.getByLabelText("Paste story"), "Hello");
+      await user.click(screen.getByRole("button", { name: "Generate" }));
+      expect(onSubmit.mock.calls[0]?.[0].ttsEngine).toBeUndefined();
+
+      await user.selectOptions(screen.getByLabelText("Voice engine"), "fish");
+      expect(within(voice).getAllByRole("option").map((o) => o.textContent)).toEqual(["Fish English"]);
+      expect(voice).toHaveValue("fish:en");
+      await user.click(screen.getByRole("button", { name: "Generate" }));
+      expect(onSubmit.mock.calls[1]?.[0]).toMatchObject({ ttsEngine: "fish", voice: "fish:en" });
+    });
+
+    it("sends tts_engine on preview", async () => {
+      const user = userEvent.setup();
+      const ok = (body: unknown) =>
+        new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+        ok(
+          url.includes("/api/analyze")
+            ? { encoding: "UTF-8", language: "en-US", confidence: 1, needs_confirmation: false, candidates: [], chapters_count: 1, chapters_preview: [], duration_estimate_seconds: 1, process_time_estimate_seconds: 1, preview_lines: [] }
+            : { audio_base64: "AAAA", mime_type: "audio/mpeg" },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+      render(<JobForm capabilities={enginesCaps} disabled={false} onSubmit={() => undefined} />);
+      await user.selectOptions(screen.getByLabelText("Voice engine"), "fish");
+      await user.type(screen.getByLabelText("Paste story"), "Hello there");
+      await user.click(await screen.findByRole("button", { name: /Listen/i }));
+      const call = fetchMock.mock.calls.find(([u]) => String(u).includes("/api/tts/preview"));
+      expect(JSON.parse((call?.[1] as RequestInit).body as string)).toMatchObject({
+        voice: "fish:en",
+        tts_engine: "fish",
+      });
+      vi.unstubAllGlobals();
+    });
+
+    it("remembers the last engine in localStorage", async () => {
+      const user = userEvent.setup();
+      const { unmount } = render(
+        <JobForm capabilities={enginesCaps} disabled={false} onSubmit={() => undefined} />,
+      );
+      await user.selectOptions(screen.getByLabelText("Voice engine"), "fish");
+      unmount();
+      render(<JobForm capabilities={enginesCaps} disabled={false} onSubmit={() => undefined} />);
+      expect(screen.getByLabelText("Voice engine")).toHaveValue("fish");
+    });
+
+    it("offers Use Edge instead after a provider configuration error, without resubmitting", async () => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      localStorage.setItem("audiobook_studio_tts_engine", "fish");
+      render(
+        <JobForm
+          capabilities={enginesCaps}
+          disabled={false}
+          onSubmit={onSubmit}
+          createErrorType="PROVIDER_CONFIGURATION_ERROR"
+        />,
+      );
+      await user.click(screen.getByRole("button", { name: "Use Edge instead" }));
+      expect(screen.getByLabelText("Voice engine")).toHaveValue("edge");
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Use Edge instead" })).toBeNull();
+    });
   });
 });

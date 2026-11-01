@@ -315,4 +315,22 @@ describe("api client", () => {
     const form = (fetchMock.mock.calls[1]?.[1] as RequestInit).body as FormData;
     expect(form.get("mode")).toBe("narrate");
   });
+
+  it("forwards tts_engine in createJob JSON and multipart, and in preview", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(jsonResponse({ job_id: JOB_ID, status: "queued" }, 202)),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const base = { source_language: "en-US", target_language: "ja-JP", speed: 1, output_format: "mp3" as const };
+    await createJob({ ...base, text: "hi", ttsEngine: "fish" });
+    expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string).tts_engine).toBe("fish");
+    await createJob({ ...base, file: new File(["x"], "a.txt"), ttsEngine: "fish" });
+    expect(((fetchMock.mock.calls[1]?.[1] as RequestInit).body as FormData).get("tts_engine")).toBe("fish");
+    await createJob({ ...base, text: "hi" });
+    expect(JSON.parse((fetchMock.mock.calls[2]?.[1] as RequestInit).body as string)).not.toHaveProperty("tts_engine");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ audio_base64: "", mime_type: "audio/mpeg" }));
+    await previewTts({ text: "Hello", voice: "fish:a", tts_engine: "fish" });
+    expect(JSON.parse((fetchMock.mock.calls[3]?.[1] as RequestInit).body as string).tts_engine).toBe("fish");
+  });
 });
