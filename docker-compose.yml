@@ -170,11 +170,12 @@ services:
       start_period: 10s
 
   # Optional VieNeu-TTS CPU sidecar: `docker compose --profile vieneu up`.
-  # Built from upstream (no published image); first start downloads the model.
+  # Built from upstream (no published image) at a pinned commit; bumping the SHA is a
+  # manual, reviewed change. First start downloads the model.
   vieneu:
     profiles: ["vieneu"]
     build:
-      context: https://github.com/pnnbao97/VieNeu-TTS.git
+      context: https://github.com/pnnbao97/VieNeu-TTS.git#04044e1b8f822f946bafb2c88b716459f4164152
       dockerfile: docker/Dockerfile.cpu
     command: ["python", "-m", "apps.openai_speech"]
     environment:

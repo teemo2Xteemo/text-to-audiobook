@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import urllib.request
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 VOICE_PREFIX = "vieneu:"
 LANGUAGE = "vi-VN"
+PROBE_TIMEOUT_SECONDS = 5.0  # voices/health probes; synthesis keeps its own long timeout
+FAILURE_BACKOFF_SECONDS = 30.0
 
 
 def _voice_names(payload: Any) -> list[str]:
@@ -55,29 +58,39 @@ class VieneuTTSProvider:
         self.max_concurrency = max_concurrency
         self._opener = opener or urllib.request.urlopen
         self._voices: list[Voice] | None = None
+        self._failed_at: float | None = None
 
     async def check_available(self) -> None:
         request = urllib.request.Request(f"{self._root}/health", method="GET")
         try:
-            await asyncio.to_thread(open_bytes, self._opener, request, self._timeout)
+            await asyncio.to_thread(open_bytes, self._opener, request, PROBE_TIMEOUT_SECONDS)
         except Exception as exc:
             raise DomainError(
                 ErrorType.PROVIDER_CONFIGURATION_ERROR, "VieNeu-TTS sidecar is not reachable"
             ) from exc
 
     def all_voices(self) -> Sequence[Voice]:
-        # shortcut: blocking GET on first call (local sidecar); failures are not cached.
+        # shortcut: blocking GET on first call (local sidecar, short timeout); failed or
+        # empty fetches are remembered for FAILURE_BACKOFF_SECONDS to bound network attempts.
         if self._voices is None:
+            now = time.monotonic()
+            if self._failed_at is not None and now - self._failed_at < FAILURE_BACKOFF_SECONDS:
+                return []
             request = urllib.request.Request(f"{self._base}/voices", method="GET")
             try:
-                payload = json.loads(open_bytes(self._opener, request, self._timeout))
+                payload = json.loads(open_bytes(self._opener, request, PROBE_TIMEOUT_SECONDS))
             except Exception:
                 logger.warning("vieneu_voices_unavailable", exc_info=True)
+                self._failed_at = now
                 return []
-            self._voices = [
+            voices = [
                 Voice(id=f"{VOICE_PREFIX}{n}", language=LANGUAGE, label=n)
                 for n in _voice_names(payload)
             ]
+            if not voices:
+                self._failed_at = now
+                return []
+            self._voices = voices
         return list(self._voices)
 
     def voices_for(self, language: str) -> Sequence[Voice]:

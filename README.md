@@ -181,7 +181,8 @@ python -m venv .venv
 `docker compose --profile vieneu up` builds and starts the upstream
 [VieNeu-TTS](https://github.com/pnnbao97/VieNeu-TTS) OpenAI-style server (first start downloads the model).
 Set `TTS_PROVIDER=vieneu` (or pick the engine per job); `VIENEU_PRECISION=fp32|int8` and
-`VIENEU_MODEL_DIR` (model cache mount) configure the sidecar. The default `docker compose up` is unchanged.
+`VIENEU_MODEL_DIR` (model cache mount) configure the sidecar. The build is pinned to an upstream commit in `docker-compose.yml`; bumping it is a manual, reviewed change.
+The default `docker compose up` is unchanged.
 
 ## API Reference
 

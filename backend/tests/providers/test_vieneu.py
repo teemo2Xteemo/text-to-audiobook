@@ -102,6 +102,29 @@ def test_voices_object_items_and_failure(tmp_path: Path) -> None:
     assert _provider(tmp_path, FakeOpener(fail=urllib.error.URLError("x"))).all_voices() == []
 
 
+def test_failed_or_empty_fetch_not_retried_in_burst(tmp_path: Path) -> None:
+    for opener in (FakeOpener(fail=urllib.error.URLError("x")), FakeOpener(voices=[])):
+        p = _provider(tmp_path, opener)
+        assert p.all_voices() == [] and p.voices_for("vi-VN") == []
+        assert len(opener.calls) == 1
+
+
+def test_probes_use_short_timeout(tmp_path: Path) -> None:
+    timeouts: list[float | None] = []
+
+    def opener(request: Any, timeout: float | None = None) -> FakeResponse:
+        timeouts.append(timeout)
+        return FakeResponse(b'["A"]' if request.full_url.endswith("/voices") else b"ok")
+
+    p = VieneuTTSProvider(
+        tmp_path, base_url="http://v/v1", model="m", timeout_seconds=300, opener=opener
+    )
+    p.all_voices()
+    asyncio.run(p.check_available())
+    asyncio.run(p.synthesize("hi", "vi-VN", "vieneu:A", TTSSettings()))
+    assert timeouts == [5.0, 5.0, 300]
+
+
 def test_static_properties(tmp_path: Path) -> None:
     p = _provider(tmp_path, FakeOpener())
     assert p.languages() == {"vi-VN"}
