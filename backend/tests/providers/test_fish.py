@@ -100,6 +100,10 @@ def test_request_shape_and_artifact(tmp_path: Path) -> None:
     [
         (401, ErrorType.PROVIDER_CONFIGURATION_ERROR),
         (402, ErrorType.PROVIDER_CONFIGURATION_ERROR),
+        (400, ErrorType.INVALID_INPUT),
+        (404, ErrorType.PROVIDER_CONFIGURATION_ERROR),
+        (413, ErrorType.INVALID_INPUT),
+        (422, ErrorType.INVALID_INPUT),
         (429, ErrorType.PROVIDER_RATE_LIMIT),
         (503, ErrorType.TTS_FAILED),
     ],
@@ -109,6 +113,12 @@ def test_http_errors(tmp_path: Path, code: int, etype: ErrorType) -> None:
         _run(_provider(tmp_path, FakeOpener(fail=_http_error(code))))
     assert ei.value.error_type == etype
     assert ei.value.retry_after_seconds is None
+
+
+def test_402_message_names_quota(tmp_path: Path) -> None:
+    with pytest.raises(DomainError) as ei:
+        _run(_provider(tmp_path, FakeOpener(fail=_http_error(402))))
+    assert "quota" in ei.value.message
 
 
 def test_429_with_retry_after_header(tmp_path: Path) -> None:

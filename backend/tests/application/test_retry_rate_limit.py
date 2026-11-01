@@ -80,3 +80,31 @@ async def test_base_errors_do_not_inflate_rate_limit_backoff() -> None:
     result, waits = await _run_sequence([tts, tts, rl])
     assert result == "ok"
     assert waits == [1.0, 2.0, 5.0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("code", [400, 404, 422])
+async def test_provider_rejection_is_not_retried(code: int) -> None:
+    import urllib.error
+    from email.message import Message
+    from io import BytesIO
+
+    from app.providers.tts.http_errors import map_tts_http_error
+
+    calls: list[int] = []
+
+    async def op() -> None:
+        calls.append(code)
+        raise map_tts_http_error(
+            urllib.error.HTTPError("http://x", code, "err", Message(), BytesIO(b"secret story"))
+        )
+
+    async def sleep(_s: float) -> None:
+        return None
+
+    with pytest.raises(DomainError) as ei:
+        await with_chunk_retry(
+            op, policy=_POLICY, sleep=sleep, job_id="j", chunk_id="c", stage="tts"
+        )
+    assert calls == [code]
+    assert "secret story" not in ei.value.message

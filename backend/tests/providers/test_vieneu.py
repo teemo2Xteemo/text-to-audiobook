@@ -216,6 +216,9 @@ def test_request_shape_and_wav(tmp_path: Path) -> None:
     "exc,etype",
     [
         (_http_error(401), ErrorType.PROVIDER_CONFIGURATION_ERROR),
+        (_http_error(400), ErrorType.INVALID_INPUT),
+        (_http_error(404), ErrorType.PROVIDER_CONFIGURATION_ERROR),
+        (_http_error(422), ErrorType.INVALID_INPUT),
         (_http_error(429), ErrorType.PROVIDER_RATE_LIMIT),
         (_http_error(503), ErrorType.TTS_FAILED),
         (TimeoutError(), ErrorType.TIMEOUT),

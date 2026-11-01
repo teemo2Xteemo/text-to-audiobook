@@ -15,7 +15,22 @@ def map_tts_http_error(exc: Exception) -> DomainError:
         return exc
     if isinstance(exc, urllib.error.HTTPError):
         code = exc.code
-        if code in (401, 402, 403):
+        # Static messages only: provider bodies can echo story text.
+        if code in (400, 413, 422):
+            # The provider rejected this request; retrying the same text cannot succeed.
+            return DomainError(
+                ErrorType.INVALID_INPUT, f"tts provider rejected the request (HTTP {code})"
+            )
+        if code == 404:
+            return DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR, "tts voice or endpoint not found (HTTP 404)"
+            )
+        if code == 402:
+            return DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                "tts provider quota or plan limit reached (HTTP 402)",
+            )
+        if code in (401, 403):
             return DomainError(ErrorType.PROVIDER_CONFIGURATION_ERROR, f"tts HTTP {code}")
         if code == 429:
             return DomainError(
