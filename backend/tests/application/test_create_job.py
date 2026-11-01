@@ -1162,3 +1162,34 @@ def test_create_with_unbuilt_engine_is_configuration_error() -> None:
     with pytest.raises(DomainError) as exc:
         asyncio.run(service.create(_narrate(tts_engine="fish")))
     assert exc.value.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+
+
+@pytest.mark.parametrize("pin", [None, "edge"])
+def test_translate_mode_fish_voice_with_other_engine_is_unsupported(pin: str | None) -> None:
+    command = CreateJobCommand(
+        text="Hello",
+        source_language="en-US",
+        target_language="vi-VN",
+        voice="fish:abc",
+        tts_engine=pin,
+    )
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(_engine_service().create(command))
+    assert exc.value.error_type is ErrorType.UNSUPPORTED_LANGUAGE
+
+
+def test_translate_mode_voice_resolves_against_pinned_engine() -> None:
+    command = CreateJobCommand(
+        text="Hello",
+        source_language="en-US",
+        target_language="vi-VN",
+        voice="fish:abc",
+        tts_engine="fish",
+    )
+    assert asyncio.run(_engine_service().create(command)).voice == "fish:abc"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_tts_engine_means_unpinned(blank: str) -> None:
+    job = asyncio.run(_engine_service().create(_narrate(tts_engine=blank)))
+    assert job.tts_engine is None

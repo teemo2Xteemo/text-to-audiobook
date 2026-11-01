@@ -700,7 +700,8 @@ def test_process_job_pinned_fish_rate_limit_fails_job_keeps_checkpoints_and_neve
     def _build(effective: Settings, **kw: Any) -> PipelineOrchestrator:
         seen["tts_provider"] = effective.tts_provider
         orchestrator = build_orchestrator(effective, **kw)
-        orchestrator._tts = fish
+        if effective.tts_provider == "fish":
+            orchestrator._tts = fish
         orchestrator._audio = FakeAudioProcessor()
         return orchestrator
 

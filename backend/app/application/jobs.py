@@ -104,7 +104,7 @@ class JobService:
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
         output_format = _parse_output_format(command.output_format)
         voice = command.voice.strip() if command.voice and command.voice.strip() else None
-        tts_engine = command.tts_engine.strip().lower() if command.tts_engine else None
+        tts_engine = (command.tts_engine or "").strip().lower() or None
         tts = self._tts
         if tts_engine is not None:
             if tts_engine not in self._tts_engines:
@@ -187,6 +187,8 @@ class JobService:
                     ErrorType.INVALID_INPUT, "srt_timing is only supported in narrate mode"
                 )
             ensure_valid_languages(source_language, target_language)
+            if voice is not None and tts is not None:
+                voice = resolve_voice(tts, target_language, voice)
 
             profile_id = (
                 command.translation_profile_id.strip()

@@ -1133,3 +1133,26 @@ def test_json_and_multipart_carry_the_same_tts_engine(tmp_path: Path) -> None:
             assert status.json()["tts_engine"] == "fish"
         assert bad.status_code == 400
         assert bad.json()["error_type"] == "INVALID_INPUT"
+
+
+def test_translate_cross_engine_voice_is_400_at_create(tmp_path: Path) -> None:
+    from app.domain.audio import Voice
+    from app.providers.tts.fake import FakeTTSProvider
+
+    edge = FakeTTSProvider(voices=[Voice(id="edge-ja", language="ja-JP", label="e")])
+    service = JobService(
+        jobs=InMemoryJobStore(),
+        source_storage=InMemorySourceStorage(),
+        queue=InMemoryQueue(),
+        output_bitrate_kbps=128,
+        storage_path=tmp_path,
+        disk_jobs=FilesystemJobStorage(tmp_path),
+        tts=edge,
+        tts_engines={"fake": edge},
+    )
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.job_service = service
+    with TestClient(app) as client:
+        response = client.post("/api/jobs", json={**VALID_BODY, "voice": "fish:abc"})
+        assert response.status_code == 400
+        assert response.json()["error_type"] == "UNSUPPORTED_LANGUAGE"
