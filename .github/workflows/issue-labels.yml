@@ -1,0 +1,61 @@
+name: Issue labels
+
+# Maps issue-form dropdowns (Priority, Impact) to labels when an issue is opened.
+# Only on "opened": after that, triage owns the labels and body edits do not override them.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            // Body is untrusted: read it here, never interpolate it into a shell step.
+            const { body = '', labels: current = [] } = context.payload.issue;
+            const hasLabel = (name) => current.some((l) => l.name === name);
+
+            // Exact dropdown option text → label. Keep in sync with .github/ISSUE_TEMPLATE/*.yml.
+            // Free text can quote a heading + option; if that yields conflicting values, skip and let triage decide.
+            const DROPDOWNS = {
+              Priority: {
+                form: 'enhancement',
+                options: {
+                  'P0 — blocks core use, do now': 'P0',
+                  'P1 — important, next milestone': 'P1',
+                  'P2 — nice to have': 'P2',
+                },
+              },
+              Impact: {
+                form: 'bug',
+                options: {
+                  'Blocker — jobs cannot complete, no workaround': 'severity:blocker',
+                  'Major — wrong output or failures, workaround exists': 'severity:major',
+                  'Minor — cosmetic or rare edge case': 'severity:minor',
+                },
+              },
+            };
+
+            const labels = [];
+            for (const [heading, { form, options }] of Object.entries(DROPDOWNS)) {
+              if (!hasLabel(form)) continue;
+              const re = new RegExp(`^### ${heading}[ \\t]*\\r?\\n\\s*(.+?)[ \\t\\r]*$`, 'gm');
+              const values = new Set(
+                [...(body ?? '').matchAll(re)].map((m) => m[1]).filter((v) => Object.hasOwn(options, v)),
+              );
+              if (values.size === 1) labels.push(options[[...values][0]]);
+            }
+
+            if (labels.length) {
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: context.payload.issue.number,
+                labels,
+              });
+            }
