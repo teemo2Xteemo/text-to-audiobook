@@ -1721,6 +1721,13 @@ class _VoiceServiceTTS(FakeTTSProvider):
 
     down = True
 
+    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.refreshes: list[float] = []
+
+    async def refresh_voices(self, *, backoff_seconds: float = 30.0) -> None:
+        self.refreshes.append(backoff_seconds)
+
     def all_voices(self):  # type: ignore[no-untyped-def]
         return [] if self.down else super().all_voices()
 
@@ -1741,6 +1748,9 @@ def test_voice_service_blip_is_retried_not_unsupported_language(tmp_path: Path) 
     orchestrator, workspace, *_ = _orchestrator(tmp_path, job=job, tts=tts, sleep=recover)  # type: ignore[arg-type]
     result = _run(orchestrator, job, workspace)
     assert result.status is JobStatus.COMPLETED
+    # each selection attempt re-fetches voices first, without the capabilities backoff
+    assert tts.refreshes and set(tts.refreshes) == {0}
+    assert len(tts.refreshes) >= 2
 
 
 def test_voice_service_down_persistently_fails_with_tts_failed(tmp_path: Path) -> None:

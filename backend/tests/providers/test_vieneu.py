@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import urllib.error
 from email.message import Message
 from io import BytesIO
@@ -25,9 +26,10 @@ from typing import Any
 
 import pytest
 
+import app.providers.tts.vieneu as vieneu_module
 from app.domain.audio import TTSSettings
 from app.domain.errors import DomainError, ErrorType
-from app.providers.tts.vieneu import VieneuTTSProvider
+from app.providers.tts.vieneu import CAPABILITIES_BACKOFF_SECONDS, VieneuTTSProvider
 
 
 class FakeResponse:
@@ -82,31 +84,93 @@ def _run(p: VieneuTTSProvider, text: str = "Xin chào", voice: str = "vieneu:Mai
     return asyncio.run(p.synthesize(text, "vi-VN", voice, TTSSettings(speed=1.2)))
 
 
-def test_voices_namespaced_lazy_and_cached(tmp_path: Path) -> None:
+def _refresh(p: VieneuTTSProvider, **kw: Any) -> None:
+    asyncio.run(p.refresh_voices(**kw))
+
+
+def test_all_voices_does_no_io(tmp_path: Path) -> None:
     opener = FakeOpener()
     p = _provider(tmp_path, opener)
+    assert p.all_voices() == [] and p.voices_for("vi-VN") == []
     assert opener.calls == []
+
+
+def test_voices_namespaced_and_cached_after_refresh(tmp_path: Path) -> None:
+    opener = FakeOpener()
+    p = _provider(tmp_path, opener)
+    _refresh(p)
     assert [(v.id, v.language) for v in p.voices_for("vi-VN")] == [
         ("vieneu:Mai Anh", "vi-VN"),
         ("vieneu:Bao", "vi-VN"),
     ]
     assert p.voices_for("en-US") == []
-    p.all_voices()
+    _refresh(p)
     assert len(opener.calls) == 1
     assert opener.calls[0].full_url == "http://vieneu:8000/v1/voices"
 
 
 def test_voices_object_items_and_failure(tmp_path: Path) -> None:
     p = _provider(tmp_path, FakeOpener(voices=[{"id": "A"}, {"name": "B"}]))
+    _refresh(p)
     assert [v.id for v in p.all_voices()] == ["vieneu:A", "vieneu:B"]
-    assert _provider(tmp_path, FakeOpener(fail=urllib.error.URLError("x"))).all_voices() == []
+    bad = _provider(tmp_path, FakeOpener(fail=urllib.error.URLError("x")))
+    _refresh(bad)  # never raises
+    assert bad.all_voices() == []
 
 
-def test_failed_or_empty_fetch_not_retried_in_burst(tmp_path: Path) -> None:
+def test_refresh_voices_runs_off_loop_thread(tmp_path: Path) -> None:
+    threads: list[int] = []
+
+    def opener(request: Any, timeout: float | None = None) -> FakeResponse:
+        threads.append(threading.get_ident())
+        return FakeResponse(b'["A"]')
+
+    p = VieneuTTSProvider(
+        tmp_path, base_url="http://v/v1", model="m", timeout_seconds=5, opener=opener
+    )
+    _refresh(p)
+    assert threads and threads[0] != threading.get_ident()
+    assert [v.id for v in p.all_voices()] == ["vieneu:A"]
+
+
+def test_failure_backoff_counts_from_after_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(vieneu_module.time, "monotonic", lambda: clock[0])
+    calls: list[Any] = []
+
+    def opener(request: Any, timeout: float | None = None) -> FakeResponse:
+        calls.append(request)
+        clock[0] += 5.0  # a probe that hangs until its timeout
+        raise urllib.error.URLError("hung")
+
+    p = VieneuTTSProvider(
+        tmp_path, base_url="http://v/v1", model="m", timeout_seconds=5, opener=opener
+    )
+    _refresh(p)
+    clock[0] += 1.0
+    _refresh(p)
+    assert len(calls) == 1
+    clock[0] += CAPABILITIES_BACKOFF_SECONDS
+    _refresh(p)
+    assert len(calls) == 2
+
+
+def test_failed_or_empty_fetch_backs_off(tmp_path: Path) -> None:
     for opener in (FakeOpener(fail=urllib.error.URLError("x")), FakeOpener(voices=[])):
         p = _provider(tmp_path, opener)
-        assert p.all_voices() == [] and p.voices_for("vi-VN") == []
-        assert len(opener.calls) == 1
+        _refresh(p)
+        _refresh(p)
+        assert p.all_voices() == [] and len(opener.calls) == 1
+
+
+def test_refresh_backoff_zero_always_refetches(tmp_path: Path) -> None:
+    opener = FakeOpener(fail=urllib.error.URLError("x"))
+    p = _provider(tmp_path, opener)
+    _refresh(p)
+    _refresh(p, backoff_seconds=0)
+    assert len(opener.calls) == 2
 
 
 def test_probes_use_short_timeout(tmp_path: Path) -> None:
@@ -119,8 +183,7 @@ def test_probes_use_short_timeout(tmp_path: Path) -> None:
     p = VieneuTTSProvider(
         tmp_path, base_url="http://v/v1", model="m", timeout_seconds=300, opener=opener
     )
-    p.all_voices()
-    asyncio.run(p.check_available())
+    asyncio.run(p.check_available())  # health + voices refresh
     asyncio.run(p.synthesize("hi", "vi-VN", "vieneu:A", TTSSettings()))
     assert timeouts == [5.0, 5.0, 300]
 
@@ -162,7 +225,6 @@ def test_request_shape_and_wav(tmp_path: Path) -> None:
 def test_error_mapping(tmp_path: Path, exc: BaseException, etype: ErrorType) -> None:
     opener = FakeOpener(voices=["Mai Anh"])
     p = _provider(tmp_path, opener)
-    p.all_voices()
     opener.fail = exc
     with pytest.raises(DomainError) as ei:
         _run(p)

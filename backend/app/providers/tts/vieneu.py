@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 VOICE_PREFIX = "vieneu:"
 LANGUAGE = "vi-VN"
 PROBE_TIMEOUT_SECONDS = 5.0  # voices/health probes; synthesis keeps its own long timeout
-FAILURE_BACKOFF_SECONDS = 2.0  # short enough that chunk retries can re-fetch voices
+CAPABILITIES_BACKOFF_SECONDS = 30.0  # after a failed voices fetch; chunk retries pass 0
 
 
 def _voice_names(payload: Any) -> list[str]:
@@ -68,30 +68,32 @@ class VieneuTTSProvider:
             raise DomainError(
                 ErrorType.PROVIDER_CONFIGURATION_ERROR, "VieNeu-TTS sidecar is not reachable"
             ) from exc
+        await self.refresh_voices()
+
+    async def refresh_voices(
+        self, *, backoff_seconds: float = CAPABILITIES_BACKOFF_SECONDS
+    ) -> None:
+        """Fetch ``/voices`` off the event loop; never raises. Failed or empty fetches are
+        not retried until ``backoff_seconds`` after the failed probe returned."""
+        if self._voices is not None:
+            return
+        if self._failed_at is not None and time.monotonic() - self._failed_at < backoff_seconds:
+            return
+        request = urllib.request.Request(f"{self._base}/voices", method="GET")
+        try:
+            raw = await asyncio.to_thread(open_bytes, self._opener, request, PROBE_TIMEOUT_SECONDS)
+            names = _voice_names(json.loads(raw))
+        except Exception:
+            logger.warning("vieneu_voices_unavailable", exc_info=True)
+            names = []
+        if not names:
+            self._failed_at = time.monotonic()
+            return
+        self._voices = [Voice(id=f"{VOICE_PREFIX}{n}", language=LANGUAGE, label=n) for n in names]
 
     def all_voices(self) -> Sequence[Voice]:
-        # shortcut: blocking GET on first call (local sidecar, short timeout); failed or
-        # empty fetches are remembered for FAILURE_BACKOFF_SECONDS to bound network attempts.
-        if self._voices is None:
-            now = time.monotonic()
-            if self._failed_at is not None and now - self._failed_at < FAILURE_BACKOFF_SECONDS:
-                return []
-            request = urllib.request.Request(f"{self._base}/voices", method="GET")
-            try:
-                payload = json.loads(open_bytes(self._opener, request, PROBE_TIMEOUT_SECONDS))
-            except Exception:
-                logger.warning("vieneu_voices_unavailable", exc_info=True)
-                self._failed_at = now
-                return []
-            voices = [
-                Voice(id=f"{VOICE_PREFIX}{n}", language=LANGUAGE, label=n)
-                for n in _voice_names(payload)
-            ]
-            if not voices:
-                self._failed_at = now
-                return []
-            self._voices = voices
-        return list(self._voices)
+        """Cached voices only (no I/O); ``refresh_voices`` fills the cache."""
+        return list(self._voices or [])
 
     def voices_for(self, language: str) -> Sequence[Voice]:
         return [v for v in self.all_voices() if v.language == language]

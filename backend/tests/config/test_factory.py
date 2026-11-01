@@ -749,6 +749,8 @@ def test_factory_wires_job_service_and_capabilities_for_narrate(tmp_path: Path) 
         ("fake", {}, "fake"),
         ("fish", {"fish_audio_model": "s2.1-pro-free"}, "s2.1-pro-free"),
         ("vieneu", {"vieneu_precision": "int8"}, "vieneu-v3-turbo:int8"),
+        ("vieneu", {}, "vieneu-v3-turbo:fp32"),
+        ("vieneu", {"vieneu_model": "m2", "vieneu_precision": "int8"}, "m2:int8"),
     ],
 )
 def test_tts_model_identity(provider, extra, expected):

@@ -629,7 +629,7 @@ def tts_model_identity(settings: Settings) -> str:
     if tts == "fish":
         return settings.fish_audio_model
     if tts == "vieneu":
-        return f"vieneu-v3-turbo:{settings.vieneu_precision}"
+        return f"{settings.vieneu_model}:{settings.vieneu_precision}"
     return tts
 
 

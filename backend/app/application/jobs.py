@@ -12,7 +12,7 @@ try:
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
-from app.application.capabilities import engine_available, engine_label
+from app.application.capabilities import engine_available, engine_label, refresh_engine_voices
 from app.application.pipeline.parse import is_srt_document, strip_srt
 from app.application.pipeline.tts import resolve_voice
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
@@ -126,6 +126,8 @@ class JobService:
                     ErrorType.PROVIDER_CONFIGURATION_ERROR,
                     f"{engine_label(tts_engine)} is not available right now",
                 )
+        if tts is not None:
+            await refresh_engine_voices(tts)
         if command.normalize_text and command.mode is not JobMode.NARRATE:
             # Translate already runs an LLM; a second rewrite would also stretch SRT timing.
             raise DomainError(

@@ -184,6 +184,11 @@ Set `TTS_PROVIDER=vieneu` (or pick the engine per job); `VIENEU_PRECISION=fp32|i
 `VIENEU_MODEL_DIR` (model cache mount) configure the sidecar. The build is pinned to an upstream commit in `docker-compose.yml`; bumping it is a manual, reviewed change.
 The default `docker compose up` is unchanged.
 
+**Long books on CPU.** The sidecar runs at roughly RTF 0.5–0.7 on a 4-core CPU, so the default
+`RQ_JOB_TIMEOUT_SECONDS=1800` covers only about 45–60 minutes of audio. Raise it for book-length
+VieNeu jobs. A job killed by the timeout ends `FAILED` with `TIMEOUT`; `POST /api/jobs/{job_id}/retry`
+resumes from checkpoints and does not regenerate finished chunks.
+
 ## API Reference
 
 The FastAPI backend exposes endpoints for capabilities discovery, pre-submit script analysis and voice auditions, asynchronous job lifecycle management, and audio/subtitle downloads.

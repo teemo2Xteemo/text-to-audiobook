@@ -101,6 +101,7 @@ class CapabilitiesService:
         )
 
     async def get(self, language: str | None = None) -> Capabilities:
+        await refresh_engine_voices(self._tts)
         languages = _intersection_languages(self._translation, self._tts)
         # Checks run concurrently; each provider bounds its own probe (VieNeu: 5 s).
         names = list(self._tts_engines)
@@ -142,6 +143,13 @@ class CapabilitiesService:
             estimate_defaults=dict(self._estimate_defaults),
             tts_engines=infos,
         )
+
+
+async def refresh_engine_voices(provider: TTSProvider) -> None:
+    """Let providers with remote voice lists (VieNeu) fetch them off the event loop."""
+    refresh = getattr(provider, "refresh_voices", None)
+    if refresh is not None:
+        await refresh()
 
 
 async def _no() -> bool:

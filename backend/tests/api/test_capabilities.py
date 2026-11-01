@@ -285,3 +285,53 @@ def test_probe_raising_unexpected_error_is_unavailable_not_500(tmp_path: Path) -
     assert res.status_code == 200
     engines = {e["id"]: e["available"] for e in res.json()["tts_engines"]}
     assert engines == {"fake": True, "fish": False}
+
+
+def test_capabilities_with_hung_vieneu_does_not_block_loop(tmp_path: Path) -> None:
+    import asyncio
+    import time
+    import urllib.error
+
+    from app.providers.tts.vieneu import VieneuTTSProvider
+
+    class _Ok:
+        def __enter__(self) -> "_Ok":
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"ok"
+
+    def hung(request: object, timeout: float | None = None) -> object:
+        if request.full_url.endswith("/health"):  # type: ignore[attr-defined]
+            return _Ok()
+        time.sleep(0.3)  # /voices hangs: must block its own thread only
+        raise urllib.error.URLError("hung")
+
+    vieneu = VieneuTTSProvider(
+        tmp_path, base_url="http://v/v1", model="m", timeout_seconds=5, opener=hung
+    )
+    service = CapabilitiesService(
+        translation=FakeTranslationProvider(languages=["en-US"]),
+        tts=FakeTTSProvider(),
+        tts_engines={"fake": FakeTTSProvider(), "vieneu": vieneu},
+    )
+    ticks: list[float] = []
+
+    async def ticker() -> None:
+        for _ in range(5):
+            await asyncio.sleep(0.02)
+            ticks.append(time.monotonic())
+
+    async def main() -> tuple[object, float]:
+        tick_task = asyncio.create_task(ticker())
+        caps = await service.get()
+        done = time.monotonic()
+        await tick_task
+        return caps, done
+
+    caps, done = asyncio.run(main())
+    assert len(ticks) == 5 and ticks[-1] < done  # loop kept running during the probe
+    assert all(v.engine != "vieneu" for v in caps.voices)  # type: ignore[attr-defined]
