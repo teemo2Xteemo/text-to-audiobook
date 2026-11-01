@@ -1,0 +1,3 @@
+# Issues opened in the web UI must use a form, so they arrive with impact and acceptance criteria.
+# Issues from `gh issue create` / the API skip forms and get no priority/severity label.
+blank_issues_enabled: false

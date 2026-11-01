@@ -1,0 +1,63 @@
+name: Bug report
+description: A job fails, produces wrong audio/text, or the UI/API misbehaves.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not paste API keys, `.env` contents or private story text. Redact them."
+  # The label "Impact" and option texts are matched verbatim by .github/workflows/issue-labels.yml.
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Impact
+      options:
+        - Blocker — jobs cannot complete, no workaround
+        - Major — wrong output or failures, workaround exists
+        - Minor — cosmetic or rare edge case
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Actual vs expected behavior. Include the error shown in the UI or API response.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Upload a 2 MB GBK .txt
+        2. Mode: narrate, source: auto
+        3. Job fails at chunk 12
+    validations:
+      required: true
+  - type: input
+    id: regression
+    attributes:
+      label: Did this work before?
+      description: Last known good commit/tag, or "never worked" / "unknown".
+  - type: input
+    id: workaround
+    attributes:
+      label: Workaround
+      placeholder: "e.g. retry after deleting the job folder"
+  - type: textarea
+    id: job
+    attributes:
+      label: Job details
+      description: Fill in what applies.
+      value: |
+        - Mode (translate / narrate):
+        - Source / target language:
+        - Input type (text / .txt / .srt / .vtt) and size:
+        - Translation / TTS provider and voice:
+        - Job id:
+        - Commit or image tag:
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Worker/API log lines around the failure (redacted).
+      render: text
