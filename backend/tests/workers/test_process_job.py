@@ -728,3 +728,65 @@ def test_process_job_pinned_fish_rate_limit_fails_job_keeps_checkpoints_and_neve
     assert checkpoints, "finished chunks must stay checkpointed"
     assert len(json.loads(checkpoints[0].read_text())) >= 1
     assert edge_calls == []
+
+
+def test_process_job_narrate_retry_resumes_unfinished_chunks_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.audio import Voice
+    from app.domain.errors import DomainError, ErrorType
+    from app.infrastructure.rq_queue import RQJobQueue
+
+    job = Job(
+        id="eeee1111-2222-3333-4444-555566667777",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="en-US",
+        voice="voice-en",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    _persist_job(tmp_path, job, "\n\n".join(f"Paragraph {i}. " + "word " * 25 for i in range(5)))
+    settings = Settings(
+        _env_file=None, storage_path=tmp_path, chunk_max_chars=100, chunk_tts_concurrency=1
+    )
+    voices = [Voice(id="voice-en", language="en-US", label="v")]
+
+    class _FailsAfterTwo(FakeTTSProvider):
+        async def synthesize(self, text: str, language: str, voice: str, settings: Any) -> Any:
+            if len(self.calls) >= 2:
+                raise DomainError(ErrorType.INVALID_INPUT, "boom")  # non-retryable
+            return await super().synthesize(text, language, voice, settings)
+
+    failing = _FailsAfterTwo(voices=voices, output_dir=tmp_path / "tts-1")
+    healthy = FakeTTSProvider(voices=voices, output_dir=tmp_path / "tts-2")
+    current = {"tts": failing}
+
+    def _build(effective: Settings, **kw: Any) -> PipelineOrchestrator:
+        orchestrator = build_orchestrator(effective, **kw)
+        orchestrator._tts = current["tts"]
+        orchestrator._audio = FakeAudioProcessor()
+        return orchestrator
+
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", _build)
+    monkeypatch.setattr(RQJobQueue, "_enqueue_sync", lambda self, job_id: None)
+
+    process_job(job.id)
+    failed = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job.id))
+    assert failed is not None and failed.status is JobStatus.FAILED
+    assert len(failing.calls) == 2  # the third call raised before being recorded
+
+    current["tts"] = healthy
+    retried = asyncio.run(build_job_service(settings).retry(job.id))
+    assert retried.status is JobStatus.QUEUED
+    process_job(job.id)
+
+    done = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job.id))
+    assert done is not None and done.status is JobStatus.COMPLETED
+    first_texts = {call[0] for call in failing.calls}
+    assert len(healthy.calls) > 0
+    assert not first_texts & {call[0] for call in healthy.calls}  # finished chunks not redone
+    assert (tmp_path / "jobs" / job.id / "output.mp3").is_file()

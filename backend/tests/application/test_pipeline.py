@@ -4,6 +4,7 @@ import ast
 import asyncio
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -1198,7 +1199,7 @@ def test_narrate_writes_no_translation_cache_entries(tmp_path: Path) -> None:
 def test_narrate_job_resumes_from_checkpoints_after_failure(tmp_path: Path) -> None:
     text = "Một câu. Hai câu. Ba câu. Bốn câu. Năm câu."
     chunks = chunk_text(text, max_chars=20)
-    assert len(chunks) >= 3
+    assert len(chunks) == 3
     job = _narrate_vi_job("test-narrate-resume-1")
     voices = _voices_for("vi-VN")
     flaky = _FlakyByTextTTS(
@@ -1213,9 +1214,18 @@ def test_narrate_job_resumes_from_checkpoints_after_failure(tmp_path: Path) -> N
     first = _run(orchestrator, job, workspace, text=text)
     assert first.status is JobStatus.FAILED
 
+    # Mirror JobService.retry: FAILED -> QUEUED with progress and error cleared.
+    resume_job = replace(
+        first,
+        status=JobStatus.QUEUED,
+        chunk_current=0,
+        chunk_total=0,
+        error_type=None,
+        message=None,
+        recovery_attempts=0,
+    )
     healthy_tts = FakeTTSProvider(voices, tmp_path / "tts-scratch-2")
-    resume_job = _narrate_vi_job("test-narrate-resume-1", status=JobStatus.GENERATING_AUDIO)
-    orchestrator2, workspace2, translation2, *_ = _orchestrator(
+    orchestrator2, workspace2, *_ = _orchestrator(
         tmp_path,
         job=resume_job,
         languages=["vi-VN"],
@@ -1229,7 +1239,7 @@ def test_narrate_job_resumes_from_checkpoints_after_failure(tmp_path: Path) -> N
 
     assert second.status is JobStatus.COMPLETED
     assert len(translation.calls) == 0  # across both runs
-    assert len(healthy_tts.calls) == second.chunk_total - 2  # finished chunks not re-synthesized
+    assert [call[0] for call in healthy_tts.calls] == [c.text for c in chunks[2:]]
     assert (workspace / "output.mp3").is_file()
 
 
