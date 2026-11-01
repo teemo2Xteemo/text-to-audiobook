@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     text_normalizer_provider: str = Field(default="none")
     retry_max_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
+    retry_rate_limit_max_attempts: int = Field(default=6, ge=1)
+    retry_rate_limit_backoff_seconds: float = Field(default=5.0, ge=0.0)
     max_recovery_attempts: int = Field(default=3, ge=1)
     rq_job_timeout_seconds: int = Field(default=1800, ge=1)
 

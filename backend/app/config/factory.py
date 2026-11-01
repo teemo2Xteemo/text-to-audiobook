@@ -357,6 +357,8 @@ def build_orchestrator(
         retry_policy=RetryPolicy(
             max_attempts=settings.retry_max_attempts,
             backoff_seconds=settings.retry_backoff_seconds,
+            rate_limit_max_attempts=settings.retry_rate_limit_max_attempts,
+            rate_limit_backoff_seconds=settings.retry_rate_limit_backoff_seconds,
         ),
         translation_concurrency=settings.chunk_translation_concurrency,
         tts_concurrency=settings.chunk_tts_concurrency,
