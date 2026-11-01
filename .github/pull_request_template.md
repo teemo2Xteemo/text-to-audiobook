@@ -10,8 +10,8 @@ Closes #
 1.
 
 ## Tests
-- Backend: `pytest -m "not integration"` → ; `ruff check` / `ruff format --check` clean
-- Frontend: `npm test` → ; `npm run typecheck` clean
+- Backend: `pytest -m "not integration"` (repo root) → ; `cd backend && ruff check . && ruff format --check .` clean
+- Frontend: `cd frontend && npm run typecheck && npm test` →
 - Not run: <!-- e.g. real Edge TTS / FFmpeg / LLM end to end -->
 
 ## Risk, deploy & rollback

@@ -12,6 +12,7 @@ permissions:
 jobs:
   label:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
       - uses: actions/github-script@v7
         with:
@@ -21,7 +22,7 @@ jobs:
             const hasLabel = (name) => current.some((l) => l.name === name);
 
             // Exact dropdown option text → label. Keep in sync with .github/ISSUE_TEMPLATE/*.yml.
-            // Only exact option lines count, so free text that quotes a "### Priority" heading is ignored.
+            // Free text can quote a heading + option; if that yields conflicting values, skip and let triage decide.
             const DROPDOWNS = {
               Priority: {
                 form: 'enhancement',
@@ -45,10 +46,10 @@ jobs:
             for (const [heading, { form, options }] of Object.entries(DROPDOWNS)) {
               if (!hasLabel(form)) continue;
               const re = new RegExp(`^### ${heading}[ \\t]*\\r?\\n\\s*(.+?)[ \\t\\r]*$`, 'gm');
-              const value = [...(body ?? '').matchAll(re)]
-                .map((m) => m[1])
-                .find((v) => Object.hasOwn(options, v));
-              if (value) labels.push(options[value]);
+              const values = new Set(
+                [...(body ?? '').matchAll(re)].map((m) => m[1]).filter((v) => Object.hasOwn(options, v)),
+              );
+              if (values.size === 1) labels.push(options[[...values][0]]);
             }
 
             if (labels.length) {
