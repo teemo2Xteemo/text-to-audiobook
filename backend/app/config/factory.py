@@ -474,6 +474,20 @@ def build_tts_provider(settings: Settings) -> TTSProvider:
             max_chars=settings.edge_tts_max_chars,
             timeout_seconds=settings.edge_tts_timeout_seconds,
         )
+    if name == "fish":
+        from app.providers.tts.fish import FishTTSProvider, parse_fish_voices
+
+        key = settings.fish_audio_api_key
+        # A missing key must not fail the build: capabilities reports it via check_available().
+        return FishTTSProvider(
+            output_dir=_tts_tmp_dir(settings.storage_path),
+            api_key=key.get_secret_value() if key else None,
+            base_url=settings.fish_audio_base_url,
+            model=settings.fish_audio_model,
+            voices=parse_fish_voices(settings.fish_audio_voices),
+            timeout_seconds=settings.fish_audio_http_timeout_seconds,
+            max_concurrency=settings.fish_audio_max_concurrency,
+        )
     raise UnknownProviderError(f"unknown TTS_PROVIDER: {settings.tts_provider}")
 
 
