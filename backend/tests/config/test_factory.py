@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import sys
 from pathlib import Path
 
@@ -733,7 +734,7 @@ def test_factory_wires_job_service_and_capabilities_for_narrate(tmp_path: Path) 
     assert job_service._detector is not None
 
     capabilities_service = build_capabilities_service(settings)
-    caps = capabilities_service.get()
+    caps = asyncio.run(capabilities_service.get())
     assert len(caps.narrate_languages) > 0
     assert caps.estimate_defaults == {
         "chars_per_second": 18.5,

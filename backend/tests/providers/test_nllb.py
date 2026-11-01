@@ -60,7 +60,7 @@ def test_bcp47_mapping_covers_demo_and_another_pair() -> None:
 def test_nllb_fake_tts_capabilities_are_not_a_single_pair(tmp_path: Path) -> None:
     translation = NllbTranslationProvider(model_id="test-model", engine=FakeNllbEngine())
     tts = FakeTTSProvider(output_dir=tmp_path)
-    languages = CapabilitiesService(translation=translation, tts=tts).get().languages
+    languages = asyncio.run(CapabilitiesService(translation=translation, tts=tts).get()).languages
     assert "zh-CN" in languages
     assert "vi-VN" in languages
     assert "ja-JP" in languages

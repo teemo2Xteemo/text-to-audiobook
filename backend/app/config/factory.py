@@ -315,11 +315,14 @@ def build_available_translation_profiles(settings: Settings) -> list[Translation
 
 def build_capabilities_service(settings: Settings) -> CapabilitiesService:
     translation = build_translation_provider(settings)
-    tts = build_tts_provider(settings)
+    engines = build_tts_engines(settings)
+    default_engine = settings.tts_provider.strip().lower()
     profiles = build_available_translation_profiles(settings)
     return CapabilitiesService(
         translation=translation,
-        tts=tts,
+        tts=engines.get(default_engine) or build_tts_provider(settings),
+        tts_engines=engines,
+        default_tts_engine=default_engine,
         translation_profiles=profiles,
         estimate_defaults={
             "chars_per_second": float(settings.estimate_chars_per_second),

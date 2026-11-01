@@ -14,6 +14,7 @@ from app.api.deps import (
     get_job_service,
     get_language_detector,
     get_settings,
+    get_tts_engines,
     get_tts_provider,
 )
 from app.api.errors import envelope
@@ -28,8 +29,10 @@ from app.api.schemas import (
     TTSPreviewRequest,
     TTSPreviewResponse,
 )
+from app.application.capabilities import engine_label
 from app.application.jobs import JobService
 from app.application.pipeline.chapters import split_chapters
+from app.config.factory import build_artifact_cache
 from app.config.settings import Settings
 from app.domain.audio import TTSSettings, ensure_valid_speed
 from app.domain.errors import DomainError, ErrorType
@@ -306,6 +309,7 @@ async def tts_preview(
     request: Request,
     settings: Settings = Depends(get_settings),
     tts: TTSProvider = Depends(get_tts_provider),
+    engines: dict[str, TTSProvider | None] = Depends(get_tts_engines),
 ) -> TTSPreviewResponse:
     if not req.text.strip():
         raise DomainError(ErrorType.INVALID_INPUT, "text is required")
@@ -318,24 +322,57 @@ async def tts_preview(
 
     preview_text = truncate_preview_text(req.text.strip())
 
-    try:
-        async with asyncio.timeout(float(settings.tts_preview_timeout_seconds)):
-            artifact = await tts.synthesize(
-                preview_text,
-                language="",
-                voice=req.voice,
-                settings=TTSSettings(speed=req.speed),
+    engine = (req.tts_engine or "").strip().lower() or None
+    pin_settings = settings
+    if engine is not None:
+        if engine not in engines:
+            raise DomainError(ErrorType.INVALID_INPUT, f"tts_engine is not enabled: {engine[:32]}")
+        pinned = engines[engine]
+        if pinned is None:
+            raise DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                f"{engine_label(engine)} is not available right now",
             )
-    except TimeoutError as exc:
-        raise DomainError(ErrorType.TIMEOUT, "TTS preview timed out") from exc
+        tts = pinned
+        pin_settings = settings.model_copy(update={"tts_provider": engine})
 
-    if not artifact.path.is_file():
-        raise DomainError(ErrorType.STORAGE_FAILED, "synthesized audio artifact missing")
-
+    # Identity follows the engine, so a cached Edge clip never answers a Fish preview.
+    cache = build_artifact_cache(pin_settings)
+    tts_settings = TTSSettings(speed=req.speed)
+    cache_args = {
+        "text": preview_text,
+        "source_language": "",
+        "target_language": "",
+        "voice": req.voice,
+        "settings": tts_settings,
+        "job_id": "preview",
+        "chunk_id": "preview",
+    }
+    cached = settings.storage_path / ".provider-tmp" / "tts" / f"preview-{uuid.uuid4().hex}"
+    cached.parent.mkdir(parents=True, exist_ok=True)
     try:
-        audio_bytes = artifact.path.read_bytes()
+        if cache.fill_tts(destination=cached, **cache_args):
+            audio_bytes = cached.read_bytes()
+        else:
+            try:
+                async with asyncio.timeout(float(settings.tts_preview_timeout_seconds)):
+                    artifact = await tts.synthesize(
+                        preview_text,
+                        language="",
+                        voice=req.voice,
+                        settings=tts_settings,
+                    )
+            except TimeoutError as exc:
+                raise DomainError(ErrorType.TIMEOUT, "TTS preview timed out") from exc
+            if not artifact.path.is_file():
+                raise DomainError(ErrorType.STORAGE_FAILED, "synthesized audio artifact missing")
+            try:
+                audio_bytes = artifact.path.read_bytes()
+                cache.store_tts(source=artifact.path, **cache_args)
+            finally:
+                artifact.path.unlink(missing_ok=True)
     finally:
-        artifact.path.unlink(missing_ok=True)
+        cached.unlink(missing_ok=True)
 
     audio_base64 = base64.b64encode(audio_bytes).decode("ascii")
     return TTSPreviewResponse(audio_base64=audio_base64, mime_type="audio/mpeg")

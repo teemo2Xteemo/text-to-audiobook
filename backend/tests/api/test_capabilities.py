@@ -121,7 +121,9 @@ def test_capabilities_filters_voices_by_language(capabilities_client: TestClient
     assert response.status_code == 200
     body = response.json()
     assert body["languages"] == ["en-US", "ja-JP"]
-    assert body["voices"] == [{"id": "fake-ja", "language": "ja-JP", "label": "Japanese"}]
+    assert body["voices"] == [
+        {"id": "fake-ja", "language": "ja-JP", "label": "Japanese", "engine": "fake"}
+    ]
 
 
 def test_capabilities_unknown_language_returns_empty_voices(
@@ -244,3 +246,23 @@ def test_build_text_normalizer_reuses_chat_provider_settings(tmp_path: Path) -> 
     pinned_identity = cache_identity_from_settings(pinned, normalizer_settings=configured)
     assert pinned_identity.translation_model == "other/model"
     assert pinned_identity.normalizer_model == f"{model}#prompt-v1"
+
+
+def test_fish_without_key_is_reported_unavailable_with_200(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        tts_provider="fake",
+        translation_provider="fake",
+        tts_engines_enabled="fish",
+        fish_audio_api_key=None,
+        fish_audio_voices="vi-VN=ref1:Lan",
+    )
+    with TestClient(create_app(settings)) as client:
+        res = client.get("/api/capabilities")
+    assert res.status_code == 200
+    engines = {e["id"]: e for e in res.json()["tts_engines"]}
+    assert engines["fish"]["available"] is False
+    assert engines["fish"]["label"] == "Fish Audio"
+    assert engines["fake"]["available"] is True
+    assert all(v["engine"] != "fish" for v in res.json()["voices"])

@@ -1193,3 +1193,18 @@ def test_translate_mode_voice_resolves_against_pinned_engine() -> None:
 def test_blank_tts_engine_means_unpinned(blank: str) -> None:
     job = asyncio.run(_engine_service().create(_narrate(tts_engine=blank)))
     assert job.tts_engine is None
+
+
+def test_create_fails_preflight_when_pinned_engine_check_fails() -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    class _Down(FakeTTSProvider):
+        async def check_available(self) -> None:
+            raise DomainError(ErrorType.PROVIDER_CONFIGURATION_ERROR, "no key")
+
+    service = _engine_service()
+    service._tts_engines = {**service._tts_engines, "fish": _Down()}
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(service.create(_narrate(tts_engine="fish")))
+    assert exc.value.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert exc.value.message == "Fish Audio is not available right now"

@@ -12,6 +12,7 @@ try:
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
+from app.application.capabilities import engine_available, engine_label
 from app.application.pipeline.parse import is_srt_document, strip_srt
 from app.application.pipeline.tts import resolve_voice
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
@@ -91,6 +92,7 @@ class JobService:
         )
         self._tts = tts
         self._tts_engines = tts_engines if tts_engines is not None else {default_tts_engine: tts}
+        self._default_tts_engine = default_tts_engine
         self._detector = detector
         self._language_confirm_threshold = language_confirm_threshold
         self._text_normalization_available = text_normalization_available
@@ -111,12 +113,18 @@ class JobService:
                 raise DomainError(
                     ErrorType.INVALID_INPUT, f"tts_engine is not enabled: {tts_engine[:32]}"
                 )
-            tts = self._tts_engines[tts_engine]
-            if tts is None:  # Task 6 preflight refines this message.
+            pinned = self._tts_engines[tts_engine]
+            if pinned is None:
                 raise DomainError(
                     ErrorType.PROVIDER_CONFIGURATION_ERROR,
-                    f"tts_engine '{tts_engine}' is not available on this server",
+                    f"{engine_label(tts_engine)} is not available right now",
                 )
+            tts = pinned
+        if not await engine_available(tts):
+            label = engine_label(tts_engine or self._default_tts_engine)
+            raise DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR, f"{label} is not available right now"
+            )
         if command.normalize_text and command.mode is not JobMode.NARRATE:
             # Translate already runs an LLM; a second rewrite would also stretch SRT timing.
             raise DomainError(

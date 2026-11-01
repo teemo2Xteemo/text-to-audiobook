@@ -1156,3 +1156,40 @@ def test_translate_cross_engine_voice_is_400_at_create(tmp_path: Path) -> None:
         response = client.post("/api/jobs", json={**VALID_BODY, "voice": "fish:abc"})
         assert response.status_code == 400
         assert response.json()["error_type"] == "UNSUPPORTED_LANGUAGE"
+
+
+def _preview_app(tmp_path: Path, engines: dict[str, object]) -> TestClient:
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.tts_engines = engines
+    return TestClient(app)
+
+
+def test_preview_with_engine_uses_that_provider_and_cache(tmp_path: Path) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    class _Counting(FakeTTSProvider):
+        calls = 0
+
+        async def synthesize(self, *a: object, **kw: object):  # type: ignore[no-untyped-def]
+            _Counting.calls += 1
+            return await super().synthesize(*a, **kw)  # type: ignore[arg-type]
+
+    fish = _Counting(output_dir=tmp_path / "t")
+    with _preview_app(tmp_path, {"fake": FakeTTSProvider(), "fish": fish}) as client:
+        body = {"text": "hello", "voice": "fish:abc", "tts_engine": "fish"}
+        first = client.post("/api/tts/preview", json=body)
+        second = client.post("/api/tts/preview", json=body)
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert _Counting.calls == 1
+
+
+def test_preview_with_disabled_engine_is_invalid_input(tmp_path: Path) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    with _preview_app(tmp_path, {"fake": FakeTTSProvider()}) as client:
+        res = client.post(
+            "/api/tts/preview", json={"text": "hi", "voice": "v", "tts_engine": "fish"}
+        )
+    assert res.status_code == 400
+    assert res.json()["error_type"] == "INVALID_INPUT"

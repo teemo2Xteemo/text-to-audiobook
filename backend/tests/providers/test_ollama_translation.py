@@ -80,7 +80,7 @@ def test_supported_languages_match_nllb_domain_tags() -> None:
 def test_ollama_fake_tts_capabilities_are_not_a_single_pair(tmp_path: Path) -> None:
     translation = _provider()
     tts = FakeTTSProvider(output_dir=tmp_path)
-    languages = CapabilitiesService(translation=translation, tts=tts).get().languages
+    languages = asyncio.run(CapabilitiesService(translation=translation, tts=tts).get()).languages
     assert "zh-CN" in languages
     assert "vi-VN" in languages
     assert "ja-JP" in languages

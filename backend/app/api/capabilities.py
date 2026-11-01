@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_capabilities_service, get_settings
-from app.api.schemas import CapabilitiesResponse, TranslationProfileResponse, VoiceResponse
+from app.api.schemas import (
+    CapabilitiesResponse,
+    TranslationProfileResponse,
+    TtsEngineResponse,
+    VoiceResponse,
+)
 from app.application.capabilities import CapabilitiesService
 from app.config.settings import Settings
 
@@ -17,7 +24,7 @@ async def get_capabilities(
     settings: Settings = Depends(get_settings),
 ) -> CapabilitiesResponse:
     filtered = language.strip() if language and language.strip() else None
-    result = service.get(filtered)
+    result = await service.get(filtered)
     return CapabilitiesResponse(
         languages=result.languages,
         voices=[VoiceResponse.from_voice(voice) for voice in result.voices],
@@ -37,4 +44,5 @@ async def get_capabilities(
         narrate_languages=result.narrate_languages,
         estimate_defaults=result.estimate_defaults,
         text_normalization=settings.text_normalization_enabled,
+        tts_engines=[TtsEngineResponse(**asdict(e)) for e in result.tts_engines],
     )
