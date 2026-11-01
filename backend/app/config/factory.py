@@ -488,6 +488,16 @@ def build_tts_provider(settings: Settings) -> TTSProvider:
             timeout_seconds=settings.fish_audio_http_timeout_seconds,
             max_concurrency=settings.fish_audio_max_concurrency,
         )
+    if name == "vieneu":
+        from app.providers.tts.vieneu import VieneuTTSProvider
+
+        return VieneuTTSProvider(
+            output_dir=_tts_tmp_dir(settings.storage_path),
+            base_url=settings.vieneu_base_url,
+            model=settings.vieneu_model,
+            timeout_seconds=settings.vieneu_http_timeout_seconds,
+            max_concurrency=settings.vieneu_max_concurrency,
+        )
     raise UnknownProviderError(f"unknown TTS_PROVIDER: {settings.tts_provider}")
 
 

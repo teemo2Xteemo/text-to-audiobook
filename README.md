@@ -176,6 +176,13 @@ python -m venv .venv
 .venv/bin/pytest -m "not integration"
 ```
 
+## Optional VieNeu-TTS sidecar (Vietnamese, CPU)
+
+`docker compose --profile vieneu up` builds and starts the upstream
+[VieNeu-TTS](https://github.com/pnnbao97/VieNeu-TTS) OpenAI-style server (first start downloads the model).
+Set `TTS_PROVIDER=vieneu` (or pick the engine per job); `VIENEU_PRECISION=fp32|int8` and
+`VIENEU_MODEL_DIR` (model cache mount) configure the sidecar. The default `docker compose up` is unchanged.
+
 ## API Reference
 
 The FastAPI backend exposes endpoints for capabilities discovery, pre-submit script analysis and voice auditions, asynchronous job lifecycle management, and audio/subtitle downloads.

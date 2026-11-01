@@ -831,6 +831,17 @@ class PipelineOrchestrator:
                         raise DomainError(
                             ErrorType.AUDIO_PROCESSING_FAILED, "audio normalize failed"
                         )
+                    if settings.speed != 1.0 and not getattr(self._tts, "honours_speed", True):
+                        # Engine ignores `speed`: apply it as tempo (cache keeps raw audio).
+                        sped = normalized_path.with_name(f"{chunk.id}.speed.{ext}")
+                        await self._audio.adjust_tempo(
+                            normalized_path,
+                            sped,
+                            settings.speed,
+                            output_format=job.output_format,
+                            bitrate_kbps=job.output_bitrate_kbps,
+                        )
+                        _place_artifact(sped, normalized_path)
                     async with lock:
                         checkpoints.record(chunk.id, STAGE_NORMALIZED, normalized_path)
 

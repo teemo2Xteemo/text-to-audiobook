@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import urllib.error
+import urllib.request
+from collections.abc import Callable
+from typing import Any
 
 from app.domain.errors import DomainError, ErrorType
 from app.providers.http_retry import parse_retry_after, retry_after_header
@@ -28,3 +31,16 @@ def map_tts_http_error(exc: Exception) -> DomainError:
     if isinstance(exc, urllib.error.URLError):
         return DomainError(ErrorType.TTS_FAILED, "tts connection failed")
     return DomainError(ErrorType.TTS_FAILED, "tts failed")
+
+
+def open_bytes(
+    opener: Callable[..., Any], request: urllib.request.Request, timeout: float
+) -> bytes:
+    """Blocking request via ``opener``; always closes error responses. Run in a thread."""
+    try:
+        with opener(request, timeout=timeout) as response:
+            data: bytes = response.read()
+            return data
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise

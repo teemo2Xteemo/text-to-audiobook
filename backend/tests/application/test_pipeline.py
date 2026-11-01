@@ -1696,3 +1696,21 @@ def test_stale_normalized_file_from_other_text_is_not_reused(tmp_path: Path) -> 
     assert narration.calls == [  # type: ignore[attr-defined]
         ("She walked into the great hall and saw twenty elders.", "en-US")
     ]
+
+
+class _NoSpeedTTS(FakeTTSProvider):
+    honours_speed = False
+
+
+@pytest.mark.parametrize(("honours", "expected_calls"), [(False, True), (True, False)])
+def test_speed_fallback_uses_tempo_when_engine_ignores_speed(
+    tmp_path: Path, honours: bool, expected_calls: bool
+) -> None:
+    job = _job(speed=1.25)
+    voices = _voices_for(job.target_language)
+    tts = (FakeTTSProvider if honours else _NoSpeedTTS)(voices, tmp_path / "tts-scratch")
+    orch, workspace, *_, audio, _ = _orchestrator(tmp_path, job=job, tts=tts)
+    _run(orch, job, workspace)
+    assert bool(audio.tempo_calls) is expected_calls
+    if expected_calls:
+        assert {c[2] for c in audio.tempo_calls} == {1.25}

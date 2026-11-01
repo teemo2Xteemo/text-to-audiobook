@@ -12,7 +12,7 @@ from uuid import uuid4
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
 from app.domain.errors import DomainError, ErrorType
 from app.providers.tts.brackets import sanitize_brackets
-from app.providers.tts.http_errors import map_tts_http_error
+from app.providers.tts.http_errors import map_tts_http_error, open_bytes
 
 VOICE_PREFIX = "fish:"
 
@@ -98,7 +98,7 @@ class FishTTSProvider:
             },
         )
         try:
-            audio = await asyncio.to_thread(self._post, request)
+            audio = await asyncio.to_thread(open_bytes, self._opener, request, self._timeout)
         except Exception as exc:
             raise map_tts_http_error(exc) from exc
         if not audio:
@@ -107,12 +107,3 @@ class FishTTSProvider:
         path = self._output_dir / f"fish-{uuid4().hex}.mp3"
         path.write_bytes(audio)
         return AudioArtifact(path=path)
-
-    def _post(self, request: urllib.request.Request) -> bytes:
-        try:
-            with self._opener(request, timeout=self._timeout) as response:
-                data: bytes = response.read()
-                return data
-        except urllib.error.HTTPError as exc:
-            exc.close()
-            raise
