@@ -18,6 +18,7 @@ from app.config.factory import (
     cache_identity_from_settings,
     settings_for_translation_pin,
     translation_pin_from_settings,
+    tts_model_identity,
 )
 from app.config.settings import Settings
 from app.domain.jobs import Job, JobStatus, OutputFormat
@@ -738,3 +739,18 @@ def test_factory_wires_job_service_and_capabilities_for_narrate(tmp_path: Path) 
         "chars_per_second": 18.5,
         "preview_wpm": 160.0,
     }
+
+
+@pytest.mark.parametrize(
+    ("provider", "extra", "expected"),
+    [
+        ("edge", {}, "edge"),
+        ("fake", {}, "fake"),
+        ("fish", {"fish_audio_model": "s2.1-pro-free"}, "s2.1-pro-free"),
+        ("vieneu", {"vieneu_precision": "int8"}, "vieneu-v3-turbo:int8"),
+    ],
+)
+def test_tts_model_identity(provider, extra, expected):
+    settings = Settings(tts_provider=provider, **extra)
+    assert tts_model_identity(settings) == expected
+    assert cache_identity_from_settings(settings).tts_model == expected

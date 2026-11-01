@@ -574,6 +574,16 @@ def settings_for_translation_pin(settings: Settings, job: Job) -> Settings:
     raise UnknownProviderError(f"unknown translation pin: {provider}")
 
 
+def tts_model_identity(settings: Settings) -> str:
+    """Engine-specific TTS cache model id; unknown names keep the provider name."""
+    tts = settings.tts_provider.strip().lower()
+    if tts == "fish":
+        return settings.fish_audio_model
+    if tts == "vieneu":
+        return f"vieneu-v3-turbo:{settings.vieneu_precision}"
+    return tts
+
+
 def cache_identity_from_settings(
     settings: Settings, *, normalizer_settings: Settings | None = None
 ) -> CacheIdentity:
@@ -614,7 +624,7 @@ def cache_identity_from_settings(
         translation_provider=translation,
         translation_model=translation_model,
         tts_provider=tts,
-        tts_model=tts,
+        tts_model=tts_model_identity(settings),
         normalizer_provider=normalizer_provider,
         normalizer_model=normalizer_model,
     )

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,6 +52,8 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=2_000_000)
     translation_provider: str = Field(default="fake")
     tts_provider: str = Field(default="fake")
+    fish_audio_model: str = Field(default="s2.1-pro-free", min_length=1)
+    vieneu_precision: Literal["fp32", "int8"] = Field(default="fp32")
     worker_concurrency: int = Field(default=1, ge=1)
     chunk_translation_concurrency: int = Field(default=2, ge=1)
     chunk_tts_concurrency: int = Field(default=2, ge=1)
