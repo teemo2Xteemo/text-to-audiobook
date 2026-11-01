@@ -1243,3 +1243,12 @@ def test_unpinned_create_does_not_run_preflight() -> None:
     service._tts = _Probe()
     asyncio.run(service.create(_narrate()))
     assert _Probe.called is False
+
+
+def test_translate_pinned_engine_without_voice_checks_target_language() -> None:
+    command = CreateJobCommand(
+        text="Hello", source_language="en-US", target_language="ja-JP", tts_engine="fish"
+    )
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(_engine_service().create(command))
+    assert exc.value.error_type is ErrorType.UNSUPPORTED_LANGUAGE

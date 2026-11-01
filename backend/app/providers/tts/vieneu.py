@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 VOICE_PREFIX = "vieneu:"
 LANGUAGE = "vi-VN"
 PROBE_TIMEOUT_SECONDS = 5.0  # voices/health probes; synthesis keeps its own long timeout
-FAILURE_BACKOFF_SECONDS = 30.0
+FAILURE_BACKOFF_SECONDS = 2.0  # short enough that chunk retries can re-fetch voices
 
 
 def _voice_names(payload: Any) -> list[str]:
@@ -102,7 +102,7 @@ class VieneuTTSProvider:
     async def synthesize(
         self, text: str, language: str, voice: str, settings: TTSSettings
     ) -> AudioArtifact:
-        if language != LANGUAGE or not voice.startswith(VOICE_PREFIX):
+        if language not in ("", LANGUAGE) or not voice.startswith(VOICE_PREFIX):
             raise DomainError(ErrorType.UNSUPPORTED_LANGUAGE, "voice is not available for language")
         cleaned = sanitize_brackets(text)
         if not cleaned:

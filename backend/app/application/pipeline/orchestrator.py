@@ -761,7 +761,31 @@ class PipelineOrchestrator:
                 narrated = narrated_path.read_text(encoding="utf-8")
                 raw_path = workspace / "audio" / f"{chunk.id}.{ext}"
                 if not checkpoints.is_complete(chunk.id, STAGE_TTS):
-                    selected_voice = select_voice(self._tts, job.target_language, job.voice)
+
+                    async def _pick() -> str:
+                        try:
+                            return select_voice(self._tts, job.target_language, job.voice)
+                        except DomainError as exc:
+                            # Engine supports the language but listed no voices: its voice
+                            # service is down, which is transient (retryable), not unsupported.
+                            if (
+                                exc.error_type is ErrorType.UNSUPPORTED_LANGUAGE
+                                and self._tts.languages()
+                                and not self._tts.all_voices()
+                            ):
+                                raise DomainError(
+                                    ErrorType.TTS_FAILED, "voice service unavailable"
+                                ) from exc
+                            raise
+
+                    selected_voice = await with_chunk_retry(
+                        _pick,
+                        policy=self._retry_policy,
+                        sleep=self._sleep,
+                        job_id=job.id,
+                        chunk_id=chunk.id,
+                        stage=STAGE_TTS,
+                    )
                     filled = False
                     if self._artifact_cache is not None:
                         filled = self._artifact_cache.fill_tts(

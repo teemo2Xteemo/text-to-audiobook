@@ -1219,3 +1219,36 @@ def test_post_job_with_fish_and_no_key_is_provider_configuration_error(
     res = jobs_client.post("/api/jobs", json={**VALID_BODY, "tts_engine": "fish"})
     assert res.status_code == 400
     assert res.json()["error_type"] == "PROVIDER_CONFIGURATION_ERROR"
+
+
+def test_preview_with_vieneu_engine_returns_wav(tmp_path: Path) -> None:
+    import json as _json
+
+    from app.providers.tts.vieneu import VieneuTTSProvider
+
+    class _Resp:
+        def __init__(self, data: bytes) -> None:
+            self.data = data
+
+        def read(self) -> bytes:
+            return self.data
+
+        def __enter__(self) -> "_Resp":
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+    def opener(request, timeout=None):  # type: ignore[no-untyped-def]
+        if request.full_url.endswith("/voices"):
+            return _Resp(_json.dumps({"voices": ["Bao"]}).encode())
+        return _Resp(b"RIFFWAVE")
+
+    vieneu = VieneuTTSProvider(
+        tmp_path / "t", base_url="http://v/v1", model="m", timeout_seconds=5, opener=opener
+    )
+    body = {"text": "xin chao", "voice": "vieneu:Bao", "tts_engine": "vieneu"}
+    with _preview_app(tmp_path, {"vieneu": vieneu}) as client:
+        res = client.post("/api/tts/preview", json=body)
+    assert res.status_code == 200
+    assert res.json()["mime_type"] == "audio/wav"

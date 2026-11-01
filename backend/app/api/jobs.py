@@ -356,6 +356,7 @@ async def tts_preview(
         else:
             try:
                 async with asyncio.timeout(float(settings.tts_preview_timeout_seconds)):
+                    # shortcut: speed ignored for honours_speed=False engines, upgrade if needed.
                     artifact = await tts.synthesize(
                         preview_text,
                         language="",
@@ -374,8 +375,10 @@ async def tts_preview(
     finally:
         cached.unlink(missing_ok=True)
 
+    # Sniff the container (cache hits carry no artifact); VieNeu emits WAV, Edge/Fish MP3.
+    mime_type = "audio/wav" if audio_bytes[:4] == b"RIFF" else "audio/mpeg"
     audio_base64 = base64.b64encode(audio_bytes).decode("ascii")
-    return TTSPreviewResponse(audio_base64=audio_base64, mime_type="audio/mpeg")
+    return TTSPreviewResponse(audio_base64=audio_base64, mime_type=mime_type)
 
 
 def _require_uuid(job_id: str) -> None:

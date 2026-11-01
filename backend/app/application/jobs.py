@@ -196,8 +196,11 @@ class JobService:
                     ErrorType.INVALID_INPUT, "srt_timing is only supported in narrate mode"
                 )
             ensure_valid_languages(source_language, target_language)
-            if voice is not None and tts is not None:
-                voice = resolve_voice(tts, target_language, voice)
+            if tts is not None and (voice is not None or tts_engine is not None):
+                # A pinned engine must cover the target language before we pay for translation.
+                checked = resolve_voice(tts, target_language, voice)
+                if voice is not None:
+                    voice = checked
 
             profile_id = (
                 command.translation_profile_id.strip()
