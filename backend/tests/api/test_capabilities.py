@@ -266,3 +266,22 @@ def test_fish_without_key_is_reported_unavailable_with_200(tmp_path: Path) -> No
     assert engines["fish"]["label"] == "Fish Audio"
     assert engines["fake"]["available"] is True
     assert all(v["engine"] != "fish" for v in res.json()["voices"])
+
+
+def test_probe_raising_unexpected_error_is_unavailable_not_500(tmp_path: Path) -> None:
+    class _Boom(FakeTTSProvider):
+        async def check_available(self) -> None:
+            raise RuntimeError("boom")
+
+    translation = FakeTranslationProvider(languages=["en-US"])
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path))
+    app.state.capabilities_service = CapabilitiesService(
+        translation=translation,
+        tts=FakeTTSProvider(),
+        tts_engines={"fake": FakeTTSProvider(), "fish": _Boom()},
+    )
+    with TestClient(app) as client:
+        res = client.get("/api/capabilities")
+    assert res.status_code == 200
+    engines = {e["id"]: e["available"] for e in res.json()["tts_engines"]}
+    assert engines == {"fake": True, "fish": False}

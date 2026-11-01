@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from app.domain.audio import Voice
-from app.domain.errors import DomainError
 from app.domain.ports import TranslationProvider, TTSProvider
 from app.domain.translation_profile import TranslationProfile
 
@@ -17,6 +17,8 @@ _DEFAULT_ESTIMATE_DEFAULTS: dict[str, float] = {
 
 
 # id -> (label, kind, cost_label)
+logger = logging.getLogger(__name__)
+
 _ENGINE_META: dict[str, tuple[str, Literal["online", "local"], str]] = {
     "edge": ("Edge", "online", "Free"),
     "fish": ("Fish Audio", "online", "Free · fair use"),
@@ -30,13 +32,17 @@ def engine_label(engine: str) -> str:
 
 
 async def engine_available(provider: TTSProvider) -> bool:
-    """True unless the provider has a ``check_available`` that raises a DomainError."""
+    """True unless the provider has a ``check_available`` that raises."""
     check = getattr(provider, "check_available", None)
     if check is None:
         return True
     try:
         await check()
-    except DomainError:
+    except Exception as exc:  # any probe failure means unavailable, never a 500
+        logger.warning(
+            "tts_engine_probe_failed",
+            extra={"engine": type(provider).__name__, "error": type(exc).__name__},
+        )
         return False
     return True
 

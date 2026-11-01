@@ -120,11 +120,12 @@ class JobService:
                     f"{engine_label(tts_engine)} is not available right now",
                 )
             tts = pinned
-        if not await engine_available(tts):
-            label = engine_label(tts_engine or self._default_tts_engine)
-            raise DomainError(
-                ErrorType.PROVIDER_CONFIGURATION_ERROR, f"{label} is not available right now"
-            )
+            # Unpinned jobs keep today's behavior: no preflight.
+            if not await engine_available(tts):
+                raise DomainError(
+                    ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                    f"{engine_label(tts_engine)} is not available right now",
+                )
         if command.normalize_text and command.mode is not JobMode.NARRATE:
             # Translate already runs an LLM; a second rewrite would also stretch SRT timing.
             raise DomainError(

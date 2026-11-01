@@ -1193,3 +1193,29 @@ def test_preview_with_disabled_engine_is_invalid_input(tmp_path: Path) -> None:
         )
     assert res.status_code == 400
     assert res.json()["error_type"] == "INVALID_INPUT"
+
+
+def test_post_job_with_fish_and_no_key_is_provider_configuration_error(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+    from app.providers.tts.fish import FishTTSProvider
+
+    service = memory[0]
+    service._tts_engines = {
+        "fake": FakeTTSProvider(),
+        "fish": FishTTSProvider(
+            tmp_path,
+            api_key=None,
+            base_url="http://x",
+            model="m",
+            voices=[],
+            timeout_seconds=1,
+            max_concurrency=1,
+        ),
+    }
+    res = jobs_client.post("/api/jobs", json={**VALID_BODY, "tts_engine": "fish"})
+    assert res.status_code == 400
+    assert res.json()["error_type"] == "PROVIDER_CONFIGURATION_ERROR"

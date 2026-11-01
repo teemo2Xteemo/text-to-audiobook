@@ -1208,3 +1208,38 @@ def test_create_fails_preflight_when_pinned_engine_check_fails() -> None:
         asyncio.run(service.create(_narrate(tts_engine="fish")))
     assert exc.value.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
     assert exc.value.message == "Fish Audio is not available right now"
+
+
+def test_vieneu_health_failure_blocks_create() -> None:
+    from app.providers.tts.vieneu import VieneuTTSProvider
+
+    def _down(request: object, timeout: float | None = None) -> object:
+        raise OSError("connection refused")
+
+    service = _engine_service()
+    service._tts_engines = {
+        **service._tts_engines,
+        "vieneu": VieneuTTSProvider(
+            Path("storage"), base_url="http://x/v1", model="m", timeout_seconds=1, opener=_down
+        ),
+    }
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(service.create(_narrate(tts_engine="vieneu")))
+    assert exc.value.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR
+    assert exc.value.message == "VieNeu-TTS is not available right now"
+
+
+def test_unpinned_create_does_not_run_preflight() -> None:
+    from app.providers.tts.fake import FakeTTSProvider
+
+    class _Probe(FakeTTSProvider):
+        called = False
+
+        async def check_available(self) -> None:
+            _Probe.called = True
+            raise DomainError(ErrorType.PROVIDER_CONFIGURATION_ERROR, "down")
+
+    service = _engine_service()
+    service._tts = _Probe()
+    asyncio.run(service.create(_narrate()))
+    assert _Probe.called is False
