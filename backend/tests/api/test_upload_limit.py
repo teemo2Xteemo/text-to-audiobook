@@ -53,6 +53,41 @@ def _invoke(app, scope: dict, chunks: list[bytes]) -> tuple[int, dict, int]:
     return status, json.loads(raw), pulled
 
 
+def test_connected_client_is_not_reported_disconnected(tmp_path: Path) -> None:
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    app = create_app(Settings(_env_file=None, storage_path=tmp_path, max_upload_bytes=200))
+
+    @app.post("/api/disconnect-probe")
+    async def probe(request: Request) -> JSONResponse:
+        await request.body()
+        return JSONResponse({"disconnected": await request.is_disconnected()})
+
+    delivered = False
+    hold = asyncio.Event()
+
+    async def receive() -> dict:
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": b'{"text":"hi"}', "more_body": False}
+        await hold.wait()
+        return {"type": "http.disconnect"}
+
+    sent: list[dict] = []
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = _http_scope("/api/disconnect-probe", [(b"content-type", b"application/json")])
+    asyncio.run(app(scope, receive, send))
+    status = next(item["status"] for item in sent if item["type"] == "http.response.start")
+    raw = b"".join(item.get("body", b"") for item in sent if item["type"] == "http.response.body")
+    assert status == 200
+    assert json.loads(raw)["disconnected"] is False
+
+
 def test_chunked_json_stops_before_the_rest_of_the_body(tmp_path: Path) -> None:
     app = create_app(Settings(_env_file=None, storage_path=tmp_path, max_upload_bytes=200))
     chunks = [b"x" * 1024 for _ in range(40)]

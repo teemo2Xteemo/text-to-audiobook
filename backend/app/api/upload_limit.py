@@ -107,7 +107,9 @@ class UploadSizeLimitMiddleware:
             if not replayed:
                 replayed = True
                 return {"type": "http.request", "body": body, "more_body": False}
-            return {"type": "http.disconnect"}
+            # The body is already delivered. Later reads wait for the real
+            # client (disconnect, or nothing yet). Do not invent a disconnect.
+            return await receive()
 
         await self.app(scope, replay, send)
 
