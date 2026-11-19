@@ -30,6 +30,20 @@ def capabilities_client(tmp_path: Path) -> Generator[TestClient, None, None]:
         yield client
 
 
+def test_capabilities_reports_configured_upload_limit(capabilities_client: TestClient) -> None:
+    response = capabilities_client.get("/api/capabilities")
+    assert response.status_code == 200
+    limit = response.json()["limits"]["max_upload_bytes"]
+    assert limit == Settings(_env_file=None).max_upload_bytes
+
+
+def test_capabilities_upload_limit_follows_settings(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, storage_path=tmp_path, max_upload_bytes=12_345)
+    with TestClient(create_app(settings)) as client:
+        body = client.get("/api/capabilities").json()
+    assert body["limits"]["max_upload_bytes"] == 12_345
+
+
 def test_capabilities_intersection_and_all_voices(capabilities_client: TestClient) -> None:
     response = capabilities_client.get("/api/capabilities")
     assert response.status_code == 200

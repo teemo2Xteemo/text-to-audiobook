@@ -121,6 +121,10 @@ class TranslationProfileResponse(BaseModel):
     supported_languages: list[str] = Field(default_factory=list)
 
 
+class UploadLimits(BaseModel):
+    max_upload_bytes: int
+
+
 class CapabilitiesResponse(BaseModel):
     languages: list[str]
     voices: list[VoiceResponse]
@@ -129,6 +133,7 @@ class CapabilitiesResponse(BaseModel):
     estimate_defaults: dict[str, float] = Field(default_factory=dict)
     text_normalization: bool = False
     tts_engines: list[TtsEngineResponse] = Field(default_factory=list)
+    limits: UploadLimits
 
 
 class LanguageCandidate(BaseModel):

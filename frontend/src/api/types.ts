@@ -42,6 +42,10 @@ export type TranslationProfile = {
   supported_languages?: string[];
 };
 
+export type UploadLimits = {
+  max_upload_bytes: number;
+};
+
 export type Capabilities = {
   languages: string[];
   voices: Voice[];
@@ -50,6 +54,7 @@ export type Capabilities = {
   narrate_languages?: string[];
   estimate_defaults?: { chars_per_second?: number; preview_wpm?: number };
   text_normalization?: boolean;
+  limits?: UploadLimits;
 };
 
 export type CapabilitiesResponse = Capabilities;

@@ -108,7 +108,7 @@ M4 does not require Redis (application tests). M5 is what makes jobs run. M8/M9 
 
 - `POST /api/jobs` → **202** `{ job_id, status: queued }`. Multipart **or** JSON paste. Fields: `source_language`, `target_language`; optional `voice`, `speed`, `output_format` (`mp3` / `wav`). Exactly one of `text` or `file`.
 - `GET /api/jobs/{job_id}` → `status` and `stage` both serialize `JobStatus` (same string in M3), `chunk_current` / `chunk_total` (zeros until worker), `error_type` / message, no stack traces. Result locator / audio URL is **M5**, not M3.
-- Upload rules: `MAX_UPLOAD_BYTES` (default `2000000`) for paste and file, `.txt` / text MIME, sanitized filename, no `../`; write `storage/jobs/{job_id}/source.txt`.
+- Upload rules: `MAX_UPLOAD_BYTES` (default `52428800`, 50 MiB) for paste and file, measured in bytes. Over-limit uploads return HTTP 413 `PAYLOAD_TOO_LARGE` with the received size and the limit. `.txt` / text MIME, sanitized filename, no `../`; write `storage/jobs/{job_id}/source.txt`.
 - Redis job record + RQ enqueue (`job_id` only; queue name `jobs`; func path `app.workers.process_job` — callable arrives in M5). API does **not** run translation/TTS.
 - Routes call `JobService` only. Domain ports: `JobStore`, `JobQueue`, `SourceTextStorage`. Redis/RQ/FS adapters in `infrastructure/`. Wire in `config/` (M5 extends this factory for providers — do not add a second composition root in `application/`).
 - Errors: envelope `{ "error_type", "message" }`; 400 validation; 404 unknown job (`INVALID_INPUT`, no new enum); 503 `STORAGE_FAILED`.

@@ -33,7 +33,7 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.redis_url == "redis://localhost:6379/0"
     assert settings.storage_path == Path("storage")
     assert settings.output_bitrate_kbps == 128
-    assert settings.max_upload_bytes == 2_000_000
+    assert settings.max_upload_bytes == 52_428_800
     assert settings.translation_provider == "fake"
     assert settings.tts_provider == "fake"
     assert settings.worker_concurrency == 1
@@ -142,6 +142,11 @@ def test_parse_tts_default_voice_by_language_skips_malformed() -> None:
     assert parsed == {"ja-JP": "ja-JP-AdapterANeural"}
     assert parse_tts_default_voice_by_language("") == {}
     assert parse_tts_default_voice_by_language(None) == {}
+
+
+def test_max_upload_bytes_must_be_at_least_one() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, max_upload_bytes=0)
 
 
 def test_ollama_http_timeout_must_be_positive() -> None:

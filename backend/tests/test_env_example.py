@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -65,6 +66,44 @@ def test_compose_is_cpu_only_with_worker_redis_healthcheck() -> None:
     assert body.count("OLLAMA_HTTP_TIMEOUT_SECONDS: ${OLLAMA_HTTP_TIMEOUT_SECONDS") == 2
     assert body.count("host.docker.internal:host-gateway") == 2
     assert body.count("OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}") == 2
+
+
+def _assignment_value(text: str, name: str) -> str:
+    prefix = f"{name}="
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped.removeprefix(prefix).strip()
+    raise AssertionError(f"{name} is missing from .env.example")
+
+
+def _nginx_client_max_body_bytes(text: str) -> int:
+    match = re.search(r"client_max_body_size\s+(\d+)([kmgKMG])?;", text)
+    assert match is not None, text
+    value = int(match.group(1))
+    unit = (match.group(2) or "").lower()
+    if unit == "k":
+        return value * 1024
+    if unit == "m":
+        return value * 1024 * 1024
+    if unit == "g":
+        return value * 1024 * 1024 * 1024
+    return value
+
+
+def test_max_upload_bytes_defaults_match_settings() -> None:
+    from app.config.settings import Settings
+
+    expected = str(Settings.model_fields["max_upload_bytes"].default)
+    assert expected == "52428800"
+    env_value = _assignment_value(ENV_EXAMPLE.read_text(encoding="utf-8"), "MAX_UPLOAD_BYTES")
+    assert env_value == expected
+    compose = _compose_without_comments(COMPOSE.read_text(encoding="utf-8"))
+    assert f"MAX_UPLOAD_BYTES: ${{MAX_UPLOAD_BYTES:-{expected}}}" in compose
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    nginx_limit = _nginx_client_max_body_bytes(nginx)
+    assert nginx_limit >= int(expected)
+    assert "client_max_body_size 0" not in nginx
 
 
 def test_compose_worker_wires_max_recovery_attempts() -> None:

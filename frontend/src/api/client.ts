@@ -16,6 +16,9 @@ function requestUrl(path: string): string {
   return `${base}${path}`;
 }
 
+const PAYLOAD_TOO_LARGE_MESSAGE =
+  "Upload is too large for the server limit. Try a smaller file or raise MAX_UPLOAD_BYTES.";
+
 function isEnvelope(value: unknown): value is { error_type: string; message: string } {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -48,6 +51,23 @@ function extractDetailMessage(body: unknown): string | null {
   return null;
 }
 
+function nonEnvelopeMessage(status: number, rawText: string): { errorType: string; message: string } {
+  if (status === 413) {
+    return { errorType: "PAYLOAD_TOO_LARGE", message: PAYLOAD_TOO_LARGE_MESSAGE };
+  }
+  const trimmed = rawText.trim();
+  if (trimmed.length > 0 && trimmed.length < 200 && !trimmed.startsWith("<")) {
+    return {
+      errorType: status >= 500 ? "INTERNAL_ERROR" : "INVALID_INPUT",
+      message: trimmed,
+    };
+  }
+  if (status >= 500) {
+    return { errorType: "INTERNAL_ERROR", message: `server error (${status})` };
+  }
+  return { errorType: "INVALID_INPUT", message: "request failed" };
+}
+
 async function parseError(response: Response): Promise<never> {
   const defaultErrorType = response.status >= 500 ? "INTERNAL_ERROR" : "INVALID_INPUT";
   let body: unknown = null;
@@ -57,18 +77,16 @@ async function parseError(response: Response): Promise<never> {
     rawText = await response.text();
     body = JSON.parse(rawText);
   } catch {
-    const trimmed = rawText.trim();
-    const message =
-      trimmed.length > 0 && trimmed.length < 200 && !trimmed.startsWith("<")
-        ? trimmed
-        : response.status >= 500
-          ? `server error (${response.status})`
-          : "request failed";
-    throw new ApiError(defaultErrorType, message, response.status);
+    const parsed = nonEnvelopeMessage(response.status, rawText);
+    throw new ApiError(parsed.errorType, parsed.message, response.status);
   }
 
   if (isEnvelope(body)) {
     throw new ApiError(body.error_type, body.message, response.status);
+  }
+
+  if (response.status === 413) {
+    throw new ApiError("PAYLOAD_TOO_LARGE", PAYLOAD_TOO_LARGE_MESSAGE, response.status);
   }
 
   const detailMsg = extractDetailMessage(body);

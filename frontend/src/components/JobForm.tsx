@@ -19,6 +19,7 @@ import {
   SPEED_MIN,
   TTS_ENGINE_STORAGE_KEY,
 } from "../lib/constants";
+import { utf8ByteLength } from "../lib/bytes";
 import { envDefaultSourceLanguage, envDefaultTargetLanguage } from "../lib/env";
 import {
   canGenerate,
@@ -268,6 +269,19 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
 
   const metrics = useMemo(() => estimateTextMetrics(text), [text]);
   const isSubtitleInput = metrics.isSrt || /\.(srt|vtt)$/i.test(file?.name ?? "");
+  const maxUploadBytes = capabilities.limits?.max_upload_bytes ?? MAX_FILE_SIZE_BYTES;
+  const pasteByteLength = useMemo(() => {
+    // UTF-8 is at most 3 bytes per UTF-16 code unit. Skip the scan while the
+    // paste cannot reach the limit. Count code points only when it might.
+    if (text.length * 3 <= maxUploadBytes) {
+      return text.length;
+    }
+    return utf8ByteLength(text);
+  }, [text, maxUploadBytes]);
+  const pasteError =
+    text.length > 0 && pasteByteLength > maxUploadBytes
+      ? `Paste exceeds maximum allowed size of ${formatFileSize(maxUploadBytes)} (${formatFileSize(pasteByteLength)}).`
+      : null;
 
   useEffect(() => {
     setTranslationProfileId((current) => {
@@ -311,7 +325,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
     }
 
     const trimmed = text.trim();
-    if (!trimmed) {
+    if (!trimmed || pasteByteLength > maxUploadBytes) {
       setAnalysis(null);
       setIsAnalyzing(false);
       return;
@@ -348,7 +362,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
       active = false;
       clearTimeout(timer);
     };
-  }, [text, file]);
+  }, [text, file, maxUploadBytes, pasteByteLength]);
 
   const targetForCheck = mode === "narrate" ? sourceLanguage : targetLanguage;
   const ready = canGenerate({
@@ -386,8 +400,8 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
     if (!isAllowedExt) {
       return "Only .txt, .srt, and .vtt files are supported.";
     }
-    if (candidate.size > MAX_FILE_SIZE_BYTES) {
-      return `File exceeds maximum allowed size of 2 MB (${formatFileSize(candidate.size)}).`;
+    if (candidate.size > maxUploadBytes) {
+      return `File exceeds maximum allowed size of ${formatFileSize(maxUploadBytes)} (${formatFileSize(candidate.size)}).`;
     }
     return null;
   }
@@ -492,7 +506,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!ready || disabled) {
+    if (!ready || disabled || pasteError) {
       return;
     }
     const input: CreateJobInput = {
@@ -961,6 +975,19 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
               value={text}
               onChange={(event) => handleTextChange(event.target.value)}
             />
+            {pasteError ? (
+              <div
+                className="upload-error-msg"
+                role="alert"
+                style={{
+                  color: "var(--destructive, #dc2626)",
+                  fontSize: "0.85rem",
+                  marginTop: "0.5rem",
+                }}
+              >
+                {pasteError}
+              </div>
+            ) : null}
           </div>
 
           <div className="divider-or" aria-hidden="true">
@@ -1157,7 +1184,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
           )}
         </div>
 
-        <button type="submit" className="btn-generate" disabled={!ready}>
+        <button type="submit" className="btn-generate" disabled={!ready || pasteError !== null}>
           <svg
             className="btn-icon"
             viewBox="0 0 24 24"

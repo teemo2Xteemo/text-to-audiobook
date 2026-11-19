@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0")
     storage_path: Path = Field(default=Path("storage"))
     output_bitrate_kbps: int = Field(default=128)
-    max_upload_bytes: int = Field(default=2_000_000)
+    max_upload_bytes: int = Field(default=52_428_800, ge=1)
     translation_provider: str = Field(default="fake")
     tts_provider: str = Field(default="fake")
     # Comma list of extra engines a job may pin; the default engine is always allowed.

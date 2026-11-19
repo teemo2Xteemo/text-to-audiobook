@@ -72,6 +72,18 @@ docker compose up --build
 
 The **worker** image installs FFmpeg via apt (the slim API image does not). FFmpeg is invoked with argv lists only; no Python ffmpeg binding. API and worker start as root only long enough to `chown` the `./storage` bind-mount (a **real directory**, not a symlink; `chown` walks the tree on every start and can get slower as `storage/` grows), then drop to uid 1000 (`app`). Frontend nginx listens on container port 80, published as `127.0.0.1:8080`.
 
+### Configuration
+
+`MAX_UPLOAD_BYTES` (default `52428800`, 50 MiB) is the upload size limit. The API enforces it, `GET /api/capabilities` returns it as `limits.max_upload_bytes`, and the UI uses that value for the file check, the pasted-text check, and the message. Size is bytes, not characters (pasted text is measured as UTF-8). The story text itself is checked as exact UTF-8 bytes. The raw HTTP body may be a little larger (`MAX_UPLOAD_BYTES` plus 4096 bytes of framing). A JSON paste whose quoting expands past that allowance is rejected even when the UI's text check passed.
+
+Nginx allows request bodies up to `64m` on `/api/` (`client_max_body_size`), which is above the default 50 MiB limit. The API then returns HTTP 413 `PAYLOAD_TOO_LARGE` and names the received size and the limit. If you raise `MAX_UPLOAD_BYTES` above 64 MiB, raise that nginx directive as well so a legal upload is not rejected by the proxy. A proxy HTML 413 is shown in the UI as a short "too large" message. Chunked requests with no `Content-Length` are capped in the API as well; the process stops reading once the allowance is passed.
+
+A `.env` copied from an older example may still contain `MAX_UPLOAD_BYTES=2000000`. That value overrides the new default until you change it.
+
+About 1 million CJK characters is 3 MB of UTF-8; 1 million Latin or Vietnamese characters is roughly 1–1.5 MB. A 5-million-character novel is about 15 MB of UTF-8 and fits the upload default. Uploading it only creates the job. The default `RQ_JOB_TIMEOUT_SECONDS` (1800) is often too short for a book of that length, which is thousands of chunks. Raise `RQ_JOB_TIMEOUT_SECONDS` for long books. A job that hits the timeout is `FAILED` and can be resumed with `POST /api/jobs/{job_id}/retry`, which keeps completed chunk checkpoints. Scaling that timeout with the source, or running per-chapter jobs, is tracked in [#43](https://github.com/teemo2Xteemo/text-to-audiobook/issues/43).
+
+Change `MAX_UPLOAD_BYTES` in `.env` and restart the API to raise or lower the limit in the API and the UI together. Rebuild the frontend image so nginx picks up the `64m` cap. A current UI learns the numeric limit from the API.
+
 Default providers are `fake` / `fake` so a clean clone boots **offline**. `VITE_*` values are baked into the frontend image; after changing them, run `docker compose up --build` again.
 
 ### Offline smoke (fakes)
