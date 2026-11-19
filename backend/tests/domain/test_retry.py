@@ -13,6 +13,7 @@ def test_retryable_error_types() -> None:
 
 def test_non_retryable_error_types() -> None:
     assert not is_retryable(ErrorType.INVALID_INPUT)
+    assert not is_retryable(ErrorType.PAYLOAD_TOO_LARGE)
     assert not is_retryable(ErrorType.UNSUPPORTED_LANGUAGE)
     assert not is_retryable(ErrorType.AUDIO_PROCESSING_FAILED)
     assert not is_retryable(ErrorType.STORAGE_FAILED)

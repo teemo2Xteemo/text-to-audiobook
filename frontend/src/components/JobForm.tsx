@@ -268,6 +268,12 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
 
   const metrics = useMemo(() => estimateTextMetrics(text), [text]);
   const isSubtitleInput = metrics.isSrt || /\.(srt|vtt)$/i.test(file?.name ?? "");
+  const maxUploadBytes = capabilities.limits?.max_upload_bytes ?? MAX_FILE_SIZE_BYTES;
+  const pasteByteLength = useMemo(() => new TextEncoder().encode(text).length, [text]);
+  const pasteError =
+    text.length > 0 && pasteByteLength > maxUploadBytes
+      ? `Paste exceeds maximum allowed size of ${formatFileSize(maxUploadBytes)} (${formatFileSize(pasteByteLength)}).`
+      : null;
 
   useEffect(() => {
     setTranslationProfileId((current) => {
@@ -311,7 +317,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
     }
 
     const trimmed = text.trim();
-    if (!trimmed) {
+    if (!trimmed || pasteByteLength > maxUploadBytes) {
       setAnalysis(null);
       setIsAnalyzing(false);
       return;
@@ -348,7 +354,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
       active = false;
       clearTimeout(timer);
     };
-  }, [text, file]);
+  }, [text, file, maxUploadBytes, pasteByteLength]);
 
   const targetForCheck = mode === "narrate" ? sourceLanguage : targetLanguage;
   const ready = canGenerate({
@@ -386,8 +392,8 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
     if (!isAllowedExt) {
       return "Only .txt, .srt, and .vtt files are supported.";
     }
-    if (candidate.size > MAX_FILE_SIZE_BYTES) {
-      return `File exceeds maximum allowed size of 2 MB (${formatFileSize(candidate.size)}).`;
+    if (candidate.size > maxUploadBytes) {
+      return `File exceeds maximum allowed size of ${formatFileSize(maxUploadBytes)} (${formatFileSize(candidate.size)}).`;
     }
     return null;
   }
@@ -492,7 +498,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!ready || disabled) {
+    if (!ready || disabled || pasteError) {
       return;
     }
     const input: CreateJobInput = {
@@ -961,6 +967,19 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
               value={text}
               onChange={(event) => handleTextChange(event.target.value)}
             />
+            {pasteError ? (
+              <div
+                className="upload-error-msg"
+                role="alert"
+                style={{
+                  color: "var(--destructive, #dc2626)",
+                  fontSize: "0.85rem",
+                  marginTop: "0.5rem",
+                }}
+              >
+                {pasteError}
+              </div>
+            ) : null}
           </div>
 
           <div className="divider-or" aria-hidden="true">
@@ -1157,7 +1176,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
           )}
         </div>
 
-        <button type="submit" className="btn-generate" disabled={!ready}>
+        <button type="submit" className="btn-generate" disabled={!ready || pasteError !== null}>
           <svg
             className="btn-icon"
             viewBox="0 0 24 24"

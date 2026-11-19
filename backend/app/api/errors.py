@@ -30,6 +30,7 @@ def apply_security_headers[R: Response](response: R) -> R:
 
 _STATUS_BY_ERROR = {
     ErrorType.INVALID_INPUT: 400,
+    ErrorType.PAYLOAD_TOO_LARGE: 413,
     ErrorType.UNSUPPORTED_LANGUAGE: 400,
     ErrorType.PROVIDER_CONFIGURATION_ERROR: 400,
     ErrorType.PROVIDER_RATE_LIMIT: 429,

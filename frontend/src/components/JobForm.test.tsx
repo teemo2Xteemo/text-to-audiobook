@@ -346,17 +346,76 @@ describe("JobForm", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("rejects files that exceed the 2MB size limit", () => {
+  it("rejects files over the limit reported by capabilities", () => {
     const onSubmit = vi.fn();
-    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    const limit = 1024 * 1024;
+    render(
+      <JobForm
+        capabilities={{ ...capabilitiesFixture, limits: { max_upload_bytes: limit } }}
+        disabled={false}
+        onSubmit={onSubmit}
+      />,
+    );
     const bigFile = new File(["x".repeat(100)], "huge.txt", { type: "text/plain" });
-    Object.defineProperty(bigFile, "size", { value: 3 * 1024 * 1024 });
+    Object.defineProperty(bigFile, "size", { value: 2 * 1024 * 1024 });
     const input = screen.getByLabelText(/upload a/i);
     fireEvent.change(input, { target: { files: [bigFile] } });
     expect(
-      screen.getByText(/File exceeds maximum allowed size of 2 MB/),
+      screen.getByText("File exceeds maximum allowed size of 1.00 MB (2.00 MB)."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/2 MB/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("accepts a file under the capabilities limit and above the old 2 MB cap", () => {
+    const onSubmit = vi.fn();
+    render(
+      <JobForm
+        capabilities={{ ...capabilitiesFixture, limits: { max_upload_bytes: 5 * 1024 * 1024 } }}
+        disabled={false}
+        onSubmit={onSubmit}
+      />,
+    );
+    const novel = new File(["chapter"], "novel.txt", { type: "text/plain" });
+    Object.defineProperty(novel, "size", { value: 3 * 1024 * 1024 });
+    fireEvent.change(screen.getByLabelText(/upload a/i), { target: { files: [novel] } });
+    expect(screen.queryByText(/exceeds maximum allowed size/)).toBeNull();
+    expect(screen.getByText("novel.txt")).toBeInTheDocument();
+  });
+
+  it("falls back to MAX_FILE_SIZE_BYTES when capabilities omit the limit", () => {
+    const onSubmit = vi.fn();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    const bigFile = new File(["x"], "huge.txt", { type: "text/plain" });
+    Object.defineProperty(bigFile, "size", { value: 52_428_800 + 1 });
+    fireEvent.change(screen.getByLabelText(/upload a/i), { target: { files: [bigFile] } });
+    expect(
+      screen.getByText(/File exceeds maximum allowed size of 50.00 MB/),
+    ).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("blocks pasted text whose UTF-8 byte length exceeds the limit", () => {
+    const onSubmit = vi.fn();
+    render(
+      <JobForm
+        capabilities={{ ...capabilitiesFixture, limits: { max_upload_bytes: 3 } }}
+        disabled={false}
+        onSubmit={onSubmit}
+      />,
+    );
+    const story = screen.getByLabelText("Paste story");
+    fireEvent.change(story, { target: { value: "你" } });
+    expect(screen.queryByText(/Paste exceeds/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeEnabled();
+
+    fireEvent.change(story, { target: { value: "你好" } });
+    expect(
+      screen.getByText("Paste exceeds maximum allowed size of 3 B (6 B)."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
+    fireEvent.submit(story.closest("form")!);
     expect(onSubmit).not.toHaveBeenCalled();
   });
 

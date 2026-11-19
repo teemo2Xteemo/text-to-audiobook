@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 from collections.abc import Generator
 from dataclasses import replace
@@ -289,6 +290,22 @@ def test_post_rejects_null_bytes(jobs_client: TestClient) -> None:
     assert "null byte" in body["message"]
 
 
+def _assert_payload_too_large(response, received: int, limit: int = 200) -> None:
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error_type"] == ErrorType.PAYLOAD_TOO_LARGE
+    assert f"received {received} bytes" in body["message"]
+    assert f"limit {limit} bytes" in body["message"]
+
+
+def test_post_accepts_text_at_upload_limit(jobs_client: TestClient) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        json={**VALID_BODY, "text": "x" * 200},
+    )
+    assert response.status_code == 202
+
+
 def test_post_rejects_oversize_text(jobs_client: TestClient) -> None:
     response = jobs_client.post(
         "/api/jobs",
@@ -298,10 +315,133 @@ def test_post_rejects_oversize_text(jobs_client: TestClient) -> None:
             "target_language": "ja-JP",
         },
     )
-    assert response.status_code == 400
-    body = response.json()
-    assert body["error_type"] == ErrorType.INVALID_INPUT
-    assert "message" in body
+    _assert_payload_too_large(response, 201)
+
+
+def test_post_rejects_oversize_json_body_without_parsing(jobs_client: TestClient) -> None:
+    payload = json.dumps({**VALID_BODY, "text": "x" * 5000}).encode()
+    assert len(payload) > 200 + 4096
+    response = jobs_client.post(
+        "/api/jobs",
+        content=payload,
+        headers={"content-type": "application/json"},
+    )
+    _assert_payload_too_large(response, len(payload))
+
+
+def test_post_accepts_file_at_upload_limit(jobs_client: TestClient) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "target_language": "ja-JP"},
+        files={"file": ("story.txt", b"x" * 200, "text/plain")},
+    )
+    assert response.status_code == 202
+
+
+def test_post_rejects_oversize_file(jobs_client: TestClient) -> None:
+    response = jobs_client.post(
+        "/api/jobs",
+        data={"source_language": "en-US", "target_language": "ja-JP"},
+        files={"file": ("story.txt", b"x" * 201, "text/plain")},
+    )
+    _assert_payload_too_large(response, 201)
+
+
+def test_post_rejects_chunked_body_without_content_length(jobs_client: TestClient) -> None:
+    payload = json.dumps({**VALID_BODY, "text": "x" * 5000}).encode()
+    assert len(payload) > 200 + 4096
+
+    def chunks():
+        midpoint = len(payload) // 2
+        yield payload[:midpoint]
+        yield payload[midpoint:]
+
+    response = jobs_client.post(
+        "/api/jobs",
+        content=chunks(),
+        headers={"content-type": "application/json"},
+    )
+    _assert_payload_too_large(response, len(payload))
+
+
+def test_post_rejects_chunked_file_without_content_length(jobs_client: TestClient) -> None:
+    boundary = "----uploadlimit"
+    file_bytes = b"x" * 201
+    body = (
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="source_language"\r\n\r\n'
+            "en-US\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="target_language"\r\n\r\n'
+            "ja-JP\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="story.txt"\r\n'
+            "Content-Type: text/plain\r\n\r\n"
+        ).encode()
+        + file_bytes
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+
+    def chunks():
+        midpoint = len(body) // 2
+        yield body[:midpoint]
+        yield body[midpoint:]
+
+    response = jobs_client.post(
+        "/api/jobs",
+        content=chunks(),
+        headers={"content-type": f"multipart/form-data; boundary={boundary}"},
+    )
+    _assert_payload_too_large(response, len(file_bytes))
+
+
+def test_multipart_text_is_not_capped_at_starlette_one_mebibyte(
+    tmp_path: Path,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+) -> None:
+    # Starlette's default in-memory field cap is 1 MiB. A text part one byte
+    # over that default must still be measured against MAX_UPLOAD_BYTES.
+    limit = 1024 * 1024
+    service, _, _, _ = memory
+    settings = Settings(_env_file=None, storage_path=tmp_path, max_upload_bytes=limit)
+    app = create_app(settings)
+    app.state.job_service = service
+    with TestClient(app) as client:
+        # An empty file part forces multipart. httpx sends `data` as urlencoded
+        # when no files are attached, which is not this endpoint's text path.
+        response = client.post(
+            "/api/jobs",
+            data={
+                "text": "x" * (limit + 1),
+                "source_language": "en-US",
+                "target_language": "ja-JP",
+            },
+            files={"_unused": ("", b"")},
+        )
+    _assert_payload_too_large(response, limit + 1, limit)
+
+
+def test_detect_and_analyze_reject_oversize_json_text(jobs_client: TestClient) -> None:
+    over = {"text": "x" * 201}
+    _assert_payload_too_large(jobs_client.post("/api/detect-language", json=over), 201)
+    _assert_payload_too_large(jobs_client.post("/api/analyze", json=over), 201)
+
+
+def test_post_measures_cjk_text_in_bytes_not_characters(jobs_client: TestClient) -> None:
+    # 66 CJK characters are 198 UTF-8 bytes, under the 200-byte cap.
+    under = "中" * 66
+    assert len(under) < 200
+    assert len(under.encode()) == 198
+    accepted = jobs_client.post("/api/jobs", json={**VALID_BODY, "text": under})
+    assert accepted.status_code == 202
+
+    # 67 characters are still under a 200-character reading, but 201 bytes.
+    over = "中" * 67
+    assert len(over) < 200
+    assert len(over.encode()) == 201
+    rejected = jobs_client.post("/api/jobs", json={**VALID_BODY, "text": over})
+    _assert_payload_too_large(rejected, 201)
 
 
 def test_post_rejects_auto_target(jobs_client: TestClient) -> None:
@@ -660,11 +800,12 @@ def test_decode_source_text_error_handling():
     assert exc_info_null.value.error_type == ErrorType.INVALID_INPUT
     assert "null byte" in exc_info_null.value.message
 
-    # Size limit
+    # Size limit is bytes, reported with both sizes.
     with pytest.raises(DomainError) as exc_info_limit:
         _decode_source_text(b"Hello world", max_upload_bytes=5)
-    assert exc_info_limit.value.error_type == ErrorType.INVALID_INPUT
-    assert "size limit" in exc_info_limit.value.message
+    assert exc_info_limit.value.error_type == ErrorType.PAYLOAD_TOO_LARGE
+    assert "received 11 bytes" in exc_info_limit.value.message
+    assert "limit 5 bytes" in exc_info_limit.value.message
 
 
 def test_post_txt_upload_gbk(

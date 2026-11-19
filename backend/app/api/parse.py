@@ -6,7 +6,9 @@ from pathlib import Path
 import charset_normalizer
 from fastapi import Request, UploadFile
 from pydantic import ValidationError
+from starlette.datastructures import FormData
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.errors import validation_message
 from app.api.schemas import CreateJobJsonBody
@@ -85,6 +87,47 @@ def _select_charset_match(
     return None
 
 
+def _payload_too_large(received: int, limit: int) -> DomainError:
+    return DomainError(
+        ErrorType.PAYLOAD_TOO_LARGE,
+        f"upload exceeds size limit (received {received} bytes, limit {limit} bytes)",
+    )
+
+
+def _oversized_part_received(request: Request, part_limit: int) -> int:
+    """Bytes to report when Starlette aborts a part before we can measure it."""
+    raw = request.headers.get("content-length")
+    if raw is not None:
+        try:
+            length = int(raw)
+        except ValueError:
+            length = 0
+        if length > part_limit:
+            return length
+    return part_limit + 1
+
+
+async def _read_form(request: Request, max_upload_bytes: int) -> FormData:
+    """Parse a form without Starlette's 1 MiB in-memory field cap.
+
+    File parts are spooled and sized in ``_read_upload_raw``. Non-file fields
+    are buffered, so their cap is the configured limit plus one read chunk.
+    That slack lets a field just over the limit reach ``_decode_source_text``,
+    which reports the real byte count. A larger field is stopped by Starlette
+    and mapped to the same 413 envelope.
+    """
+    part_limit = max_upload_bytes + _READ_CHUNK
+    try:
+        return await request.form(max_part_size=part_limit)
+    except StarletteHTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else ""
+        if exc.status_code == 400 and "exceeded maximum size" in detail:
+            raise _payload_too_large(
+                _oversized_part_received(request, part_limit), max_upload_bytes
+            ) from exc
+        raise
+
+
 async def parse_create_job(request: Request, settings: Settings) -> CreateJobCommand:
     content_type = (request.headers.get("content-type") or "").lower()
     _assert_content_length(request, settings.max_upload_bytes)
@@ -107,13 +150,13 @@ def _assert_content_length(request: Request, max_upload_bytes: int) -> None:
     except ValueError:
         raise DomainError(ErrorType.INVALID_INPUT, "invalid content-length") from None
     if length > max_upload_bytes + _MULTIPART_OVERHEAD:
-        raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+        raise _payload_too_large(length, max_upload_bytes)
 
 
 async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobCommand:
     body = await request.body()
     if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
-        raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+        raise _payload_too_large(len(body), max_upload_bytes)
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as exc:
@@ -154,7 +197,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
 
 
 async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJobCommand:
-    form = await request.form()
+    form = await _read_form(request, max_upload_bytes)
     text_value = form.get("text")
     upload = form.get("file")
     text_present = isinstance(text_value, str) and text_value.strip() != ""
@@ -221,7 +264,7 @@ async def _read_upload_raw(
             break
         total += len(piece)
         if total > max_upload_bytes:
-            raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+            raise _payload_too_large(total, max_upload_bytes)
         chunks.append(piece)
     return b"".join(chunks)
 
@@ -238,7 +281,7 @@ async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
     if content_type.startswith(_JSON_CONTENT):
         body = await request.body()
         if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
-            raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+            raise _payload_too_large(len(body), max_upload_bytes)
         try:
             payload = json.loads(body)
         except json.JSONDecodeError as exc:
@@ -248,10 +291,13 @@ async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+        encoded = text.encode("utf-8")
+        if len(encoded) > max_upload_bytes:
+            raise _payload_too_large(len(encoded), max_upload_bytes)
         return text
 
     if content_type.startswith(_MULTIPART_CONTENT):
-        form = await request.form()
+        form = await _read_form(request, max_upload_bytes)
         text_value = form.get("text")
         upload = form.get("file")
         text_present = isinstance(text_value, str) and text_value.strip() != ""
@@ -276,7 +322,7 @@ async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
     # Otherwise treat as raw text
     body = await request.body()
     if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
-        raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+        raise _payload_too_large(len(body), max_upload_bytes)
     text, _ = _decode_source_text(body, max_upload_bytes)
     if not text.strip():
         raise DomainError(ErrorType.INVALID_INPUT, "text is required")
@@ -289,7 +335,7 @@ async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]
     if content_type.startswith(_JSON_CONTENT):
         body = await request.body()
         if len(body) > settings.max_upload_bytes + _MULTIPART_OVERHEAD:
-            raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+            raise _payload_too_large(len(body), settings.max_upload_bytes)
         try:
             payload = json.loads(body)
         except json.JSONDecodeError as exc:
@@ -305,7 +351,7 @@ async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]
         return text, encoding
 
     if content_type.startswith(_MULTIPART_CONTENT):
-        form = await request.form()
+        form = await _read_form(request, settings.max_upload_bytes)
         text_value = form.get("text")
         upload = form.get("file")
         text_present = isinstance(text_value, str) and text_value.strip() != ""
@@ -337,7 +383,7 @@ async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]
 
 def _decode_source_text(raw: bytes, max_upload_bytes: int | None = None) -> tuple[str, str]:
     if max_upload_bytes is not None and len(raw) > max_upload_bytes:
-        raise DomainError(ErrorType.INVALID_INPUT, "upload exceeds size limit")
+        raise _payload_too_large(len(raw), max_upload_bytes)
 
     if raw.startswith(b"\xef\xbb\xbf"):
         try:

@@ -72,6 +72,12 @@ docker compose up --build
 
 The **worker** image installs FFmpeg via apt (the slim API image does not). FFmpeg is invoked with argv lists only; no Python ffmpeg binding. API and worker start as root only long enough to `chown` the `./storage` bind-mount (a **real directory**, not a symlink; `chown` walks the tree on every start and can get slower as `storage/` grows), then drop to uid 1000 (`app`). Frontend nginx listens on container port 80, published as `127.0.0.1:8080`.
 
+### Configuration
+
+`MAX_UPLOAD_BYTES` (default `52428800`, 50 MiB) is the only upload size limit. The API reads it, `GET /api/capabilities` returns it as `limits.max_upload_bytes`, and the UI uses that value for the file check, the pasted-text check, and the message. Size is bytes, not characters (pasted text is measured as UTF-8). Nginx does not apply a smaller cap (`client_max_body_size 0` on `/api/`). An upload over the limit is HTTP 413 `PAYLOAD_TOO_LARGE` and names both the received size and the limit.
+
+About 1 million CJK characters is 3 MB of UTF-8; 1 million Latin or Vietnamese characters is roughly 1–1.5 MB. A 5-million-character novel is about 15 MB of UTF-8 and fits the default. Change `MAX_UPLOAD_BYTES` in `.env` (see `.env.example`) and restart the API to raise or lower the limit in the API and the UI together. Rebuild the frontend image only if it was built before this change; a current UI learns the limit from the API.
+
 Default providers are `fake` / `fake` so a clean clone boots **offline**. `VITE_*` values are baked into the frontend image; after changing them, run `docker compose up --build` again.
 
 ### Offline smoke (fakes)

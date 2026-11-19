@@ -9,6 +9,7 @@ from app.api.schemas import (
     CapabilitiesResponse,
     TranslationProfileResponse,
     TtsEngineResponse,
+    UploadLimits,
     VoiceResponse,
 )
 from app.application.capabilities import CapabilitiesService
@@ -45,4 +46,5 @@ async def get_capabilities(
         estimate_defaults=result.estimate_defaults,
         text_normalization=settings.text_normalization_enabled,
         tts_engines=[TtsEngineResponse(**asdict(e)) for e in result.tts_engines],
+        limits=UploadLimits(max_upload_bytes=settings.max_upload_bytes),
     )

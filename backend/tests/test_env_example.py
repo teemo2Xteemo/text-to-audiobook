@@ -67,6 +67,29 @@ def test_compose_is_cpu_only_with_worker_redis_healthcheck() -> None:
     assert body.count("OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}") == 2
 
 
+def _assignment_value(text: str, name: str) -> str:
+    prefix = f"{name}="
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped.removeprefix(prefix).strip()
+    raise AssertionError(f"{name} is missing from .env.example")
+
+
+def test_max_upload_bytes_defaults_match_settings() -> None:
+    from app.config.settings import Settings
+
+    expected = str(Settings.model_fields["max_upload_bytes"].default)
+    assert expected == "52428800"
+    env_value = _assignment_value(ENV_EXAMPLE.read_text(encoding="utf-8"), "MAX_UPLOAD_BYTES")
+    assert env_value == expected
+    compose = _compose_without_comments(COMPOSE.read_text(encoding="utf-8"))
+    assert f"MAX_UPLOAD_BYTES: ${{MAX_UPLOAD_BYTES:-{expected}}}" in compose
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    assert "client_max_body_size 0;" in nginx
+    assert "client_max_body_size 3m" not in nginx
+
+
 def test_compose_worker_wires_max_recovery_attempts() -> None:
     body = _compose_without_comments(COMPOSE.read_text(encoding="utf-8"))
     assert body.count("MAX_RECOVERY_ATTEMPTS: ${MAX_RECOVERY_ATTEMPTS:-3}") == 1

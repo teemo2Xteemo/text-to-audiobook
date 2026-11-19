@@ -171,6 +171,43 @@ describe("api client", () => {
     );
   });
 
+  it("shows a friendly message for a non-JSON 413", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<html><body><h1>413 Request Entity Too Large</h1></body></html>", {
+          status: 413,
+          headers: { "Content-Type": "text/html" },
+        }),
+      ),
+    );
+    await expect(getJob(JOB_ID)).rejects.toEqual(
+      expect.objectContaining({
+        error_type: "PAYLOAD_TOO_LARGE",
+        message:
+          "Upload is too large for the server limit. Try a smaller file or raise MAX_UPLOAD_BYTES.",
+        status: 413,
+      }),
+    );
+  });
+
+  it("passes a JSON 413 envelope message through unchanged", async () => {
+    const message = "upload exceeds size limit (received 100 bytes, limit 50 bytes)";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ error_type: "PAYLOAD_TOO_LARGE", message }, 413),
+      ),
+    );
+    await expect(getJob(JOB_ID)).rejects.toEqual(
+      expect.objectContaining({
+        error_type: "PAYLOAD_TOO_LARGE",
+        message,
+        status: 413,
+      }),
+    );
+  });
+
   it("handles non-JSON 500 error without masking as INVALID_INPUT", async () => {
     vi.stubGlobal(
       "fetch",

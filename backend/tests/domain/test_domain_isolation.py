@@ -27,6 +27,7 @@ APPLICATION_DIR = Path(__file__).resolve().parents[2] / "app" / "application"
 def test_error_type_codes_match_backend_rule() -> None:
     assert {item.value for item in ErrorType} == {
         "INVALID_INPUT",
+        "PAYLOAD_TOO_LARGE",
         "UNSUPPORTED_LANGUAGE",
         "TRANSLATION_FAILED",
         "TTS_FAILED",
