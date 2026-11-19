@@ -19,6 +19,7 @@ import {
   SPEED_MIN,
   TTS_ENGINE_STORAGE_KEY,
 } from "../lib/constants";
+import { utf8ByteLength } from "../lib/bytes";
 import { envDefaultSourceLanguage, envDefaultTargetLanguage } from "../lib/env";
 import {
   canGenerate,
@@ -269,7 +270,14 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
   const metrics = useMemo(() => estimateTextMetrics(text), [text]);
   const isSubtitleInput = metrics.isSrt || /\.(srt|vtt)$/i.test(file?.name ?? "");
   const maxUploadBytes = capabilities.limits?.max_upload_bytes ?? MAX_FILE_SIZE_BYTES;
-  const pasteByteLength = useMemo(() => new TextEncoder().encode(text).length, [text]);
+  const pasteByteLength = useMemo(() => {
+    // UTF-8 is at most 3 bytes per UTF-16 code unit. Skip the scan while the
+    // paste cannot reach the limit. Count code points only when it might.
+    if (text.length * 3 <= maxUploadBytes) {
+      return text.length;
+    }
+    return utf8ByteLength(text);
+  }, [text, maxUploadBytes]);
   const pasteError =
     text.length > 0 && pasteByteLength > maxUploadBytes
       ? `Paste exceeds maximum allowed size of ${formatFileSize(maxUploadBytes)} (${formatFileSize(pasteByteLength)}).`

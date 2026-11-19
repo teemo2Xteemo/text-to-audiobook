@@ -361,7 +361,12 @@ def test_post_rejects_chunked_body_without_content_length(jobs_client: TestClien
         content=chunks(),
         headers={"content-type": "application/json"},
     )
-    _assert_payload_too_large(response, len(payload))
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error_type"] == ErrorType.PAYLOAD_TOO_LARGE
+    # The remainder of a chunked body is not read, so the size is a floor.
+    assert "received more than" in body["message"]
+    assert "limit 200 bytes" in body["message"]
 
 
 def test_post_rejects_chunked_file_without_content_length(jobs_client: TestClient) -> None:

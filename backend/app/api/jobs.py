@@ -9,6 +9,7 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import (
     get_job_service,
@@ -224,7 +225,7 @@ async def analyze_text(
         slice_text, detector, settings.language_confirm_threshold
     )
 
-    chapters = split_chapters(text)
+    chapters = await run_in_threadpool(split_chapters, text)
     chapters_count = sum(1 for c in chapters if c.index > 0)
     chapters_preview = [
         ChapterSummary(index=c.index, title=c.title, char_count=c.char_count) for c in chapters[:10]

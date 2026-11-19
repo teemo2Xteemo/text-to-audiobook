@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -76,6 +77,20 @@ def _assignment_value(text: str, name: str) -> str:
     raise AssertionError(f"{name} is missing from .env.example")
 
 
+def _nginx_client_max_body_bytes(text: str) -> int:
+    match = re.search(r"client_max_body_size\s+(\d+)([kmgKMG])?;", text)
+    assert match is not None, text
+    value = int(match.group(1))
+    unit = (match.group(2) or "").lower()
+    if unit == "k":
+        return value * 1024
+    if unit == "m":
+        return value * 1024 * 1024
+    if unit == "g":
+        return value * 1024 * 1024 * 1024
+    return value
+
+
 def test_max_upload_bytes_defaults_match_settings() -> None:
     from app.config.settings import Settings
 
@@ -86,8 +101,9 @@ def test_max_upload_bytes_defaults_match_settings() -> None:
     compose = _compose_without_comments(COMPOSE.read_text(encoding="utf-8"))
     assert f"MAX_UPLOAD_BYTES: ${{MAX_UPLOAD_BYTES:-{expected}}}" in compose
     nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
-    assert "client_max_body_size 0;" in nginx
-    assert "client_max_body_size 3m" not in nginx
+    nginx_limit = _nginx_client_max_body_bytes(nginx)
+    assert nginx_limit >= int(expected)
+    assert "client_max_body_size 0" not in nginx
 
 
 def test_compose_worker_wires_max_recovery_attempts() -> None:

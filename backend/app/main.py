@@ -17,6 +17,7 @@ from app.api.errors import (
 )
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
+from app.api.upload_limit import UploadSizeLimitMiddleware
 from app.config import Settings
 from app.domain.errors import DomainError
 
@@ -37,6 +38,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_exception_handler(ValidationError, validation_error_handler)
     application.add_exception_handler(StarletteHTTPException, http_exception_handler)
     application.add_exception_handler(Exception, unhandled_exception_handler)
+    # Outermost: cap /api/ bodies before routes buffer or spool them.
+    application.add_middleware(UploadSizeLimitMiddleware)
     application.include_router(health_router)
     application.include_router(capabilities_router)
     application.include_router(jobs_router)

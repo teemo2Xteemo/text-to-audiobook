@@ -6,6 +6,7 @@ from pathlib import Path
 import charset_normalizer
 from fastapi import Request, UploadFile
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -20,7 +21,13 @@ from app.domain.jobs import JobMode, OutputFormat, SrtTiming
 
 _JSON_CONTENT = "application/json"
 _MULTIPART_CONTENT = "multipart/form-data"
-_MULTIPART_OVERHEAD = 4096
+# Extra bytes allowed on the raw HTTP body so multipart framing fits around a
+# story that is itself at MAX_UPLOAD_BYTES. The story text is still measured
+# as exact UTF-8 bytes. A JSON body can be larger than the text because of
+# quoting, so a paste the UI accepted can still be 413 when the envelope
+# exceeds this allowance.
+MULTIPART_OVERHEAD = 4096
+_MULTIPART_OVERHEAD = MULTIPART_OVERHEAD
 _READ_CHUNK = 64 * 1024
 _ALLOWED_FILE_MIME = frozenset(
     {"application/octet-stream", "application/x-subrip", "text/plain", "text/vtt"}
@@ -87,24 +94,33 @@ def _select_charset_match(
     return None
 
 
-def _payload_too_large(received: int, limit: int) -> DomainError:
+def payload_too_large_message(received: int, limit: int, *, exact: bool = True) -> str:
+    shown = str(received) if exact else f"more than {received}"
+    return f"upload exceeds size limit (received {shown} bytes, limit {limit} bytes)"
+
+
+def _payload_too_large(received: int, limit: int, *, exact: bool = True) -> DomainError:
     return DomainError(
         ErrorType.PAYLOAD_TOO_LARGE,
-        f"upload exceeds size limit (received {received} bytes, limit {limit} bytes)",
+        payload_too_large_message(received, limit, exact=exact),
     )
 
 
-def _oversized_part_received(request: Request, part_limit: int) -> int:
-    """Bytes to report when Starlette aborts a part before we can measure it."""
-    raw = request.headers.get("content-length")
-    if raw is not None:
-        try:
-            length = int(raw)
-        except ValueError:
-            length = 0
-        if length > part_limit:
-            return length
-    return part_limit + 1
+async def _read_body_limited(request: Request, max_bytes: int, limit: int) -> bytes:
+    """Read the body, and stop once it passes ``max_bytes``.
+
+    The abort message says "more than N bytes" because the remainder of the
+    stream is not consumed and the exact size is unknown.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async for piece in request.stream():
+        total += len(piece)
+        if total > max_bytes:
+            raise _payload_too_large(max_bytes, limit, exact=False)
+        if piece:
+            chunks.append(piece)
+    return b"".join(chunks)
 
 
 async def _read_form(request: Request, max_upload_bytes: int) -> FormData:
@@ -122,9 +138,9 @@ async def _read_form(request: Request, max_upload_bytes: int) -> FormData:
     except StarletteHTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, str) else ""
         if exc.status_code == 400 and "exceeded maximum size" in detail:
-            raise _payload_too_large(
-                _oversized_part_received(request, part_limit), max_upload_bytes
-            ) from exc
+            # Starlette stops the part at its cap and does not report the real
+            # part size. Say the body was larger than that cap, not an exact count.
+            raise _payload_too_large(part_limit, max_upload_bytes, exact=False) from exc
         raise
 
 
@@ -154,9 +170,9 @@ def _assert_content_length(request: Request, max_upload_bytes: int) -> None:
 
 
 async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobCommand:
-    body = await request.body()
-    if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
-        raise _payload_too_large(len(body), max_upload_bytes)
+    body = await _read_body_limited(
+        request, max_upload_bytes + _MULTIPART_OVERHEAD, max_upload_bytes
+    )
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as exc:
@@ -169,7 +185,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
         parsed = CreateJobJsonBody.model_validate(payload)
     except ValidationError as exc:
         raise DomainError(ErrorType.INVALID_INPUT, validation_message(list(exc.errors()))) from exc
-    text, _ = _decode_source_text(parsed.text.encode("utf-8"), max_upload_bytes)
+    text, _ = await _decode_source_text_async(parsed.text.encode("utf-8"), max_upload_bytes)
     source_language = parsed.source_language.strip()
     target_language = parsed.target_language.strip()
     if parsed.mode == JobMode.TRANSLATE:
@@ -210,7 +226,7 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         text = await _read_upload(upload, max_upload_bytes)
     else:
         assert isinstance(text_value, str)
-        text, _ = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
+        text, _ = await _decode_source_text_async(text_value.encode("utf-8"), max_upload_bytes)
 
     mode_raw = _optional_form_string(form.get("mode")) or JobMode.TRANSLATE.value
     try:
@@ -271,7 +287,7 @@ async def _read_upload_raw(
 
 async def _read_upload(upload: UploadFile | StarletteUploadFile, max_upload_bytes: int) -> str:
     raw = await _read_upload_raw(upload, max_upload_bytes)
-    text, _ = _decode_source_text(raw, max_upload_bytes)
+    text, _ = await _decode_source_text_async(raw, max_upload_bytes)
     return text
 
 
@@ -279,9 +295,9 @@ async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
     content_type = (request.headers.get("content-type") or "").lower()
     _assert_content_length(request, max_upload_bytes)
     if content_type.startswith(_JSON_CONTENT):
-        body = await request.body()
-        if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
-            raise _payload_too_large(len(body), max_upload_bytes)
+        body = await _read_body_limited(
+            request, max_upload_bytes + _MULTIPART_OVERHEAD, max_upload_bytes
+        )
         try:
             payload = json.loads(body)
         except json.JSONDecodeError as exc:
@@ -310,20 +326,20 @@ async def parse_detect_language(request: Request, max_upload_bytes: int) -> str:
         if file_present:
             assert isinstance(upload, StarletteUploadFile)
             raw = await _read_upload_raw(upload, max_upload_bytes)
-            text, _ = _decode_source_text(raw, max_upload_bytes)
+            text, _ = await _decode_source_text_async(raw, max_upload_bytes)
         else:
             assert isinstance(text_value, str)
-            text, _ = _decode_source_text(text_value.encode("utf-8"), max_upload_bytes)
+            text, _ = await _decode_source_text_async(text_value.encode("utf-8"), max_upload_bytes)
 
         if not text.strip():
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
         return text
 
     # Otherwise treat as raw text
-    body = await request.body()
-    if len(body) > max_upload_bytes + _MULTIPART_OVERHEAD:
-        raise _payload_too_large(len(body), max_upload_bytes)
-    text, _ = _decode_source_text(body, max_upload_bytes)
+    body = await _read_body_limited(
+        request, max_upload_bytes + _MULTIPART_OVERHEAD, max_upload_bytes
+    )
+    text, _ = await _decode_source_text_async(body, max_upload_bytes)
     if not text.strip():
         raise DomainError(ErrorType.INVALID_INPUT, "text is required")
     return text
@@ -333,9 +349,9 @@ async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]
     content_type = (request.headers.get("content-type") or "").lower()
     _assert_content_length(request, settings.max_upload_bytes)
     if content_type.startswith(_JSON_CONTENT):
-        body = await request.body()
-        if len(body) > settings.max_upload_bytes + _MULTIPART_OVERHEAD:
-            raise _payload_too_large(len(body), settings.max_upload_bytes)
+        body = await _read_body_limited(
+            request, settings.max_upload_bytes + _MULTIPART_OVERHEAD, settings.max_upload_bytes
+        )
         try:
             payload = json.loads(body)
         except json.JSONDecodeError as exc:
@@ -345,7 +361,9 @@ async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]
         text_val = payload.get("text")
         if not isinstance(text_val, str) or not text_val.strip():
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
-        text, encoding = _decode_source_text(text_val.encode("utf-8"), settings.max_upload_bytes)
+        text, encoding = await _decode_source_text_async(
+            text_val.encode("utf-8"), settings.max_upload_bytes
+        )
         if not text.strip():
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
         return text, encoding
@@ -364,10 +382,10 @@ async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]
         if file_present:
             assert isinstance(upload, StarletteUploadFile)
             raw = await _read_upload_raw(upload, settings.max_upload_bytes)
-            text, encoding = _decode_source_text(raw, settings.max_upload_bytes)
+            text, encoding = await _decode_source_text_async(raw, settings.max_upload_bytes)
         else:
             assert isinstance(text_value, str)
-            text, encoding = _decode_source_text(
+            text, encoding = await _decode_source_text_async(
                 text_value.encode("utf-8"), settings.max_upload_bytes
             )
 
@@ -379,6 +397,14 @@ async def parse_analyze(request: Request, settings: Settings) -> tuple[str, str]
         ErrorType.INVALID_INPUT,
         "content type must be application/json or multipart/form-data",
     )
+
+
+async def _decode_source_text_async(
+    raw: bytes, max_upload_bytes: int | None = None
+) -> tuple[str, str]:
+    # charset_normalizer and the decode of a full novel are CPU work. Keep them
+    # off the event loop so /health and other requests stay responsive.
+    return await run_in_threadpool(_decode_source_text, raw, max_upload_bytes)
 
 
 def _decode_source_text(raw: bytes, max_upload_bytes: int | None = None) -> tuple[str, str]:
