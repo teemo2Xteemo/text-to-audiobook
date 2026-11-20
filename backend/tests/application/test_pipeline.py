@@ -27,6 +27,7 @@ from app.domain.languages import AUTO_SOURCE_LANGUAGE
 from app.domain.ports import NarrationProcessor
 from app.domain.retry import RetryPolicy
 from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
+from app.infrastructure.chapter_manifest_fs import FilesystemChapterManifest
 from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from tests.fakes import (
     FakeAudioProcessor,
@@ -172,6 +173,7 @@ def _orchestrator(
         "audio": audio,
         "jobs": jobs,
         "checkpoint_storage_factory": CheckpointFilesystem,
+        "chapter_manifest_factory": FilesystemChapterManifest,
         "retry_policy": retry_policy or RetryPolicy(max_attempts=3, backoff_seconds=1.0),
         "sleep": sleep if sleep is not None else _RecordingSleep(),
         "chapter_pause_ms": chapter_pause_ms,
@@ -337,9 +339,9 @@ def test_multi_chunk_writes_per_chunk_audio_then_merge(tmp_path: Path) -> None:
         assert (workspace / "audio" / f"{chunk_id}.mp3").is_file()
         assert (workspace / "audio" / f"{chunk_id}.normalized.mp3").is_file()
     assert len(tts.calls) == result.chunk_total
-    assert len(audio.merge_calls) == 1
-    assert len(audio.merge_calls[0]) == result.chunk_total
+    assert len(audio.merge_calls[-1]) == result.chunk_total
     assert (workspace / "output.mp3").is_file()
+    assert (workspace / "chapters" / "0001.mp3").is_file()
 
 
 def test_checkpoint_skips_completed_translate_chunk(tmp_path: Path) -> None:
@@ -616,7 +618,7 @@ def test_checkpoint_json_shape_after_success(tmp_path: Path) -> None:
     assert payload
     for entry in payload:
         assert set(entry) == {"chunk_id", "stage", "artifact_path"}
-        assert entry["stage"] in {STAGE_TRANSLATED, "narrated", "tts", "normalized"}
+        assert entry["stage"] in {STAGE_TRANSLATED, "narrated", "tts", "normalized", "chapter"}
         artifact = workspace / entry["artifact_path"]
         assert artifact.is_file() and artifact.stat().st_size > 0
 

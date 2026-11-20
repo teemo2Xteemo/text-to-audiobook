@@ -6,9 +6,10 @@ import threading
 import time
 import uuid
 from collections import defaultdict
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import (
@@ -22,6 +23,8 @@ from app.api.errors import envelope
 from app.api.parse import parse_analyze, parse_create_job, parse_detect_language
 from app.api.schemas import (
     AnalyzeResponse,
+    ChapterListItem,
+    ChapterListResponse,
     ChapterSummary,
     DetectLanguageResponse,
     JobCreatedResponse,
@@ -32,12 +35,14 @@ from app.api.schemas import (
 )
 from app.application.capabilities import engine_label
 from app.application.jobs import JobService
+from app.application.pipeline.chapter_zip import iter_stored_zip
 from app.application.pipeline.chapters import ChapterKind, split_chapters_detailed
 from app.config.factory import build_artifact_cache
 from app.config.settings import Settings
 from app.domain.audio import TTSSettings, ensure_valid_speed
+from app.domain.chapters import ChapterManifest, ChapterStatus
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import JobStatus, OutputFormat
+from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.domain.ports import LanguageDetector, TTSProvider
 
 router = APIRouter()
@@ -76,7 +81,17 @@ async def get_job(
         subtitles_path = service.output_subtitles_path(job)
         if subtitles_path.is_file() and subtitles_path.stat().st_size > 0:
             subtitles_url = f"/api/jobs/{job.id}/subtitles"
-    return JobStatusResponse.from_job(job, subtitles_url=subtitles_url)
+    manifest = await _read_manifest(service, job.id)
+    total, ready, failed, chapters_url, zip_url = _chapter_fields(job, manifest)
+    return JobStatusResponse.from_job(
+        job,
+        subtitles_url=subtitles_url,
+        chapters_total=total,
+        chapters_ready=ready,
+        chapters_failed=failed,
+        chapters_url=chapters_url,
+        zip_url=zip_url,
+    )
 
 
 @router.get("/api/jobs/{job_id}/audio")
@@ -162,6 +177,201 @@ async def retry_job(
             ) from exc
         raise
     return JobCreatedResponse(job_id=retried.id, status=retried.status)
+
+
+@router.get("/api/jobs/{job_id}/chapters", response_model=ChapterListResponse)
+async def list_job_chapters(
+    job_id: str,
+    status: str | None = None,
+    q: str | None = None,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    service: JobService = Depends(get_job_service),
+) -> ChapterListResponse:
+    job = await _require_job(job_id, service)
+    manifest = await _read_manifest(service, job.id)
+    if manifest is None:
+        return ChapterListResponse(
+            job_id=job.id,
+            total=0,
+            ready=0,
+            failed=0,
+            offset=offset,
+            limit=limit,
+            matched=0,
+            partial=False,
+            items=[],
+        )
+    items = _chapter_items(service, job, manifest)
+    total, ready, failed = manifest.counts()
+    if status is not None:
+        allowed = {item.value for item in ChapterStatus}
+        if status not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=envelope(ErrorType.INVALID_INPUT, "invalid chapter status"),
+            )
+        items = [item for item in items if item.status == status]
+    if q is not None and q.strip():
+        needle = q.strip().casefold()
+        items = [
+            item
+            for item in items
+            if needle in item.title.casefold()
+            or needle in item.title_source.casefold()
+            or needle in f"{item.ordinal:04d}"
+        ]
+    matched = len(items)
+    page = items[offset : offset + limit]
+    return ChapterListResponse(
+        job_id=job.id,
+        total=total,
+        ready=ready,
+        failed=failed,
+        matched=matched,
+        offset=offset,
+        limit=limit,
+        partial=ready < total,
+        items=page,
+    )
+
+
+@router.get("/api/jobs/{job_id}/chapters/{ordinal}/audio")
+async def download_chapter_audio(
+    job_id: str,
+    ordinal: int,
+    download: int = Query(default=0),
+    service: JobService = Depends(get_job_service),
+) -> FileResponse:
+    job = await _require_job(job_id, service)
+    if ordinal < 1:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.INVALID_INPUT, "chapter not found"),
+        )
+    manifest = await _read_manifest(service, job.id)
+    record = None if manifest is None else manifest.by_ordinal(ordinal)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.INVALID_INPUT, "chapter not found"),
+        )
+    if record.status is not ChapterStatus.READY:
+        raise HTTPException(
+            status_code=409,
+            detail=envelope(ErrorType.INVALID_INPUT, "chapter not ready"),
+        )
+    path = service.chapter_audio_path(job, ordinal)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=envelope(ErrorType.STORAGE_FAILED, "chapter artifact missing"),
+        )
+    total = len(manifest.chapters) if manifest is not None else ordinal
+    filename = service.chapter_download_name(job, ordinal, record.title, total)
+    disposition = "attachment" if download else "inline"
+    return FileResponse(
+        path,
+        media_type=_MEDIA_TYPES[job.output_format],
+        filename=filename,
+        content_disposition_type=disposition,
+    )
+
+
+@router.get("/api/jobs/{job_id}/chapters.zip")
+async def download_chapters_zip(
+    job_id: str,
+    service: JobService = Depends(get_job_service),
+) -> StreamingResponse:
+    job = await _require_job(job_id, service)
+    manifest = await _read_manifest(service, job.id)
+    total = 0 if manifest is None else len(manifest.chapters)
+    entries: list[tuple[str, Path]] = []
+    if manifest is not None:
+        for record in sorted(manifest.chapters, key=lambda item: item.ordinal):
+            if record.status is not ChapterStatus.READY:
+                continue
+            path = service.chapter_audio_path(job, record.ordinal)
+            if not path.is_file() or path.stat().st_size == 0:
+                continue
+            name = service.chapter_download_name(job, record.ordinal, record.title, total)
+            entries.append((name, path))
+    if not entries:
+        raise HTTPException(
+            status_code=409,
+            detail=envelope(ErrorType.INVALID_INPUT, "no chapters ready"),
+        )
+    included = len(entries)
+    partial = included < total
+
+    filename = f"{job.id}-chapters.zip"
+    return StreamingResponse(
+        iter_stored_zip(entries),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Chapters-Partial": "true" if partial else "false",
+            "X-Chapters-Included": f"{included}/{total}",
+        },
+    )
+
+
+async def _require_job(job_id: str, service: JobService) -> Job:
+    _require_uuid(job_id)
+    job = await service.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.INVALID_INPUT, "job not found"),
+        )
+    return job
+
+
+async def _read_manifest(service: JobService, job_id: str) -> ChapterManifest | None:
+    """Parse off the event loop. Repeat polls hit the mtime cache inside the store."""
+    return await run_in_threadpool(service.load_chapter_manifest, job_id)
+
+
+def _chapter_fields(
+    job: Job, manifest: ChapterManifest | None
+) -> tuple[int, int, int, str | None, str | None]:
+    if manifest is None:
+        return 0, 0, 0, None, None
+    total, ready, failed = manifest.counts()
+    chapters_url = f"/api/jobs/{job.id}/chapters"
+    zip_url = f"/api/jobs/{job.id}/chapters.zip" if ready > 0 else None
+    return total, ready, failed, chapters_url, zip_url
+
+
+def _chapter_items(
+    service: JobService, job: Job, manifest: ChapterManifest
+) -> list[ChapterListItem]:
+    total = len(manifest.chapters)
+    items: list[ChapterListItem] = []
+    for record in manifest.chapters:
+        ready = record.status is ChapterStatus.READY
+        items.append(
+            ChapterListItem(
+                ordinal=record.ordinal,
+                index=record.ordinal,
+                kind=record.kind,  # type: ignore[arg-type]
+                chapter_number=record.chapter_number,
+                title=record.title,
+                title_source=record.title_source,
+                status=record.status.value,
+                chunk_first=record.chunk_first,
+                chunk_last=record.chunk_last,
+                duration_ms=record.duration_ms,
+                size_bytes=record.size_bytes,
+                error_type=record.error_type,
+                message=record.message,
+                filename=service.chapter_download_name(job, record.ordinal, record.title, total),
+                download_url=(
+                    f"/api/jobs/{job.id}/chapters/{record.ordinal}/audio" if ready else None
+                ),
+            )
+        )
+    return items
 
 
 async def _resolve_language_candidates(

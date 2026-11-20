@@ -11,9 +11,11 @@ STAGE_TRANSLATED = "translated"
 STAGE_NARRATED = "narrated"
 STAGE_TTS = "tts"
 STAGE_NORMALIZED = "normalized"
+STAGE_CHAPTER = "chapter"
 
 __all__ = [
     "CHECKPOINT_FILENAME",
+    "STAGE_CHAPTER",
     "STAGE_NARRATED",
     "STAGE_NORMALIZED",
     "STAGE_TRANSLATED",

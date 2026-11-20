@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AudioPlayer } from "./components/AudioPlayer";
+import { ChapterList } from "./components/ChapterList";
 import { JobForm } from "./components/JobForm";
 import { JobProgress } from "./components/JobProgress";
 import { useCapabilities } from "./hooks/useCapabilities";
@@ -162,6 +163,7 @@ export default function App() {
 
         <aside className="studio-sidebar" aria-label="Pipeline monitor and audio output">
           {currentJob ? <JobProgress job={currentJob} /> : null}
+          {currentJob ? <ChapterList job={currentJob} /> : null}
 
           {job.status === "error" && !job.job ? (
             <p role="alert" className="alert-banner alert-error">

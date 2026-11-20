@@ -1,4 +1,4 @@
-"""Chapter splitting for narrate (and, later, per-chapter download).
+"""Chapter splitting for narrate and translate, and the span map used for per-chapter audio.
 
 Detection is two steps:
 
@@ -55,14 +55,21 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.application.pipeline.chunk import chunk_source
+from app.domain.chapters import ChapterManifest, ChapterRecord
 from app.domain.chunking import CHUNK_MAX_CHARS, Chunk
 
+CHAPTER_DETECTOR_ID = "v2"
+
 __all__ = [
+    "CHAPTER_DETECTOR_ID",
     "Chapter",
+    "ChapterChunkSpan",
     "ChapterKind",
     "ChapterSplit",
+    "build_chapter_manifest",
     "chunk_by_chapter",
     "is_chapter_heading",
+    "plan_chapter_chunks",
     "split_chapters",
     "split_chapters_detailed",
 ]
@@ -760,16 +767,36 @@ def split_chapters(text: str) -> list[Chapter]:
     return split_chapters_detailed(text).chapters
 
 
-def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) -> list[Chunk]:
+@dataclass(frozen=True)
+class ChapterChunkSpan:
+    """Chunks that belong to one detected span. ``ordinal`` is the unique file id."""
+
+    ordinal: int
+    kind: ChapterKind
+    chapter_number: int | None
+    title_source: str
+    chunk_first: int
+    chunk_last: int
+
+
+def plan_chapter_chunks(
+    chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS
+) -> tuple[list[Chunk], list[ChapterChunkSpan]]:
+    """Pack each span on its own. ``Chunk.chapter`` stays the pause group.
+
+    An empty volume heading is spoken with the following body (same pause group)
+    and still gets its own ordinal, so the file name does not collide.
+    """
     chunks: list[Chunk] = []
+    spans: list[ChapterChunkSpan] = []
     global_index = 1
-    ordinal = 0
+    pause_group = 0
     for chapter in chapters:
         body = chapter.body.strip()
-        # A heading with no body (for example a volume title) belongs to the next chunk.
-        chunk_chapter = ordinal + 1
+        # A heading with no body (for example a volume title) belongs to the next group.
+        chunk_chapter = pause_group + 1
         if body:
-            ordinal += 1
+            pause_group += 1
         title = chapter.title.strip()
         if not body:
             if title and title != "Full text":
@@ -781,8 +808,9 @@ def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) 
         else:
             text_to_chunk = body
 
-        chapter_chunks = chunk_source(text_to_chunk, max_chars=max_chars)
-        for piece in chapter_chunks:
+        start = global_index
+        produced = 0
+        for piece in chunk_source(text_to_chunk, max_chars=max_chars):
             chunks.append(
                 Chunk(
                     id=f"chunk-{global_index:03d}",
@@ -792,4 +820,48 @@ def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) 
                 )
             )
             global_index += 1
-    return chunks
+            produced += 1
+        if produced:
+            spans.append(
+                ChapterChunkSpan(
+                    ordinal=chapter.ordinal or chapter.index,
+                    kind=chapter.kind,
+                    chapter_number=chapter.chapter_number,
+                    title_source=title,
+                    chunk_first=start,
+                    chunk_last=global_index - 1,
+                )
+            )
+    return chunks, spans
+
+
+def chunk_by_chapter(chapters: list[Chapter], max_chars: int = CHUNK_MAX_CHARS) -> list[Chunk]:
+    return plan_chapter_chunks(chapters, max_chars=max_chars)[0]
+
+
+def build_chapter_manifest(spans: list[ChapterChunkSpan], *, max_chars: int) -> ChapterManifest:
+    records: list[ChapterRecord] = []
+    for span in spans:
+        title = span.title_source.strip()
+        if span.kind is ChapterKind.PREFACE and not title:
+            title = "Preface"
+        elif not title:
+            title = f"Chapter {span.ordinal}"
+        records.append(
+            ChapterRecord(
+                ordinal=span.ordinal,
+                kind=span.kind.value,
+                chapter_number=span.chapter_number,
+                title_source=span.title_source,
+                title=title,
+                chunk_first=span.chunk_first,
+                chunk_last=span.chunk_last,
+            )
+        )
+    return ChapterManifest(
+        version=1,
+        max_chars=max_chars,
+        chapter_aware=True,
+        detector=CHAPTER_DETECTOR_ID,
+        chapters=records,
+    )

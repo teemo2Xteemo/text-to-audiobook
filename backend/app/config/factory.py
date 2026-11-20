@@ -27,6 +27,7 @@ from app.domain.ports import (
 from app.domain.retry import RetryPolicy
 from app.domain.translation_profile import TranslationProfile
 from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
+from app.infrastructure.chapter_manifest_fs import FilesystemChapterManifest
 from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
@@ -98,6 +99,7 @@ def build_job_service(settings: Settings) -> JobService:
         detector=build_language_detector(settings),
         language_confirm_threshold=settings.language_confirm_threshold,
         text_normalization_available=settings.text_normalization_enabled,
+        chapter_manifest_factory=FilesystemChapterManifest,
     )
 
 
@@ -383,6 +385,7 @@ def build_orchestrator(
         jobs=store,
         artifact_cache=build_artifact_cache(settings, normalizer_settings=normalizer_settings),
         checkpoint_storage_factory=CheckpointFilesystem,
+        chapter_manifest_factory=FilesystemChapterManifest,
         max_chars=settings.chunk_max_chars,
         retry_policy=RetryPolicy(
             max_attempts=settings.retry_max_attempts,

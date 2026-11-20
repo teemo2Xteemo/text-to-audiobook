@@ -85,6 +85,43 @@ export type JobStatusResponse = {
   srt_timing?: SrtTiming;
   normalize_text?: boolean;
   run_count?: number;
+  chapters_total?: number;
+  chapters_ready?: number;
+  chapters_failed?: number;
+  chapters_url?: string | null;
+  zip_url?: string | null;
+};
+
+export type ChapterAudioStatus = "pending" | "generating" | "ready" | "failed";
+
+export type ChapterListItem = {
+  ordinal: number;
+  index: number;
+  kind: ChapterKind;
+  chapter_number?: number | null;
+  title: string;
+  title_source: string;
+  status: ChapterAudioStatus;
+  chunk_first: number;
+  chunk_last: number;
+  duration_ms?: number | null;
+  size_bytes?: number | null;
+  error_type?: string | null;
+  message?: string | null;
+  filename: string;
+  download_url?: string | null;
+};
+
+export type ChapterListResponse = {
+  job_id: string;
+  total: number;
+  ready: number;
+  failed: number;
+  matched: number;
+  offset: number;
+  limit: number;
+  partial: boolean;
+  items: ChapterListItem[];
 };
 
 export type ErrorEnvelope = {

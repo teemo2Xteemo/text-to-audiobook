@@ -72,6 +72,9 @@ describe("jobUi", () => {
     expect(progressCopy("generating_audio", 1830, 4500, undefined, 4)).toBe(
       "Generating audio 1830/4500 · run 4",
     );
+    expect(progressCopy("generating_audio", 40, 80, "narrate", 2, 412, 800)).toBe(
+      "Generating audio 40/80 · 412/800 chapters ready · run 2",
+    );
     expect(progressCopy("failed", 0, 0)).toBe("Failed");
   });
 
