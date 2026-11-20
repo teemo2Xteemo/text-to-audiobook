@@ -21,3 +21,13 @@ Progress UI can show `12/35`. Partial failure is expressible. Chunk boundaries m
 
 - One request per story — rejected (AC long-story).
 - Tokenizers tied to a single script — rejected as a domain rule; adapters may apply extra limits.
+
+## Addendum: per-chapter audio (issue #29)
+
+A detected span (preface, volume, or chapter) is also an output unit. The worker writes `jobs/<id>/chapters.json` once, next to the saved chunk plan, before any chunk work. Counts stay off `Job`: `GET /api/jobs/{id}` reads the manifest. Each span's file is `chapters/{ordinal:04d}.{ext}`, where `ordinal` is the unique span index from chapter detection, not the printed chapter number.
+
+Assembly runs as soon as every chunk in that span is normalized, including when a run budget yields before the book merge. A finished `chapter-NNNN` checkpoint is not rebuilt. The merged `output.{ext}` is still produced for `GET /audio` after the job completes. Jobs that were already checkpointed without a manifest keep the previous packer and the single-file download.
+
+Timed SRT stays one timeline and does not get a manifest. Unheaded text is one span: the UI keeps the single download button and hides the chapter list when `chapters_total` is 0 or 1.
+
+ZIP downloads stream ready files with ZIP64 and store compression (no second encode, no full-book buffer). M4B export, per-chapter retry, and continuing past a failed chapter are not part of this addendum.

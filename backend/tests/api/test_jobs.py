@@ -14,6 +14,7 @@ from app.config.settings import Settings
 from app.domain.errors import ErrorType
 from app.domain.jobs import Job, JobStatus, OutputFormat
 from app.domain.translation_profile import TranslationProfile
+from app.infrastructure.chapter_manifest_fs import FilesystemChapterManifest
 from app.infrastructure.fs_storage import FilesystemJobStorage
 from app.main import create_app
 from tests.fakes import InMemoryJobStore, InMemoryQueue, InMemorySourceStorage
@@ -68,6 +69,7 @@ def memory(
                 supported_languages=("en-US", "ja-JP", "vi-VN", "zh-CN", "ar-SA"),
             ),
         ],
+        chapter_manifest_factory=FilesystemChapterManifest,
     )
     return service, store, source, queue
 
@@ -1415,3 +1417,156 @@ def test_preview_with_vieneu_engine_returns_wav(tmp_path: Path) -> None:
         res = client.post("/api/tts/preview", json=body)
     assert res.status_code == 200
     assert res.json()["mime_type"] == "audio/wav"
+
+
+def _save_manifest(tmp_path: Path, job_id: str, chapters: list) -> None:
+    from app.domain.chapters import ChapterManifest
+
+    FilesystemChapterManifest(tmp_path / "jobs" / job_id).save(
+        ChapterManifest(
+            version=1,
+            max_chars=1200,
+            chapter_aware=True,
+            detector="v2",
+            chapters=chapters,
+        )
+    )
+
+
+def test_chapter_download_while_generating_and_partial_zip(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    import io
+    import zipfile
+
+    from app.domain.chapters import ChapterRecord, ChapterStatus
+
+    _, store, _, _ = memory
+    created = jobs_client.post("/api/jobs", json=VALID_BODY).json()
+    job_id = created["job_id"]
+    job = asyncio.run(store.get(job_id))
+    assert job is not None
+    asyncio.run(
+        store.save(replace(job, status=JobStatus.GENERATING_AUDIO, chunk_current=1, chunk_total=4))
+    )
+    directory = tmp_path / "jobs" / job_id
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "secret.mp3").write_bytes(b"secret")
+    chapter = directory / "chapters" / "0001.mp3"
+    chapter.parent.mkdir(parents=True)
+    chapter.write_bytes(b"mp3!")
+    _save_manifest(
+        tmp_path,
+        job_id,
+        [
+            ChapterRecord(
+                ordinal=1,
+                kind="chapter",
+                chapter_number=1,
+                title_source="第一章 少年",
+                title="Chương 1 Thiếu niên",
+                chunk_first=1,
+                chunk_last=2,
+                status=ChapterStatus.READY,
+                file="../secret.mp3",
+                duration_ms=462000,
+                size_bytes=4,
+            ),
+            ChapterRecord(
+                ordinal=2,
+                kind="chapter",
+                chapter_number=2,
+                title_source="第二章",
+                title="Chương 2",
+                chunk_first=3,
+                chunk_last=4,
+                status=ChapterStatus.PENDING,
+            ),
+        ],
+    )
+
+    status = jobs_client.get(f"/api/jobs/{job_id}")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["chapters_total"] == 2
+    assert body["chapters_ready"] == 1
+    assert body["chapters_failed"] == 0
+    assert body["chapters_url"] == f"/api/jobs/{job_id}/chapters"
+    assert body["zip_url"] == f"/api/jobs/{job_id}/chapters.zip"
+    assert body["audio_url"] is None
+
+    listed = jobs_client.get(f"/api/jobs/{job_id}/chapters")
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert payload["partial"] is True
+    assert payload["items"][0]["status"] == "ready"
+    assert payload["items"][0]["duration_ms"] == 462000
+    assert payload["items"][0]["filename"].startswith("0001 - ")
+    assert payload["items"][0]["filename"].endswith(".mp3")
+    assert "Thiếu niên" in payload["items"][0]["filename"]
+    assert payload["items"][1]["download_url"] is None
+
+    ready_only = jobs_client.get(f"/api/jobs/{job_id}/chapters", params={"status": "ready"})
+    assert [item["ordinal"] for item in ready_only.json()["items"]] == [1]
+
+    audio = jobs_client.get(f"/api/jobs/{job_id}/chapters/1/audio")
+    assert audio.status_code == 200
+    assert audio.content == b"mp3!"
+    disposition = audio.headers["content-disposition"]
+    assert "filename*=" in disposition
+    assert "0001" in disposition
+
+    attachment = jobs_client.get(f"/api/jobs/{job_id}/chapters/1/audio", params={"download": 1})
+    assert "attachment" in attachment.headers["content-disposition"]
+
+    pending = jobs_client.get(f"/api/jobs/{job_id}/chapters/2/audio")
+    assert pending.status_code == 409
+    assert pending.json()["message"] == "chapter not ready"
+
+    missing = jobs_client.get(f"/api/jobs/{job_id}/chapters/9/audio")
+    assert missing.status_code == 404
+
+    bad = jobs_client.get(f"/api/jobs/{job_id}/chapters/not-a-number/audio")
+    assert bad.status_code == 400
+
+    zipped = jobs_client.get(f"/api/jobs/{job_id}/chapters.zip")
+    assert zipped.status_code == 200
+    assert zipped.headers["content-type"].startswith("application/zip")
+    assert zipped.headers["x-chapters-partial"] == "true"
+    assert zipped.headers["x-chapters-included"] == "1/2"
+    with zipfile.ZipFile(io.BytesIO(zipped.content)) as archive:
+        assert archive.namelist() == [payload["items"][0]["filename"]]
+        assert archive.read(archive.namelist()[0]) == b"mp3!"
+
+
+def test_legacy_job_has_empty_chapter_list_and_keeps_audio(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    _, store, _, _ = memory
+    created = jobs_client.post("/api/jobs", json=VALID_BODY).json()
+    job_id = created["job_id"]
+    listed = jobs_client.get(f"/api/jobs/{job_id}/chapters")
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 0
+    assert listed.json()["items"] == []
+    status = jobs_client.get(f"/api/jobs/{job_id}")
+    assert status.json()["chapters_total"] == 0
+    assert status.json()["chapters_url"] is None
+    assert status.json()["zip_url"] is None
+    assert jobs_client.get(f"/api/jobs/{job_id}/chapters.zip").status_code == 409
+
+    job = asyncio.run(store.get(job_id))
+    assert job is not None
+    asyncio.run(
+        store.save(replace(job, status=JobStatus.COMPLETED, chunk_total=1, chunk_current=1))
+    )
+    audio = tmp_path / "jobs" / job_id / "output.mp3"
+    audio.parent.mkdir(parents=True, exist_ok=True)
+    audio.write_bytes(b"book")
+    downloaded = jobs_client.get(f"/api/jobs/{job_id}/audio")
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"book"

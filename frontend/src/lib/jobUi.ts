@@ -66,6 +66,8 @@ export function progressCopy(
   chunkTotal: number,
   mode?: JobMode,
   runCount = 0,
+  chaptersReady = 0,
+  chaptersTotal = 0,
 ): string {
   let copy: string;
   switch (status) {
@@ -99,10 +101,36 @@ export function progressCopy(
       copy = "Failed";
       break;
   }
+  if (status === "generating_audio" && chaptersTotal > 1) {
+    copy = `${copy} · ${chaptersReady}/${chaptersTotal} chapters ready`;
+  }
   if (runCount > 1 && !isTerminalStatus(status)) {
     return `${copy} · run ${runCount}`;
   }
   return copy;
+}
+
+export function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size < 0) {
+    return "0 B";
+  }
+  if (size < 1024) {
+    return `${Math.round(size)} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  if (size < 1024 * 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+export function formatClock(durationMs: number): string {
+  const total = Math.max(0, Math.round(durationMs / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 export function languageLabel(code: string): string {

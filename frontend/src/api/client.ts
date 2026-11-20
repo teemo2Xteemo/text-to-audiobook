@@ -5,6 +5,7 @@ import {
   type Capabilities,
   type CreateJobInput,
   type DetectLanguageResponse,
+  type ChapterListResponse,
   type JobCreated,
   type JobStatusResponse,
   type TTSPreviewPayload,
@@ -126,6 +127,28 @@ export async function getCapabilities(): Promise<Capabilities> {
 export async function getJob(jobId: string): Promise<JobStatusResponse> {
   const response = await fetch(requestUrl(`/api/jobs/${jobId}`));
   return parseJson<JobStatusResponse>(response);
+}
+
+export async function getChapters(
+  jobId: string,
+  query: { offset?: number; limit?: number; status?: string; q?: string } = {},
+): Promise<ChapterListResponse> {
+  const params = new URLSearchParams();
+  if (query.offset !== undefined) {
+    params.set("offset", String(query.offset));
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  if (query.status) {
+    params.set("status", query.status);
+  }
+  if (query.q) {
+    params.set("q", query.q);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const response = await fetch(requestUrl(`/api/jobs/${jobId}/chapters${suffix}`));
+  return parseJson<ChapterListResponse>(response);
 }
 
 export async function createJob(input: CreateJobInput): Promise<JobCreated> {

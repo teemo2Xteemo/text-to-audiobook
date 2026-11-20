@@ -40,6 +40,11 @@ class JobStatusResponse(BaseModel):
     normalize_text: bool = False
     tts_engine: str | None = None
     run_count: int = 0
+    chapters_total: int = 0
+    chapters_ready: int = 0
+    chapters_failed: int = 0
+    chapters_url: str | None = None
+    zip_url: str | None = None
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -52,7 +57,17 @@ class JobStatusResponse(BaseModel):
         return payload
 
     @classmethod
-    def from_job(cls, job: Job, *, subtitles_url: str | None = None) -> JobStatusResponse:
+    def from_job(
+        cls,
+        job: Job,
+        *,
+        subtitles_url: str | None = None,
+        chapters_total: int = 0,
+        chapters_ready: int = 0,
+        chapters_failed: int = 0,
+        chapters_url: str | None = None,
+        zip_url: str | None = None,
+    ) -> JobStatusResponse:
         audio_url = f"/api/jobs/{job.id}/audio" if job.status is JobStatus.COMPLETED else None
         return cls(
             job_id=job.id,
@@ -76,6 +91,11 @@ class JobStatusResponse(BaseModel):
             normalize_text=job.normalize_text,
             tts_engine=job.tts_engine,
             run_count=job.run_count,
+            chapters_total=chapters_total,
+            chapters_ready=chapters_ready,
+            chapters_failed=chapters_failed,
+            chapters_url=chapters_url,
+            zip_url=zip_url,
         )
 
 
@@ -191,6 +211,36 @@ class AnalyzeResponse(BaseModel):
     duration_estimate_seconds: float
     process_time_estimate_seconds: float
     preview_lines: list[str]
+
+
+class ChapterListItem(BaseModel):
+    ordinal: int
+    index: int
+    kind: ChapterKindName
+    chapter_number: int | None = None
+    title: str
+    title_source: str
+    status: str
+    chunk_first: int
+    chunk_last: int
+    duration_ms: int | None = None
+    size_bytes: int | None = None
+    error_type: str | None = None
+    message: str | None = None
+    filename: str
+    download_url: str | None = None
+
+
+class ChapterListResponse(BaseModel):
+    job_id: str
+    total: int
+    ready: int
+    failed: int
+    matched: int
+    offset: int
+    limit: int
+    partial: bool
+    items: list[ChapterListItem]
 
 
 class TTSPreviewRequest(BaseModel):

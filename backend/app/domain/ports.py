@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.domain.audio import AudioArtifact, TTSSettings, Voice
+from app.domain.chapters import ChapterManifest
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import Job, OutputFormat
 from app.domain.languages import LanguageDetection
@@ -142,6 +143,14 @@ class ArtifactCache(Protocol):
     def get(self, operation: str, key: str, destination: Path) -> bool: ...
 
     def put(self, operation: str, key: str, source: Path) -> None: ...
+
+
+class ChapterManifestStore(Protocol):
+    """Workspace-scoped ``chapters.json``. The API reads; the worker writes."""
+
+    def load(self) -> ChapterManifest | None: ...
+
+    def save(self, manifest: ChapterManifest) -> None: ...
 
 
 class CheckpointStorage(Protocol):

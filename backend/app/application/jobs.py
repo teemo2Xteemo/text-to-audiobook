@@ -16,6 +16,7 @@ from app.application.capabilities import engine_available, engine_label, refresh
 from app.application.pipeline.parse import is_srt_document, strip_srt
 from app.application.pipeline.tts import resolve_voice
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
+from app.domain.chapters import ChapterManifest, chapter_disk_name, display_filename
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import (
     Job,
@@ -28,6 +29,7 @@ from app.domain.jobs import (
 )
 from app.domain.languages import AUTO_SOURCE_LANGUAGE, ensure_valid_languages
 from app.domain.ports import (
+    ChapterManifestStore,
     DiskJobStore,
     JobQueue,
     JobStore,
@@ -78,6 +80,7 @@ class JobService:
         text_normalization_available: bool = False,
         tts_engines: Mapping[str, TTSProvider | None] | None = None,
         default_tts_engine: str = "fake",
+        chapter_manifest_factory: Callable[[Path], ChapterManifestStore] | None = None,
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
@@ -102,6 +105,7 @@ class JobService:
         self._detector = detector
         self._language_confirm_threshold = language_confirm_threshold
         self._text_normalization_available = text_normalization_available
+        self._chapter_manifest_factory = chapter_manifest_factory
 
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
@@ -553,18 +557,36 @@ class JobService:
         return recovered
 
     def output_audio_path(self, job: Job) -> Path:
-        jobs_root = (self._storage_path / "jobs").resolve()
-        directory = (jobs_root / job.id).resolve()
-        if not directory.is_relative_to(jobs_root):
-            raise DomainError(ErrorType.INVALID_INPUT, "invalid job_id")
-        return directory / f"output.{job.output_format.value}"
+        return self._job_directory(job.id) / f"output.{job.output_format.value}"
 
     def output_subtitles_path(self, job: Job) -> Path:
+        return self._job_directory(job.id) / "output.srt"
+
+    def load_chapter_manifest(self, job_id: str) -> ChapterManifest | None:
+        factory = self._chapter_manifest_factory
+        if factory is None:
+            return None
+        directory = self._job_directory(job_id)
+        if not directory.is_dir():
+            return None
+        return factory(directory).load()
+
+    def chapter_audio_path(self, job: Job, ordinal: int) -> Path:
+        directory = self._job_directory(job.id)
+        path = (directory / chapter_disk_name(ordinal, job.output_format.value)).resolve()
+        if not path.is_relative_to(directory):
+            raise DomainError(ErrorType.INVALID_INPUT, "invalid chapter path")
+        return path
+
+    def chapter_download_name(self, job: Job, ordinal: int, title: str, total: int) -> str:
+        return display_filename(ordinal, title, job.output_format.value, total=total)
+
+    def _job_directory(self, job_id: str) -> Path:
         jobs_root = (self._storage_path / "jobs").resolve()
-        directory = (jobs_root / job.id).resolve()
+        directory = (jobs_root / job_id).resolve()
         if not directory.is_relative_to(jobs_root):
             raise DomainError(ErrorType.INVALID_INPUT, "invalid job_id")
-        return directory / "output.srt"
+        return directory
 
     def _filesystem(self) -> DiskJobStore:
         return self._disk_jobs

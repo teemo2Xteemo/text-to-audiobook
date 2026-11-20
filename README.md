@@ -401,8 +401,13 @@ curl -sS http://127.0.0.1:8000/api/jobs/${JOB_ID}
 
 #### 3. Download Artifacts
 
-- **Audio:** `GET /api/jobs/{job_id}/audio` — streams the generated audiobook (`audio/mpeg` or `audio/wav`) with HTTP Range (206) seek support.
+- **Audio:** `GET /api/jobs/{job_id}/audio` — streams the generated audiobook (`audio/mpeg` or `audio/wav`) with HTTP Range (206) seek support. Available once the job is `completed`.
 - **Subtitles:** `GET /api/jobs/{job_id}/subtitles` — downloads timed SubRip subtitles (`.srt`) aligned with narration timestamps.
+- **Chapters:** `GET /api/jobs/{job_id}/chapters` — lists spans (preface, volume, chapter) with status, duration, size, and error. `?status=ready|failed|pending|generating`, `?q=`, `?offset=`, `?limit=` (default 100, max 200). A job with no manifest returns `total: 0`. `chapters_total`, `chapters_ready`, `chapters_failed`, `chapters_url`, and `zip_url` are also on `GET /api/jobs/{job_id}` (`zip_url` is set once at least one chapter file is ready).
+- **One chapter:** `GET /api/jobs/{job_id}/chapters/{ordinal}/audio` — streams that file while the job is still running or has failed. `ordinal` is the unique span index (`0001` on disk), not the printed chapter number. `?download=1` sends `Content-Disposition: attachment`. `409` until that chapter is `ready`.
+- **ZIP:** `GET /api/jobs/{job_id}/chapters.zip` — streams the ready chapter files (`application/zip`, stored, ZIP64) named `0001 - <title>.mp3` in ordinal order. `X-Chapters-Partial: true` and `X-Chapters-Included: 412/800` until every span is included. `409` when none are ready. The archive is not stored on disk.
+
+Unheaded text is one chapter and the UI keeps the single audiobook button. Timed SRT stays one merged file and has no chapter list. A job that was already running when this landed (checkpoints, no manifest) finishes as a single file.
 
 #### 4. Retry Failed Job (`POST /api/jobs/{job_id}/retry`)
 
@@ -430,8 +435,8 @@ Retry resumes from per-chunk checkpoints keyed by chunk id only. When an upgrade
 split (subtitle paragraphing, sound-effect/rolling-cue handling, chapter detection,
 `CHUNK_MAX_CHARS`), a job that **failed before the upgrade** can reuse chunks cut at the old
 boundaries and repeat or skip passages. Before retrying such a job (any SRT job, narrate or
-translate, and chaptered narrate text), delete its `storage/jobs/<job_id>/chunks`, `audio`,
-`checkpoint.jsonl`, and legacy `checkpoint.json`, or create a new job.
+translate, and chaptered text), delete its `storage/jobs/<job_id>/chunks`, `audio`, `chapters`,
+`chapters.json`, `checkpoint.jsonl`, and legacy `checkpoint.json`, or create a new job.
 
 ### Job stays `translating` / `generating_audio` after the worker dies
 

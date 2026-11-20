@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { analyze, createJob, detectLanguage, getCapabilities, getJob, previewTts } from "./client";
+import { analyze, createJob, detectLanguage, getCapabilities, getChapters, getJob, previewTts } from "./client";
 import { ApiError } from "./types";
 import { JOB_ID, capabilitiesFixture, jsonResponse, queuedJob } from "../test/fixtures";
 
@@ -369,5 +369,26 @@ describe("api client", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ audio_base64: "", mime_type: "audio/mpeg" }));
     await previewTts({ text: "Hello", voice: "fish:a", tts_engine: "fish" });
     expect(JSON.parse((fetchMock.mock.calls[3]?.[1] as RequestInit).body as string).tts_engine).toBe("fish");
+  });
+
+  it("loads a chapter page with filter and search", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        job_id: JOB_ID,
+        total: 2,
+        ready: 1,
+        failed: 0,
+        matched: 1,
+        offset: 0,
+        limit: 100,
+        partial: true,
+        items: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await getChapters(JOB_ID, { offset: 0, limit: 100, status: "ready", q: "dawn" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/jobs/${JOB_ID}/chapters?offset=0&limit=100&status=ready&q=dawn`,
+    );
   });
 });
