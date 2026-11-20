@@ -685,3 +685,42 @@ def test_aligned_srt_narrate_has_no_chapter_files(tmp_path: Path) -> None:
     assert not (workspace / "chapters").exists()
     assert (workspace / "output.mp3").is_file()
     assert (workspace / "output.srt").is_file()
+
+
+def test_assembly_timeout_propagates_for_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rq.timeouts import JobTimeoutException
+
+    from app.application.pipeline import chapter_assembly
+
+    real_merge = chapter_assembly.merge_artifacts
+
+    async def _merge(audio, sources, destination, **kwargs):  # type: ignore[no-untyped-def]
+        if destination.name == "0002.mp3":
+            raise JobTimeoutException("Task exceeded maximum timeout value (180 seconds)")
+        return await real_merge(audio, sources, destination, **kwargs)
+
+    monkeypatch.setattr(chapter_assembly, "merge_artifacts", _merge)
+    job = _job(
+        id="17171717-1717-1717-1717-171717171717",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=500,
+    )
+    with pytest.raises(JobTimeoutException):
+        _run(orchestrator, job, workspace, text=_STORY)
+    manifest = FilesystemChapterManifest(workspace).load()
+    assert manifest is not None
+    assert manifest.chapters[0].status is ChapterStatus.READY
+    assert (workspace / "chapters" / "0001.mp3").is_file()
+    assert manifest.chapters[1].status is ChapterStatus.PENDING
+    assert manifest.chapters[1].error_type is None
