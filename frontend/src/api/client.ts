@@ -124,6 +124,13 @@ export async function getCapabilities(): Promise<Capabilities> {
   return parseJson<Capabilities>(response);
 }
 
+export async function continueWithEdge(jobId: string): Promise<JobCreated> {
+  const response = await fetch(requestUrl(`/api/jobs/${jobId}/continue-with-edge`), {
+    method: "POST",
+  });
+  return parseJson<JobCreated>(response);
+}
+
 export async function getJob(jobId: string): Promise<JobStatusResponse> {
   const response = await fetch(requestUrl(`/api/jobs/${jobId}`));
   return parseJson<JobStatusResponse>(response);

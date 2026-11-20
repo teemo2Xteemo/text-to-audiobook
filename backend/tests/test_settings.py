@@ -224,6 +224,14 @@ def test_groq_settings_and_validation() -> None:
     assert "gsk_secret_key" not in str(settings.groq_api_key)
 
 
+def test_tts_fallback_engine_is_edge_or_empty() -> None:
+    assert Settings(_env_file=None).tts_fallback_engine == "edge"
+    assert Settings(_env_file=None, tts_fallback_engine="").tts_fallback_engine == ""
+    assert Settings(_env_file=None, tts_fallback_engine="EDGE").tts_fallback_engine == "edge"
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, tts_fallback_engine="vieneu")
+
+
 def test_openrouter_settings_and_validation() -> None:
     with pytest.raises(ValidationError, match="OPENROUTER_BASE_URL"):
         Settings(_env_file=None, openrouter_base_url="ftp://invalid.com")

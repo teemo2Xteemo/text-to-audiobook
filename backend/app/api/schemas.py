@@ -45,6 +45,8 @@ class JobStatusResponse(BaseModel):
     chapters_failed: int = 0
     chapters_url: str | None = None
     zip_url: str | None = None
+    continue_with_edge: bool = False
+    tts_mix_warning: str | None = None
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -67,6 +69,8 @@ class JobStatusResponse(BaseModel):
         chapters_failed: int = 0,
         chapters_url: str | None = None,
         zip_url: str | None = None,
+        continue_with_edge: bool = False,
+        tts_mix_warning: str | None = None,
     ) -> JobStatusResponse:
         audio_url = f"/api/jobs/{job.id}/audio" if job.status is JobStatus.COMPLETED else None
         return cls(
@@ -96,6 +100,8 @@ class JobStatusResponse(BaseModel):
             chapters_failed=chapters_failed,
             chapters_url=chapters_url,
             zip_url=zip_url,
+            continue_with_edge=continue_with_edge,
+            tts_mix_warning=tts_mix_warning,
         )
 
 
@@ -229,6 +235,8 @@ class ChapterListItem(BaseModel):
     message: str | None = None
     filename: str
     download_url: str | None = None
+    tts_engine: str | None = None
+    note: str | None = None
 
 
 class ChapterListResponse(BaseModel):

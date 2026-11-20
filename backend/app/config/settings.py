@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     tts_provider: str = Field(default="fake")
     # Comma list of extra engines a job may pin; the default engine is always allowed.
     tts_engines_enabled: str = Field(default="")
+    # Explicit "Continue with Edge" only. Empty hides the button. Any other value
+    # is rejected at startup. Scope off hides it too. chapter offers it for
+    # unfinished chapters. Nothing switches engines on its own.
+    tts_fallback_engine: Literal["", "edge"] = "edge"
+    tts_fallback_scope: Literal["off", "chapter"] = "chapter"
     fish_audio_model: str = Field(default="s2.1-pro-free", min_length=1)
     fish_audio_api_key: SecretStr | None = Field(default=None)
     fish_audio_base_url: str = Field(default="https://api.fish.audio")
@@ -131,6 +136,13 @@ class Settings(BaseSettings):
     job_run_budget_seconds: float | None = Field(default=None, gt=0)
     max_stalled_runs: int = Field(default=3, ge=1)
     max_job_runs: int = Field(default=500, ge=1)
+
+    @field_validator("tts_fallback_engine", "tts_fallback_scope", mode="before")
+    @classmethod
+    def strip_tts_fallback(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
 
     @field_validator("job_run_budget_seconds", mode="before")
     @classmethod

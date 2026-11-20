@@ -28,6 +28,7 @@ const chapters = {
       size_bytes: 7395000,
       filename: "0001 - Chương 1 Thiếu niên.mp3",
       download_url: `/api/jobs/${JOB_ID}/chapters/1/audio`,
+      tts_engine: "fish",
     },
     {
       ordinal: 2,
@@ -75,6 +76,7 @@ describe("ChapterList", () => {
     });
     const view = render(<ChapterList job={job} />);
     expect(await screen.findByText("Chương 1 Thiếu niên")).toBeInTheDocument();
+    expect(screen.getByText("ready · fish")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Download ready chapters \(412\/800\) as ZIP/ })).toHaveAttribute(
       "href",
       `/api/jobs/${JOB_ID}/chapters.zip`,
