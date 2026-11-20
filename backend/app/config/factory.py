@@ -100,6 +100,9 @@ def build_job_service(settings: Settings) -> JobService:
         language_confirm_threshold=settings.language_confirm_threshold,
         text_normalization_available=settings.text_normalization_enabled,
         chapter_manifest_factory=FilesystemChapterManifest,
+        fallback_engine=settings.tts_fallback_engine,
+        fallback_scope=settings.tts_fallback_scope,
+        checkpoint_storage_factory=CheckpointFilesystem,
     )
 
 

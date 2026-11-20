@@ -9,9 +9,15 @@ import {
 
 type JobProgressProps = {
   job: JobStatusResponse;
+  onContinueWithEdge?: () => void;
+  continuePending?: boolean;
 };
 
-export function JobProgress({ job }: JobProgressProps) {
+export function JobProgress({
+  job,
+  onContinueWithEdge,
+  continuePending = false,
+}: JobProgressProps) {
   const copy = progressCopy(
     job.status,
     job.chunk_current,
@@ -107,6 +113,22 @@ export function JobProgress({ job }: JobProgressProps) {
           </span>
         ) : null}
       </div>
+
+      {job.tts_mix_warning ? (
+        <p className="alert-banner alert-warning" role="status">
+          {job.tts_mix_warning}
+        </p>
+      ) : null}
+      {job.continue_with_edge && onContinueWithEdge ? (
+        <button
+          type="button"
+          className="btn-generate continue-edge"
+          onClick={onContinueWithEdge}
+          disabled={continuePending}
+        >
+          Continue with Edge
+        </button>
+      ) : null}
 
       {job.status === "failed" && (job.error_type || job.message) ? (() => {
         const { summary, details } = friendlyError(job.error_type, job.message);

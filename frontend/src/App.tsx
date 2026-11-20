@@ -162,7 +162,13 @@ export default function App() {
         </div>
 
         <aside className="studio-sidebar" aria-label="Pipeline monitor and audio output">
-          {currentJob ? <JobProgress job={currentJob} /> : null}
+          {currentJob ? (
+            <JobProgress
+              job={currentJob}
+              continuePending={job.continuing}
+              onContinueWithEdge={() => void job.continueWithEdge(currentJob.job_id)}
+            />
+          ) : null}
           {currentJob ? <ChapterList job={currentJob} /> : null}
 
           {job.status === "error" && !job.job ? (

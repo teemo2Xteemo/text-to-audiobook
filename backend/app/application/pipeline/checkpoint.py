@@ -63,15 +63,23 @@ class CheckpointStore:
 
     def forget_chunk(self, chunk_id: str) -> None:
         """Drop every stage for ``chunk_id`` so a changed split cannot reuse it."""
+        self.drop(chunk_ids={chunk_id})
+
+    def drop(self, *, chunk_ids: set[str], stages: set[str] | None = None) -> None:
+        """Remove selected rows. ``stages`` None removes every stage for those ids."""
+        if not chunk_ids:
+            return
         index = self._index_of()
-        keys = [key for key in index if key[0] == chunk_id]
+        keys = [
+            key for key in index if key[0] in chunk_ids and (stages is None or key[1] in stages)
+        ]
         if not keys:
             return
-        removed = [index.pop(key) for key in keys]
+        removed = [(key, index.pop(key)) for key in keys]
         try:
             self._fs.save_raw([item.to_dict() for item in index.values()])
         except Exception:
-            for key, entry in zip(keys, removed, strict=True):
+            for key, entry in removed:
                 index[key] = entry
             raise
 

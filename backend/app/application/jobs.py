@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -13,6 +13,14 @@ except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
 from app.application.capabilities import engine_available, engine_label, refresh_engine_voices
+from app.application.pipeline.checkpoint import CheckpointStore
+from app.application.pipeline.edge_fallback import (
+    EDGE_ENGINE,
+    continuation_warning,
+    is_tts_engine_failure,
+    manifest_has_engine_chapter_failure,
+    retarget_unfinished_chapters,
+)
 from app.application.pipeline.parse import is_srt_document, strip_srt
 from app.application.pipeline.tts import resolve_voice
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
@@ -30,6 +38,7 @@ from app.domain.jobs import (
 from app.domain.languages import AUTO_SOURCE_LANGUAGE, ensure_valid_languages
 from app.domain.ports import (
     ChapterManifestStore,
+    CheckpointStorage,
     DiskJobStore,
     JobQueue,
     JobStore,
@@ -81,6 +90,9 @@ class JobService:
         tts_engines: Mapping[str, TTSProvider | None] | None = None,
         default_tts_engine: str = "fake",
         chapter_manifest_factory: Callable[[Path], ChapterManifestStore] | None = None,
+        fallback_engine: str = EDGE_ENGINE,
+        fallback_scope: str = "chapter",
+        checkpoint_storage_factory: Callable[[Path], CheckpointStorage] | None = None,
     ) -> None:
         self._jobs = jobs
         self._source_storage = source_storage
@@ -106,6 +118,9 @@ class JobService:
         self._language_confirm_threshold = language_confirm_threshold
         self._text_normalization_available = text_normalization_available
         self._chapter_manifest_factory = chapter_manifest_factory
+        self._fallback_engine = fallback_engine.strip().lower()
+        self._fallback_scope = fallback_scope.strip().lower()
+        self._checkpoint_storage_factory = checkpoint_storage_factory
 
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
@@ -330,6 +345,7 @@ class JobService:
             status=JobStatus.FAILED,
             error_type=error_type,
             message=message,
+            error_stage=job.status.value,
         )
         await self._jobs.save(job)
         logger.info(
@@ -360,6 +376,7 @@ class JobService:
             status=JobStatus.QUEUED,
             error_type=None,
             message=None,
+            error_stage=None,
             chunk_current=0,
             chunk_total=0,
             recovery_attempts=0,
@@ -382,6 +399,165 @@ class JobService:
             },
         )
         return job
+
+    def edge_fallback_offered(self) -> bool:
+        """True when the explicit per-chapter Edge button is enabled. Never automatic."""
+        return self._fallback_scope == "chapter" and self._fallback_engine == EDGE_ENGINE
+
+    def edge_continue_view(
+        self, job: Job, manifest: ChapterManifest | None
+    ) -> tuple[bool, str | None]:
+        """Button flag and the warning already stored, or the warning the button would show."""
+        warning = job.edge_fallback_note
+        # Do not take the job lock here. Status polls are frequent, and an
+        # exclusive lock would make a worker that is starting skip the run.
+        if not self.edge_fallback_offered():
+            return False, warning
+        if _edge_continue_already_queued(job):
+            return False, warning
+        if not _edge_continue_eligible(job, manifest, default_engine=self._default_tts_engine):
+            return False, warning
+        return True, warning or continuation_warning(manifest)
+
+    async def continue_with_edge(self, job_id: str) -> Job:
+        """Re-pin unfinished audio to Edge and enqueue a new run.
+
+        Ready chapter files stay. A second click while that run is queued returns
+        the same job and does not drop checkpoints again. A worker that still
+        holds the job lock is rejected.
+        """
+        job = await self._filesystem().get_job(job_id)
+        if job is None:
+            raise DomainError(ErrorType.INVALID_INPUT, "job not found")
+        if _edge_continue_already_queued(job):
+            return job
+        if not self.edge_fallback_offered():
+            raise DomainError(ErrorType.INVALID_INPUT, "edge fallback is not enabled")
+        self._reject_unless_edge_continue(job)
+        voice = await self._edge_voice_for(job)
+        previous = ""
+        with self._exclusive_job_lock(job_id) as held:
+            if not held:
+                fresh = await self._filesystem().get_job(job_id)
+                if fresh is not None and _edge_continue_already_queued(fresh):
+                    return fresh
+                raise DomainError(ErrorType.INVALID_INPUT, "job is still running")
+            current = await self._filesystem().get_job(job_id)
+            if current is None:
+                raise DomainError(ErrorType.INVALID_INPUT, "job not found")
+            if _edge_continue_already_queued(current):
+                return current
+            self._reject_unless_edge_continue(current)
+            if current.status is not JobStatus.FAILED:
+                assert_legal_transition(current.status, JobStatus.FAILED)
+                current = replace(
+                    current,
+                    status=JobStatus.FAILED,
+                    error_stage=current.error_stage or current.status.value,
+                )
+                await self._jobs.save(current)
+            previous = _effective_engine(current, self._default_tts_engine)
+            warning = self._retarget_for_edge(current, previous)
+            assert_legal_transition(current.status, JobStatus.QUEUED)
+            queued = replace(
+                current,
+                status=JobStatus.QUEUED,
+                error_type=None,
+                message=None,
+                error_stage=None,
+                chunk_current=0,
+                chunk_total=0,
+                recovery_attempts=0,
+                run_count=0,
+                stalled_runs=0,
+                continue_requested=False,
+                progress_marker=0,
+                run_baseline_marker=0,
+                handled_rq_id=None,
+                tts_engine=EDGE_ENGINE,
+                voice=voice,
+                edge_fallback_note=warning,
+            )
+            await self._jobs.save(queued)
+        await self._queue.enqueue(queued.id, run_count=0, keep_running=False)
+        logger.info(
+            "job_continue_with_edge",
+            extra={
+                "chunk_id": None,
+                "job_id": queued.id,
+                "previous_engine": previous,
+                "status": queued.status.value,
+            },
+        )
+        return queued
+
+    def _reject_unless_edge_continue(self, job: Job) -> None:
+        manifest = self.load_chapter_manifest(job.id)
+        if _edge_continue_eligible(job, manifest, default_engine=self._default_tts_engine):
+            return
+        if _effective_engine(job, self._default_tts_engine) == EDGE_ENGINE:
+            raise DomainError(ErrorType.INVALID_INPUT, "job already uses Edge")
+        if job.status is JobStatus.FAILED and not is_tts_engine_failure(job):
+            raise DomainError(
+                ErrorType.INVALID_INPUT,
+                "job did not fail because of the voice engine",
+            )
+        raise DomainError(ErrorType.INVALID_INPUT, "job cannot continue with Edge")
+
+    async def _edge_voice_for(self, job: Job) -> str:
+        edge = self._tts_engines.get(EDGE_ENGINE)
+        if edge is None or not await engine_available(edge):
+            raise DomainError(
+                ErrorType.PROVIDER_CONFIGURATION_ERROR,
+                "Edge is not available right now",
+            )
+        await refresh_engine_voices(edge, backoff_seconds=0)
+        try:
+            return resolve_voice(edge, job.target_language, None)
+        except DomainError as exc:
+            raise DomainError(
+                ErrorType.UNSUPPORTED_LANGUAGE,
+                "Edge has no voice for this language",
+            ) from exc
+
+    def _retarget_for_edge(self, job: Job, previous_engine: str) -> str:
+        workspace = self._job_directory(job.id)
+        store = None
+        if self._chapter_manifest_factory is not None and workspace.is_dir():
+            store = self._chapter_manifest_factory(workspace)
+        factory = self._checkpoint_storage_factory
+        if factory is None or not workspace.is_dir():
+            return continuation_warning(store.load() if store is not None else None)
+        checkpoints = CheckpointStore(storage=factory(workspace))
+        return retarget_unfinished_chapters(
+            workspace=workspace,
+            job=job,
+            manifest_store=store,
+            checkpoints=checkpoints,
+            previous_engine=previous_engine,
+        )
+
+    @contextmanager
+    def _exclusive_job_lock(self, job_id: str) -> Iterator[bool]:
+        """Non-blocking lock. Yields False when a worker still owns the job."""
+        if fcntl is None:
+            yield True
+            return
+        directory = self._job_directory(job_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        lock_path = directory / ".lock"
+        handle = lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.close()
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
 
     async def continue_if_requested(self, job_id: str) -> Job | None:
         """Re-enqueue a yielded job under a new RQ id.
@@ -630,6 +806,34 @@ class _JobStoreDiskAdapter:
 
     async def list_job_ids(self) -> list[str]:
         return list(await self._jobs.list_ids())
+
+
+def _effective_engine(job: Job, default_engine: str) -> str:
+    return (job.tts_engine or default_engine or "").strip().lower()
+
+
+def _edge_continue_already_queued(job: Job) -> bool:
+    return (
+        job.tts_engine == EDGE_ENGINE
+        and bool(job.edge_fallback_note)
+        and not is_terminal(job.status)
+    )
+
+
+def _edge_continue_eligible(
+    job: Job, manifest: ChapterManifest | None, *, default_engine: str
+) -> bool:
+    if _effective_engine(job, default_engine) == EDGE_ENGINE:
+        return False
+    if job.continue_requested:
+        return False
+    if job.status is JobStatus.FAILED:
+        return is_tts_engine_failure(job)
+    if is_terminal(job.status):
+        return False
+    if is_tts_engine_failure(job):
+        return True
+    return manifest_has_engine_chapter_failure(manifest)
 
 
 def _parse_output_format(value: str) -> OutputFormat:

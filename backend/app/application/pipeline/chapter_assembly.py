@@ -124,6 +124,7 @@ async def _assemble_one(
         if record.status is not ChapterStatus.READY:
             _become(record, ChapterStatus.READY)
             await _fill_stats(record, workspace, job, audio)
+            _remember_engine(record, job)
             store.save(manifest)
         return
     owned = [chunk for chunk in chunks if record.chunk_first <= chunk.index <= record.chunk_last]
@@ -176,11 +177,18 @@ async def _assemble_one(
     record.error_type = None
     record.message = None
     _become(record, ChapterStatus.READY)
+    _remember_engine(record, job)
     store.save(manifest)
     logger.info(
         "pipeline_chapter_ready",
         extra={"job_id": job.id, "chunk_id": key, "stage": STAGE_CHAPTER},
     )
+
+
+def _remember_engine(record: ChapterRecord, job: Job) -> None:
+    if record.tts_engine or not job.tts_engine:
+        return
+    record.tts_engine = job.tts_engine
 
 
 def _become(record: ChapterRecord, status: ChapterStatus) -> None:

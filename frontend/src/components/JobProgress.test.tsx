@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { JobProgress } from "./JobProgress";
 import { queuedJob } from "../test/fixtures";
@@ -48,5 +49,44 @@ describe("JobProgress", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("The voice service is limiting free usage");
     expect(screen.getByText("Technical details")).toBeInTheDocument();
     expect(screen.getByText("PROVIDER_RATE_LIMIT: Too many requests")).toBeInTheDocument();
+  });
+
+  it("offers Continue with Edge only for an engine failure, with the mix warning", async () => {
+    const user = userEvent.setup();
+    const onContinue = vi.fn();
+    const warning = "Later chapters use Edge. Finished chapters keep their original voice.";
+    render(
+      <JobProgress
+        job={queuedJob({
+          status: "failed",
+          stage: "failed",
+          error_type: "PROVIDER_RATE_LIMIT",
+          message: "tts rate limited",
+          tts_engine: "fish",
+          continue_with_edge: true,
+          tts_mix_warning: warning,
+        })}
+        onContinueWithEdge={onContinue}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(warning);
+    await user.click(screen.getByRole("button", { name: "Continue with Edge" }));
+    expect(onContinue).toHaveBeenCalledOnce();
+  });
+
+  it("hides Continue with Edge when the failure is not a voice-engine error", () => {
+    render(
+      <JobProgress
+        job={queuedJob({
+          status: "failed",
+          stage: "failed",
+          error_type: "TRANSLATION_FAILED",
+          message: "translation failed",
+          continue_with_edge: false,
+        })}
+        onContinueWithEdge={() => undefined}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Continue with Edge" })).toBeNull();
   });
 });

@@ -1395,12 +1395,14 @@ class PipelineOrchestrator:
         current = fresh if fresh is not None else job
         stage = current.status.value
         if current.status is not JobStatus.FAILED:
+            stage = current.status.value
             assert_legal_transition(current.status, JobStatus.FAILED)
             current = replace(
                 current,
                 status=JobStatus.FAILED,
                 error_type=error_type,
                 message=message,
+                error_stage=stage,
             )
             await self._jobs.save(current)
         job = current

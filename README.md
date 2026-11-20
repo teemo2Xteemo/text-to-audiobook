@@ -419,6 +419,16 @@ Retries a job in `failed` status from its last valid checkpoint without repeatin
 curl -sS -X POST http://127.0.0.1:8000/api/jobs/${JOB_ID}/retry
 ```
 
+#### 5. Continue with Edge (`POST /api/jobs/{job_id}/continue-with-edge`)
+
+When a Fish or VieNeu job fails because that voice engine failed (rate limit, quota, sidecar down), this re-queues **unfinished** chapters on Edge. Chapters already `ready` keep their audio and engine. The chapter list records `tts_engine` and a note, and `GET /api/jobs/{job_id}` includes `tts_mix_warning` (for a book with no chapter breaks: the rest of the audio is read with Edge). Nothing switches engines unless this endpoint is called.
+
+`TTS_FALLBACK_SCOPE=off` or a `TTS_FALLBACK_ENGINE` other than `edge` hides the action and returns 409 `edge fallback is not enabled`. Other 409s: wrong state, the job already uses Edge, the failure was not the voice engine, or a worker still holds the job. A second click while the Edge run is queued returns 202 and does not rebuild finished chapters. Returns HTTP 202. Edge must be enabled (`TTS_PROVIDER` or `TTS_ENGINES_ENABLED`).
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/jobs/${JOB_ID}/continue-with-edge
+```
+
 ## Troubleshooting
 
 ### Frontend `/api` returns 502 after recreating `api`

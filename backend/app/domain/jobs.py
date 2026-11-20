@@ -106,6 +106,16 @@ def _optional_pin_value(data: Mapping[str, Any], key: str) -> str | None:
     return text or None
 
 
+def _optional_stage(data: Mapping[str, Any]) -> str | None:
+    raw = _optional_pin_value(data, "error_stage")
+    if raw is None:
+        return None
+    try:
+        return JobStatus(raw).value
+    except ValueError:
+        return None
+
+
 def _pin_from_mapping(data: Mapping[str, Any]) -> tuple[str | None, str | None]:
     """Return a complete pin, or ``(None, None)`` when either half is absent."""
     provider = _optional_pin_value(data, "translation_provider")
@@ -148,6 +158,10 @@ class Job:
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
     tts_engine: str | None = None
+    # Pipeline status at the moment the job failed. Omitted until a failure is recorded.
+    error_stage: str | None = None
+    # Set when the user continues unfinished chapters with Edge. Omitted otherwise.
+    edge_fallback_note: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -213,6 +227,10 @@ class Job:
             payload["normalize_text"] = True
         if self.tts_engine is not None:
             payload["tts_engine"] = self.tts_engine
+        if self.error_stage is not None:
+            payload["error_stage"] = self.error_stage
+        if self.edge_fallback_note is not None:
+            payload["edge_fallback_note"] = self.edge_fallback_note
         return payload
 
     @classmethod
@@ -256,4 +274,6 @@ class Job:
             srt_timing=srt_timing,
             normalize_text=data.get("normalize_text") is True,
             tts_engine=_optional_pin_value(data, "tts_engine"),
+            error_stage=_optional_stage(data),
+            edge_fallback_note=_optional_pin_value(data, "edge_fallback_note"),
         )

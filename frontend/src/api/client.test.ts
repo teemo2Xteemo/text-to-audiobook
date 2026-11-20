@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { analyze, createJob, detectLanguage, getCapabilities, getChapters, getJob, previewTts } from "./client";
+import {
+  analyze,
+  continueWithEdge,
+  createJob,
+  detectLanguage,
+  getCapabilities,
+  getChapters,
+  getJob,
+  previewTts,
+} from "./client";
 import { ApiError } from "./types";
 import { JOB_ID, capabilitiesFixture, jsonResponse, queuedJob } from "../test/fixtures";
 
@@ -369,6 +378,13 @@ describe("api client", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ audio_base64: "", mime_type: "audio/mpeg" }));
     await previewTts({ text: "Hello", voice: "fish:a", tts_engine: "fish" });
     expect(JSON.parse((fetchMock.mock.calls[3]?.[1] as RequestInit).body as string).tts_engine).toBe("fish");
+  });
+
+  it("posts continue-with-edge for a failed job", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ job_id: JOB_ID, status: "queued" }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(continueWithEdge(JOB_ID)).resolves.toEqual({ job_id: JOB_ID, status: "queued" });
+    expect(fetchMock).toHaveBeenCalledWith(`/api/jobs/${JOB_ID}/continue-with-edge`, { method: "POST" });
   });
 
   it("loads a chapter page with filter and search", async () => {

@@ -149,7 +149,10 @@ export function ChapterList({ job }: ChapterListProps) {
                   <td>{item.title || item.title_source || `Chapter ${item.ordinal}`}</td>
                   <td>{item.duration_ms ? formatClock(item.duration_ms) : "—"}</td>
                   <td>{item.size_bytes ? formatBytes(item.size_bytes) : "—"}</td>
-                  <td>{item.status}</td>
+                  <td>
+                    {item.status}
+                    {item.tts_engine ? ` · ${item.tts_engine}` : ""}
+                  </td>
                   <td className="chapter-actions">
                     {playHref ? (
                       <button

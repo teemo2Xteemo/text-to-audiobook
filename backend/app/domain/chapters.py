@@ -93,6 +93,8 @@ class ChapterRecord:
     message: str | None = None
     attempts: int = 0
     updated_at: str = field(default_factory=_now)
+    tts_engine: str | None = None
+    note: str | None = None
 
     def mark(self, status: ChapterStatus) -> None:
         ensure_chapter_transition(self.status, status)
@@ -110,7 +112,7 @@ class ChapterRecord:
         self.updated_at = _now()
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "ordinal": self.ordinal,
             "kind": self.kind,
             "chapter_number": self.chapter_number,
@@ -128,6 +130,11 @@ class ChapterRecord:
             "attempts": self.attempts,
             "updated_at": self.updated_at,
         }
+        if self.tts_engine:
+            payload["tts_engine"] = self.tts_engine
+        if self.note:
+            payload["note"] = self.note
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> ChapterRecord:
@@ -153,6 +160,8 @@ class ChapterRecord:
             message=_optional_str(data.get("message")),
             attempts=int(data.get("attempts") or 0),  # type: ignore[arg-type]
             updated_at=str(data.get("updated_at") or ""),
+            tts_engine=_optional_str(data.get("tts_engine")),
+            note=_optional_str(data.get("note")),
         )
 
 

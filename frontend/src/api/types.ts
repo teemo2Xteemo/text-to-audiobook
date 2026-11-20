@@ -90,6 +90,9 @@ export type JobStatusResponse = {
   chapters_failed?: number;
   chapters_url?: string | null;
   zip_url?: string | null;
+  tts_engine?: string | null;
+  continue_with_edge?: boolean;
+  tts_mix_warning?: string | null;
 };
 
 export type ChapterAudioStatus = "pending" | "generating" | "ready" | "failed";
@@ -110,6 +113,8 @@ export type ChapterListItem = {
   message?: string | null;
   filename: string;
   download_url?: string | null;
+  tts_engine?: string | null;
+  note?: string | null;
 };
 
 export type ChapterListResponse = {

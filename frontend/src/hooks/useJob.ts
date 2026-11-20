@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { createJob, getJob, toApiError } from "../api/client";
+import { continueWithEdge as continueWithEdgeRequest, createJob, getJob, toApiError } from "../api/client";
 import { ApiError, type CreateJobInput, type JobStatusResponse } from "../api/types";
 import { LAST_JOB_STORAGE_KEY, POLL_INTERVAL_MS } from "../lib/constants";
 import { isTerminalStatus } from "../lib/jobUi";
@@ -34,8 +34,11 @@ export function jobFromView(view: JobView): JobStatusResponse | undefined {
 
 export function useJob(): JobView & {
   submit: (input: CreateJobInput) => Promise<void>;
+  continueWithEdge: (jobId: string) => Promise<void>;
+  continuing: boolean;
 } {
   const [view, setView] = useState<JobView>({ status: "idle" });
+  const [continuing, setContinuing] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
   const failureCountRef = useRef(0);
 
@@ -131,5 +134,34 @@ export function useJob(): JobView & {
     [applyJob],
   );
 
-  return { ...view, submit };
+  const continueWithEdge = useCallback(
+    async (jobId: string) => {
+      failureCountRef.current = 0;
+      setContinuing(true);
+      try {
+        await continueWithEdgeRequest(jobId);
+        applyJob(await getJob(jobId));
+      } catch (error) {
+        try {
+          const latest = await getJob(jobId);
+          if (latest.status !== "failed") {
+            applyJob(latest);
+            return;
+          }
+        } catch {
+          // Keep the original failure when the follow-up read also fails.
+        }
+        setView((current) => ({
+          status: "error",
+          error: toApiError(error),
+          job: current.status === "idle" ? undefined : current.job,
+        }));
+      } finally {
+        setContinuing(false);
+      }
+    },
+    [applyJob],
+  );
+
+  return { ...view, submit, continueWithEdge, continuing };
 }

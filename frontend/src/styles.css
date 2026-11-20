@@ -1366,6 +1366,17 @@ audio {
   border: 1px solid var(--destructive);
 }
 
+.alert-warning {
+  background: var(--panel-elevated);
+  color: var(--ink);
+  border: 1px solid var(--accent);
+}
+
+.continue-edge {
+  width: auto;
+  margin-top: 0.85rem;
+}
+
 .loading-skeleton {
   display: flex;
   align-items: center;

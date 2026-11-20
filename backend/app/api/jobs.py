@@ -83,6 +83,7 @@ async def get_job(
             subtitles_url = f"/api/jobs/{job.id}/subtitles"
     manifest = await _read_manifest(service, job.id)
     total, ready, failed, chapters_url, zip_url = _chapter_fields(job, manifest)
+    can_continue, mix_warning = service.edge_continue_view(job, manifest)
     return JobStatusResponse.from_job(
         job,
         subtitles_url=subtitles_url,
@@ -91,6 +92,8 @@ async def get_job(
         chapters_failed=failed,
         chapters_url=chapters_url,
         zip_url=zip_url,
+        continue_with_edge=can_continue,
+        tts_mix_warning=mix_warning,
     )
 
 
@@ -177,6 +180,44 @@ async def retry_job(
             ) from exc
         raise
     return JobCreatedResponse(job_id=retried.id, status=retried.status)
+
+
+_CONTINUE_CONFLICTS = frozenset(
+    {
+        "job is still running",
+        "job cannot continue with Edge",
+        "job already uses Edge",
+        "edge fallback is not enabled",
+        "job did not fail because of the voice engine",
+    }
+)
+
+
+@router.post(
+    "/api/jobs/{job_id}/continue-with-edge",
+    status_code=202,
+    response_model=JobCreatedResponse,
+)
+async def continue_with_edge(
+    job_id: str,
+    service: JobService = Depends(get_job_service),
+) -> JobCreatedResponse:
+    _require_uuid(job_id)
+    try:
+        continued = await service.continue_with_edge(job_id)
+    except DomainError as exc:
+        if exc.error_type is ErrorType.INVALID_INPUT and exc.message == "job not found":
+            raise HTTPException(
+                status_code=404,
+                detail=envelope(ErrorType.INVALID_INPUT, exc.message),
+            ) from exc
+        if exc.error_type is ErrorType.INVALID_INPUT and exc.message in _CONTINUE_CONFLICTS:
+            raise HTTPException(
+                status_code=409,
+                detail=envelope(ErrorType.INVALID_INPUT, exc.message),
+            ) from exc
+        raise
+    return JobCreatedResponse(job_id=continued.id, status=continued.status)
 
 
 @router.get("/api/jobs/{job_id}/chapters", response_model=ChapterListResponse)
@@ -369,6 +410,8 @@ def _chapter_items(
                 download_url=(
                     f"/api/jobs/{job.id}/chapters/{record.ordinal}/audio" if ready else None
                 ),
+                tts_engine=record.tts_engine,
+                note=record.note,
             )
         )
     return items
