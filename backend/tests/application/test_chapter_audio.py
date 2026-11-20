@@ -89,7 +89,9 @@ def test_chapter_file_exists_before_the_job_finishes(tmp_path: Path) -> None:
     del tts
 
 
-def test_resume_does_not_rebuild_a_ready_chapter(tmp_path: Path, monkeypatch) -> None:
+def test_budget_yield_writes_the_finished_chapter_and_resume_skips_it(
+    tmp_path: Path, monkeypatch
+) -> None:
     from tests.application.test_pipeline import _Clock, _ClockTTS, _patch_clock
 
     clock = _Clock()
@@ -113,6 +115,7 @@ def test_resume_does_not_rebuild_a_ready_chapter(tmp_path: Path, monkeypatch) ->
     )
     first = _run(orchestrator, job, workspace, text=_STORY, deadline=0.5)
     assert first.status is JobStatus.GENERATING_AUDIO
+    assert first.continue_requested is True
     ready = workspace / "chapters" / "0001.mp3"
     assert ready.is_file()
     assert not (workspace / "chapters" / "0002.mp3").exists()
@@ -496,3 +499,42 @@ def test_disk_error_during_assembly_stays_storage_failed(
     assert manifest.chapters[0].status is ChapterStatus.READY
     assert manifest.chapters[1].status is ChapterStatus.FAILED
     assert manifest.chapters[1].error_type == ErrorType.STORAGE_FAILED.value
+
+
+def test_assembly_timeout_propagates_for_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rq.timeouts import JobTimeoutException
+
+    from app.application.pipeline import chapter_assembly
+
+    real_merge = chapter_assembly.merge_artifacts
+
+    async def _merge(audio, sources, destination, **kwargs):  # type: ignore[no-untyped-def]
+        if destination.name == "0002.mp3":
+            raise JobTimeoutException("Task exceeded maximum timeout value (180 seconds)")
+        return await real_merge(audio, sources, destination, **kwargs)
+
+    monkeypatch.setattr(chapter_assembly, "merge_artifacts", _merge)
+    job = _job(
+        id="77777777-7777-7777-7777-777777777777",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=500,
+    )
+    with pytest.raises(JobTimeoutException):
+        _run(orchestrator, job, workspace, text=_STORY)
+    manifest = FilesystemChapterManifest(workspace).load()
+    assert manifest is not None
+    assert manifest.chapters[0].status is ChapterStatus.READY
+    assert (workspace / "chapters" / "0001.mp3").is_file()
+    assert manifest.chapters[1].status is ChapterStatus.PENDING
+    assert manifest.chapters[1].error_type is None
