@@ -522,7 +522,7 @@ class JobService:
                 )
                 continue
             if job.status is JobStatus.QUEUED:
-                updated = job
+                updated = replace(job, handled_rq_id=None)
             else:
                 if job.recovery_attempts >= self._max_recovery_attempts:
                     await self.mark_failed(
@@ -531,9 +531,15 @@ class JobService:
                         "job exceeded max crash recovery attempts",
                     )
                     continue
-                updated = replace(job, recovery_attempts=job.recovery_attempts + 1)
+                # A new boot is a new execution. Drop the previous timeout token
+                # and reuse this run_count so we do not enqueue process-…-r0 again.
+                updated = replace(
+                    job,
+                    recovery_attempts=job.recovery_attempts + 1,
+                    handled_rq_id=None,
+                )
             await self._jobs.save(updated)
-            await self._queue.enqueue(job.id)
+            await self._queue.enqueue(updated.id, run_count=updated.run_count)
             recovered.append(job.id)
             logger.info(
                 "job_recovered",

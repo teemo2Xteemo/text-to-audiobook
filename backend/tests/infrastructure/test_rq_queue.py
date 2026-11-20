@@ -173,6 +173,42 @@ def test_keep_running_enqueues_a_new_id_without_deleting_the_started_job() -> No
     assert started_id in queue.rows
 
 
+def test_keep_running_suffixes_the_id_when_that_run_is_already_finished() -> None:
+    job_id = "11111111-1111-1111-1111-111111111111"
+    finished_id = rq_process_job_id(job_id, 2)
+
+    class _Row:
+        def __init__(self, status: str) -> None:
+            self._status = status
+
+        def get_status(self, refresh: bool = False) -> str:
+            del refresh
+            return self._status
+
+        def delete(self) -> None:
+            raise AssertionError("finished row must stay while the worker is bookkeeping it")
+
+    class _FinishedQueue(_CaptureQueue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rows = {finished_id: _Row("finished")}
+
+        def fetch_job(self, rq_job_id: str) -> _Row | None:
+            return self.rows.get(rq_job_id)
+
+        def enqueue(self, *args: object, **kwargs: object) -> None:
+            super().enqueue(*args, **kwargs)
+
+    queue = _FinishedQueue()
+    asyncio.run(
+        RQJobQueue(queue, job_timeout=30).enqueue(job_id, run_count=2, keep_running=True)  # type: ignore[arg-type]
+    )
+    new_id = str(queue.kwargs["job_id"])
+    assert new_id.startswith(finished_id + "-")
+    assert new_id != finished_id
+    assert finished_id in queue.rows
+
+
 def test_rq_queue_enqueue_cleans_started_job_registry_with_fakeredis() -> None:
     import fakeredis
     from rq import Queue

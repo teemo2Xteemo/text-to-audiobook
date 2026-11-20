@@ -26,12 +26,11 @@ def handle_rq_failure(
 def handle_worker_exception(job: Any, exc_type: Any, exc_value: Any, traceback: Any) -> None:
     """RQ ``exception_handlers`` omit the connection argument used by ``on_failure``.
 
-    A ``JobTimeoutException`` is handled only by ``on_failure``. RQ calls that
-    callback first and this handler second; running the timeout path twice
-    would see the baseline already advanced and mark the job failed.
+    RQ calls ``on_failure`` first and this handler second. ``continue_after_timeout``
+    is idempotent per RQ id, so a timeout that the callback already continued is
+    a no-op here. If that callback raised before it saved, this call still
+    continues or fails the job.
     """
-    if exc_type is JobTimeoutException or isinstance(exc_value, JobTimeoutException):
-        return
     handle_rq_failure(job, None, exc_type, exc_value, traceback)
 
 

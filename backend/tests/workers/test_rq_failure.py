@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -86,8 +87,6 @@ def test_handle_rq_failure_timeout_marks_domain_job_failed(
 def test_timeout_with_checkpoint_progress_reenqueues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from dataclasses import replace
-
     job_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
     running = replace(
         _job(job_id, JobStatus.GENERATING_AUDIO),
@@ -128,6 +127,45 @@ def test_timeout_with_checkpoint_progress_reenqueues(
     assert continued.run_count == 1
     assert continued.run_baseline_marker == 12
     assert queue.job_ids == [job_id]
+
+
+def test_worker_exception_continues_when_the_failure_callback_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job_id = "abababab-abab-abab-abab-abababababab"
+    asyncio.run(
+        FilesystemJobStorage(tmp_path).save_job(
+            replace(
+                _job(job_id, JobStatus.GENERATING_AUDIO),
+                progress_marker=4,
+                run_baseline_marker=1,
+            )
+        )
+    )
+    service = _service(tmp_path)
+    original = service.continue_after_timeout
+
+    async def fail_once(*args: object, **kwargs: object) -> object:
+        service.continue_after_timeout = original
+        raise RuntimeError("status save failed")
+
+    service.continue_after_timeout = fail_once  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "app.workers.rq_failure.Settings",
+        lambda **_: Settings(_env_file=None, storage_path=tmp_path),
+    )
+    monkeypatch.setattr("app.workers.rq_failure.build_job_service", lambda settings: service)
+
+    rq_job = SimpleNamespace(id=f"process-{job_id}-r3", args=(job_id,))
+    timeout = JobTimeoutException("Task exceeded maximum timeout value (180 seconds)")
+    handle_rq_failure(rq_job, None, JobTimeoutException, timeout, None)
+    handle_worker_exception(rq_job, JobTimeoutException, timeout, None)
+
+    continued = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job_id))
+    assert continued is not None
+    assert continued.status is JobStatus.GENERATING_AUDIO
+    assert continued.run_count == 1
+    assert service._queue.job_ids == [job_id]  # type: ignore[attr-defined]
 
 
 def test_handle_worker_exception_marks_unexpected_failure(

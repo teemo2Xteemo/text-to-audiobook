@@ -523,6 +523,65 @@ def test_recover_reads_filesystem_status_not_job_store_cache(tmp_path: Path) -> 
     assert queue.job_ids == [running.id]
 
 
+def test_recover_clears_handled_timeout_and_reenqueues_the_same_run(
+    tmp_path: Path,
+) -> None:
+    from app.infrastructure.rq_queue import rq_process_job_id
+
+    class _RecordingQueue:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int, bool]] = []
+
+        async def enqueue(
+            self,
+            job_id: str,
+            *,
+            run_count: int = 0,
+            keep_running: bool = False,
+        ) -> None:
+            self.calls.append((job_id, run_count, keep_running))
+
+    filesystem = FilesystemJobStorage(tmp_path)
+    queue = _RecordingQueue()
+    service = JobService(
+        jobs=DualWriteJobStore(filesystem, _MemoryJobCache()),
+        source_storage=filesystem,
+        queue=queue,
+        output_bitrate_kbps=128,
+        storage_path=tmp_path,
+        disk_jobs=filesystem,
+    )
+    job_id = "22222222-2222-2222-2222-222222222222"
+    running = replace(
+        _fs_job(job_id, JobStatus.GENERATING_AUDIO),
+        run_count=1,
+        progress_marker=8,
+        run_baseline_marker=3,
+        handled_rq_id=rq_process_job_id(job_id, 0),
+    )
+    asyncio.run(filesystem.save_job(running))
+
+    assert asyncio.run(service.recover_in_progress()) == [job_id]
+    recovered = asyncio.run(filesystem.get_job(job_id))
+    assert recovered is not None
+    assert recovered.handled_rq_id is None
+    assert recovered.run_count == 1
+    assert recovered.recovery_attempts == 1
+    assert queue.calls == [(job_id, 1, False)]
+
+    continued = asyncio.run(
+        service.continue_after_timeout(
+            job_id,
+            timeout_seconds=1800,
+            rq_job_id=rq_process_job_id(job_id, 1),
+        )
+    )
+    assert continued is not None
+    assert continued.status is JobStatus.GENERATING_AUDIO
+    assert continued.run_count == 2
+    assert queue.calls == [(job_id, 1, False), (job_id, 2, True)]
+
+
 def test_recover_marks_job_failed_when_recovery_attempts_exceeded(tmp_path: Path) -> None:
     filesystem, cache, _store, queue, service = _fs_retry_service(tmp_path, max_recovery_attempts=2)
     running = replace(

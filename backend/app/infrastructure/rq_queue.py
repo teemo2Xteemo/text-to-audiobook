@@ -108,6 +108,8 @@ class RQJobQueue:
         if job_ids:
             for rq_id in list(job_ids):
                 add(rq_id)
+        # Queued ids plus registry membership. FinishedJobRegistry only holds
+        # ids until result_ttl, which is enough to avoid clobbering a live run.
         for name in _REGISTRIES:
             registry = getattr(self._queue, name, None)
             getter = getattr(registry, "get_job_ids", None)
