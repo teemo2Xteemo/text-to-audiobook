@@ -24,7 +24,13 @@ def handle_rq_failure(
 
 
 def handle_worker_exception(job: Any, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-    """RQ ``exception_handlers`` omit the connection argument used by ``on_failure``."""
+    """RQ ``exception_handlers`` omit the connection argument used by ``on_failure``.
+
+    RQ calls ``on_failure`` first and this handler second. ``continue_after_timeout``
+    is idempotent per RQ id, so a timeout that the callback already continued is
+    a no-op here. If that callback raised before it saved, this call still
+    continues or fails the job.
+    """
     handle_rq_failure(job, None, exc_type, exc_value, traceback)
 
 
@@ -34,16 +40,34 @@ def _apply(job: Any, exc_type: Any, exc_value: Any) -> None:
         logger.error("rq_failure_missing_job_id", extra={"job_id": None, "chunk_id": None})
         return
     try:
-        asyncio.run(_mark(job_id, exc_type, exc_value))
+        asyncio.run(_mark(job_id, exc_type, exc_value, rq_job_id=_rq_job_id(job)))
     except Exception:
         logger.exception("rq_failure_callback_failed", extra={"job_id": job_id, "chunk_id": None})
 
 
-async def _mark(job_id: str, exc_type: Any, exc_value: Any) -> None:
+async def _mark(
+    job_id: str,
+    exc_type: Any,
+    exc_value: Any,
+    *,
+    rq_job_id: str | None = None,
+) -> None:
     settings = Settings()
-    error_type, message = _map_error(exc_type, exc_value, settings.rq_job_timeout_seconds)
     service = build_job_service(settings)
+    if exc_type is JobTimeoutException or isinstance(exc_value, JobTimeoutException):
+        await service.continue_after_timeout(
+            job_id,
+            timeout_seconds=settings.rq_job_timeout_seconds,
+            rq_job_id=rq_job_id,
+        )
+        return
+    error_type, message = _map_error(exc_type, exc_value, settings.rq_job_timeout_seconds)
     await service.mark_failed(job_id, error_type, message)
+
+
+def _rq_job_id(job: Any) -> str | None:
+    raw = getattr(job, "id", None)
+    return str(raw) if raw else None
 
 
 def _domain_job_id(job: Any) -> str | None:

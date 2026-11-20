@@ -27,6 +27,9 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RETRY_MAX_ATTEMPTS", raising=False)
     monkeypatch.delenv("RETRY_BACKOFF_SECONDS", raising=False)
     monkeypatch.delenv("RQ_JOB_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("JOB_RUN_BUDGET_SECONDS", raising=False)
+    monkeypatch.delenv("MAX_STALLED_RUNS", raising=False)
+    monkeypatch.delenv("MAX_JOB_RUNS", raising=False)
     monkeypatch.delenv("CHUNK_TRANSLATION_CONCURRENCY", raising=False)
     monkeypatch.delenv("CHUNK_TTS_CONCURRENCY", raising=False)
     settings = Settings(_env_file=None)
@@ -53,6 +56,10 @@ def test_settings_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.retry_max_attempts == 3
     assert settings.retry_backoff_seconds == 1.0
     assert settings.rq_job_timeout_seconds == 1800
+    assert settings.job_run_budget_seconds is None
+    assert settings.effective_job_run_budget_seconds == 1680
+    assert settings.max_stalled_runs == 3
+    assert settings.max_job_runs == 500
     assert settings.gemini_api_key is None
     assert settings.gemini_translation_model == "gemini-3.5-flash"
     assert settings.gemini_base_url == "https://generativelanguage.googleapis.com"
@@ -96,6 +103,9 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "5")
     monkeypatch.setenv("RETRY_BACKOFF_SECONDS", "0.5")
     monkeypatch.setenv("RQ_JOB_TIMEOUT_SECONDS", "3600")
+    monkeypatch.setenv("JOB_RUN_BUDGET_SECONDS", "900")
+    monkeypatch.setenv("MAX_STALLED_RUNS", "4")
+    monkeypatch.setenv("MAX_JOB_RUNS", "40")
     monkeypatch.setenv("CHUNK_TRANSLATION_CONCURRENCY", "4")
     monkeypatch.setenv("CHUNK_TTS_CONCURRENCY", "3")
     monkeypatch.setenv("CHUNK_MAX_CHARS", "1500")
@@ -128,6 +138,10 @@ def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.retry_max_attempts == 5
     assert settings.retry_backoff_seconds == 0.5
     assert settings.rq_job_timeout_seconds == 3600
+    assert settings.job_run_budget_seconds == 900
+    assert settings.effective_job_run_budget_seconds == 900
+    assert settings.max_stalled_runs == 4
+    assert settings.max_job_runs == 40
     assert settings.chunk_translation_concurrency == 4
     assert settings.chunk_tts_concurrency == 3
     assert settings.chunk_max_chars == 1500
@@ -142,6 +156,22 @@ def test_parse_tts_default_voice_by_language_skips_malformed() -> None:
     assert parsed == {"ja-JP": "ja-JP-AdapterANeural"}
     assert parse_tts_default_voice_by_language("") == {}
     assert parse_tts_default_voice_by_language(None) == {}
+
+
+def test_job_run_budget_clamps_to_stay_under_the_worker_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config.settings import resolve_job_run_budget_seconds
+
+    monkeypatch.delenv("JOB_RUN_BUDGET_SECONDS", raising=False)
+    assert resolve_job_run_budget_seconds(1800, None) == 1680
+    assert resolve_job_run_budget_seconds(1800, 900) == 900
+    assert resolve_job_run_budget_seconds(1800, 5000) == 1680
+    assert resolve_job_run_budget_seconds(30, None) == 25
+    assert resolve_job_run_budget_seconds(30, 0.05) == 0.05
+    unset = Settings(_env_file=None, job_run_budget_seconds="")
+    assert unset.job_run_budget_seconds is None
+    assert unset.effective_job_run_budget_seconds == 1680
 
 
 def test_max_upload_bytes_must_be_at_least_one() -> None:

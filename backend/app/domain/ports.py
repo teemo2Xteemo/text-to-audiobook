@@ -77,7 +77,13 @@ class DiskJobStore(Protocol):
 
 
 class JobQueue(Protocol):
-    async def enqueue(self, job_id: str) -> None: ...
+    async def enqueue(
+        self,
+        job_id: str,
+        *,
+        run_count: int = 0,
+        keep_running: bool = False,
+    ) -> None: ...
 
 
 class SourceTextStorage(Protocol):

@@ -80,7 +80,7 @@ Nginx allows request bodies up to `64m` on `/api/` (`client_max_body_size`), whi
 
 A `.env` copied from an older example may still contain `MAX_UPLOAD_BYTES=2000000`. That value overrides the new default until you change it.
 
-About 1 million CJK characters is 3 MB of UTF-8; 1 million Latin or Vietnamese characters is roughly 1–1.5 MB. A 5-million-character novel is about 15 MB of UTF-8 and fits the upload default. Uploading it only creates the job. The default `RQ_JOB_TIMEOUT_SECONDS` (1800) is often too short for a book of that length, which is thousands of chunks. Raise `RQ_JOB_TIMEOUT_SECONDS` for long books. A job that hits the timeout is `FAILED` and can be resumed with `POST /api/jobs/{job_id}/retry`, which keeps completed chunk checkpoints. Scaling that timeout with the source, or running per-chapter jobs, is tracked in [#43](https://github.com/teemo2Xteemo/text-to-audiobook/issues/43).
+About 1 million CJK characters is 3 MB of UTF-8; 1 million Latin or Vietnamese characters is roughly 1–1.5 MB. A 5-million-character novel is about 15 MB of UTF-8 and fits the upload default. Uploading it only creates the job. One worker run stops at `JOB_RUN_BUDGET_SECONDS` (unset: `RQ_JOB_TIMEOUT_SECONDS` minus 120 seconds) and re-enqueues itself, so a book finishes across runs without Retry and without the UI showing `FAILED` between them. Completed chunks stay in `checkpoint.jsonl`. A run that makes no checkpoint progress fails after `MAX_STALLED_RUNS` (default 3). `MAX_JOB_RUNS` (default 500) is a safety cap. Raising `RQ_JOB_TIMEOUT_SECONDS` is only an escape hatch for one longer run. Per-chapter fan-out is still [#29](https://github.com/teemo2Xteemo/text-to-audiobook/issues/29). This continuation is the fix for book-length jobs that exceed the default worker timeout ([#31](https://github.com/teemo2Xteemo/text-to-audiobook/issues/31), [#43](https://github.com/teemo2Xteemo/text-to-audiobook/issues/43)).
 
 Change `MAX_UPLOAD_BYTES` in `.env` and restart the API to raise or lower the limit in the API and the UI together. Rebuild the frontend image so nginx picks up the `64m` cap. A current UI learns the numeric limit from the API.
 
@@ -196,10 +196,10 @@ Set `TTS_PROVIDER=vieneu` (or pick the engine per job); `VIENEU_PRECISION=fp32|i
 `VIENEU_MODEL_DIR` (model cache mount) configure the sidecar. The build is pinned to an upstream commit in `docker-compose.yml`; bumping it is a manual, reviewed change.
 The default `docker compose up` is unchanged.
 
-**Long books on CPU.** The sidecar runs at roughly RTF 0.5–0.7 on a 4-core CPU, so the default
-`RQ_JOB_TIMEOUT_SECONDS=1800` covers only about 45–60 minutes of audio. Raise it for book-length
-VieNeu jobs. A job killed by the timeout ends `FAILED` with `TIMEOUT`; `POST /api/jobs/{job_id}/retry`
-resumes from checkpoints and does not regenerate finished chunks.
+**Long books on CPU.** The sidecar runs at roughly RTF 0.5–0.7 on a 4-core CPU, so one
+worker run covers about 45–60 minutes of audio at the default budget. The job continues
+itself onto the next run and keeps finished chunks. A timeout that still made checkpoint
+progress is re-enqueued the same way. Retry is only for a job that stalled or failed.
 
 ## API Reference
 
@@ -415,12 +415,12 @@ Retry resumes from per-chunk checkpoints keyed by chunk id only. When an upgrade
 split (subtitle paragraphing, sound-effect/rolling-cue handling, chapter detection,
 `CHUNK_MAX_CHARS`), a job that **failed before the upgrade** can reuse chunks cut at the old
 boundaries and repeat or skip passages. Before retrying such a job (any SRT job, narrate or
-translate, and chaptered narrate text), delete its `storage/jobs/<job_id>/chunks`, `audio` and
-`checkpoint.json`, or create a new job.
+translate, and chaptered narrate text), delete its `storage/jobs/<job_id>/chunks`, `audio`,
+`checkpoint.jsonl`, and legacy `checkpoint.json`, or create a new job.
 
 ### Job stays `translating` / `generating_audio` after the worker dies
 
-RQ **soft timeout** (`JobTimeoutException` / `RQ_JOB_TIMEOUT_SECONDS`) runs `on_failure` and marks the job `failed` with `error_type=TIMEOUT`. The SPA can show that error; retry with `POST /api/jobs/{job_id}/retry`.
+RQ **soft timeout** (`JobTimeoutException` / `RQ_JOB_TIMEOUT_SECONDS`) is the hard backstop behind `JOB_RUN_BUDGET_SECONDS`. A run that recorded a new checkpoint is re-enqueued and stays on its current stage. A run with no new checkpoint is marked `failed` with `error_type=TIMEOUT` (`job exceeded the worker timeout`). The same `TIMEOUT` is used when `MAX_STALLED_RUNS` or `MAX_JOB_RUNS` is hit. Retry with `POST /api/jobs/{job_id}/retry` after a real failure; that resets the run and stall counters. `GET /api/jobs/{job_id}` includes `run_count` (the UI appends it when it is greater than 1).
 
 **Hard kill is not the same path.** OOM, `SIGKILL`, or an RQ work-horse death penalty that never raises in-process will **not** run those hooks. `status.json` can stay non-terminal; worker boot recover will re-enqueue (M11). There is no heartbeat / “stale in-progress → failed” sweeper yet.
 

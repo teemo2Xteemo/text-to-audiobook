@@ -12,7 +12,13 @@ type JobProgressProps = {
 };
 
 export function JobProgress({ job }: JobProgressProps) {
-  const copy = progressCopy(job.status, job.chunk_current, job.chunk_total, job.mode);
+  const copy = progressCopy(
+    job.status,
+    job.chunk_current,
+    job.chunk_total,
+    job.mode,
+    job.run_count ?? 0,
+  );
   const percent = computeProgressPercent(job.status, job.chunk_current, job.chunk_total);
   const steps = pipelineStepsForMode(job.mode);
 

@@ -197,6 +197,9 @@ def test_status_omits_pin_when_the_job_has_none() -> None:
     payload = JobStatusResponse.from_job(job).model_dump()
     assert "translation_provider" not in payload
     assert "translation_model" not in payload
+    assert payload["run_count"] == 0
+    counted = JobStatusResponse.from_job(replace(job, run_count=4)).model_dump()
+    assert counted["run_count"] == 4
 
 
 def test_post_json_returns_202_queued_uuid(jobs_client: TestClient) -> None:

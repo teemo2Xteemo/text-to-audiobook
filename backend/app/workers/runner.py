@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import logging
+import time
 from multiprocessing import Process
 
 from redis import Redis
@@ -110,7 +111,8 @@ async def _process_job_async(job_id: str) -> None:
                     str(exc),
                 )
                 return
-            await orchestrator.run(fresh, text, workspace=workspace)
+            deadline = time.monotonic() + settings.effective_job_run_budget_seconds
+            await orchestrator.run(fresh, text, workspace=workspace, deadline=deadline)
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 

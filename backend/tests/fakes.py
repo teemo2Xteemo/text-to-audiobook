@@ -56,12 +56,13 @@ class InMemoryQueue:
     def __init__(self) -> None:
         self.job_ids: list[str] = []
 
-    async def enqueue(self, job_id: str) -> None:
+    async def enqueue(self, job_id: str, **_kwargs: object) -> None:
         self.job_ids.append(job_id)
 
 
 class FailingQueue:
-    async def enqueue(self, job_id: str) -> None:
+    async def enqueue(self, job_id: str, **_kwargs: object) -> None:
+        del job_id
         raise RuntimeError("queue unavailable")
 
 

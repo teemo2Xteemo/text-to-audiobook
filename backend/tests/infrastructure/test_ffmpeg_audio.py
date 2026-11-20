@@ -371,6 +371,45 @@ def test_long_silence_timeout_scales_and_short_silence_stays_bounded(
     assert seen == [120.0, 1800.0]
 
 
+def test_merge_timeout_scales_with_input_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[float] = []
+
+    async def fake_ffmpeg(argv: object, timeout_seconds: float = 0) -> None:
+        del argv
+        seen.append(timeout_seconds)
+
+    monkeypatch.setattr("app.infrastructure.ffmpeg_audio.run_ffmpeg_argv", fake_ffmpeg)
+    processor = FFmpegAudioProcessor(executable="ffmpeg", encode_timeout_ceiling_seconds=10_000)
+    one = tmp_path / "one.mp3"
+    one.write_bytes(b"x" * 100)
+    asyncio.run(
+        processor.merge(
+            [one],
+            tmp_path / "out-one.mp3",
+            output_format=OutputFormat.MP3,
+            bitrate_kbps=128,
+        )
+    )
+    many = []
+    for index in range(80):
+        path = tmp_path / f"part-{index}.mp3"
+        path.write_bytes(b"x" * 100)
+        many.append(path)
+    asyncio.run(
+        processor.merge(
+            many,
+            tmp_path / "out-many.mp3",
+            output_format=OutputFormat.MP3,
+            bitrate_kbps=128,
+        )
+    )
+    assert seen[0] == 120.0
+    assert seen[1] == 160.0
+    assert seen[1] > seen[0]
+
+
 def test_merge_missing_source_raises_domain_error(tmp_path: Path) -> None:
     processor = FFmpegAudioProcessor(executable="ffmpeg")
     existing = tmp_path / "existing.mp3"

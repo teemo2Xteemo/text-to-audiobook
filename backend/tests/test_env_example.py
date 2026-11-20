@@ -30,6 +30,9 @@ REQUIRED_ENV_NAMES = (
     "RETRY_BACKOFF_SECONDS",
     "MAX_RECOVERY_ATTEMPTS",
     "RQ_JOB_TIMEOUT_SECONDS",
+    "JOB_RUN_BUDGET_SECONDS",
+    "MAX_STALLED_RUNS",
+    "MAX_JOB_RUNS",
     "VITE_API_BASE_URL",
     "VITE_DEFAULT_SOURCE_LANGUAGE",
     "VITE_DEFAULT_TARGET_LANGUAGE",
@@ -109,3 +112,6 @@ def test_max_upload_bytes_defaults_match_settings() -> None:
 def test_compose_worker_wires_max_recovery_attempts() -> None:
     body = _compose_without_comments(COMPOSE.read_text(encoding="utf-8"))
     assert body.count("MAX_RECOVERY_ATTEMPTS: ${MAX_RECOVERY_ATTEMPTS:-3}") == 1
+    assert body.count("JOB_RUN_BUDGET_SECONDS: ${JOB_RUN_BUDGET_SECONDS:-}") == 1
+    assert body.count("MAX_STALLED_RUNS: ${MAX_STALLED_RUNS:-3}") == 1
+    assert body.count("MAX_JOB_RUNS: ${MAX_JOB_RUNS:-500}") == 1

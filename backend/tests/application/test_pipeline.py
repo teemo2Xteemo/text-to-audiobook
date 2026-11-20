@@ -143,6 +143,8 @@ def _orchestrator(
     artifact_cache: PipelineArtifactCache | None = None,
     chapter_pause_ms: int = 0,
     text_normalizer: object | None = None,
+    max_stalled_runs: int | None = None,
+    max_job_runs: int | None = None,
 ) -> tuple[
     PipelineOrchestrator,
     Path,
@@ -175,6 +177,10 @@ def _orchestrator(
         "chapter_pause_ms": chapter_pause_ms,
         "text_normalizer": text_normalizer,
     }
+    if max_stalled_runs is not None:
+        kwargs["max_stalled_runs"] = max_stalled_runs
+    if max_job_runs is not None:
+        kwargs["max_job_runs"] = max_job_runs
     if artifact_cache is not None:
         kwargs["artifact_cache"] = artifact_cache
     if max_chars is not None:
@@ -188,8 +194,21 @@ def _run(
     job: Job,
     workspace: Path,
     text: str = THREE_SENTENCES,
+    *,
+    deadline: float | None = None,
 ) -> Job:
-    return asyncio.run(orchestrator.run(job, text, workspace=workspace))
+    return asyncio.run(orchestrator.run(job, text, workspace=workspace, deadline=deadline))
+
+
+def _checkpoint_rows(workspace: Path) -> list[dict[str, str]]:
+    jsonl = workspace / "checkpoint.jsonl"
+    if jsonl.is_file():
+        return [
+            json.loads(line)
+            for line in jsonl.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    return json.loads((workspace / "checkpoint.json").read_text(encoding="utf-8"))
 
 
 def _seed_completed_chunks(workspace: Path, chunks: list, count: int, *, ext: str = "mp3") -> None:
@@ -592,7 +611,7 @@ def test_checkpoint_json_shape_after_success(tmp_path: Path) -> None:
     orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(tmp_path, job=job)
     result = _run(orchestrator, job, workspace)
     assert result.status is JobStatus.COMPLETED
-    payload = json.loads((workspace / "checkpoint.json").read_text(encoding="utf-8"))
+    payload = _checkpoint_rows(workspace)
     assert isinstance(payload, list)
     assert payload
     for entry in payload:
@@ -792,7 +811,7 @@ def test_second_job_hits_translation_and_tts_cache(tmp_path: Path) -> None:
     assert len(translation.calls) == first_translation_calls
     assert len(tts.calls) == first_tts_calls
     assert (second_ws / "output.mp3").is_file()
-    payload = json.loads((second_ws / "checkpoint.json").read_text(encoding="utf-8"))
+    payload = _checkpoint_rows(second_ws)
     stages = {(item["chunk_id"], item["stage"]) for item in payload}
     assert ("chunk-001", STAGE_TRANSLATED) in stages
     assert ("chunk-001", STAGE_TTS) in stages
@@ -1839,3 +1858,294 @@ def test_voice_service_down_persistently_fails_with_tts_failed(tmp_path: Path) -
     result = _run(orchestrator, job, workspace)
     assert result.status is JobStatus.FAILED
     assert result.error_type is ErrorType.TTS_FAILED
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _ClockTranslation(FakeTranslationProvider):
+    def __init__(self, clock: _Clock, languages: list[str]) -> None:
+        super().__init__(languages)
+        self._clock = clock
+
+    async def translate(self, text: str, source_language: str, target_language: str) -> str:
+        self._clock.now += 1
+        return await super().translate(text, source_language, target_language)
+
+
+class _ClockTTS(FakeTTSProvider):
+    def __init__(
+        self, clock: _Clock, voices: list[Voice], output_dir: Path, *, step: float
+    ) -> None:
+        super().__init__(voices, output_dir)
+        self._clock = clock
+        self._step = step
+
+    async def synthesize(
+        self, text: str, language: str, voice: str, settings: TTSSettings
+    ) -> AudioArtifact:
+        await asyncio.sleep(0)
+        self._clock.now += self._step
+        return await super().synthesize(text, language, voice, settings)
+
+
+def _patch_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
+    monkeypatch.setattr("app.application.pipeline.orchestrator.time.monotonic", clock)
+
+
+def test_deadline_stops_new_chunks_and_resume_skips_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    text = FIVE_SENTENCES
+    chunks = chunk_text(text, max_chars=20)
+    assert len(chunks) >= 3
+    job = _job()
+    translation = _ClockTranslation(clock, ["en-US", "ko-KR"])
+    orchestrator, workspace, translation, _, _, _, _, store = _orchestrator(
+        tmp_path, job=job, translation=translation, max_chars=20
+    )
+    with caplog.at_level(logging.INFO, logger="app.application.pipeline.orchestrator"):
+        first = _run(orchestrator, job, workspace, text=text, deadline=0.5)
+    assert first.status not in {JobStatus.COMPLETED, JobStatus.FAILED}
+    assert first.continue_requested is True
+    assert first.chunk_current > 0
+    assert len(translation.calls) == 1
+    assert any(record.getMessage() == "pipeline_yielded" for record in caplog.records)
+    done_text = translation.calls[0][0]
+
+    clock.now = 0
+    second = _run(
+        orchestrator,
+        first,
+        workspace,
+        text=text,
+        deadline=clock.now + 1000,
+    )
+    assert second.status is JobStatus.COMPLETED
+    assert second.continue_requested is False
+    assert done_text not in [call[0] for call in translation.calls[1:]]
+    assert len(translation.calls) == len(chunks)
+    saved = asyncio.run(store.get(job.id))
+    assert saved is not None and saved.status is JobStatus.COMPLETED
+    assert saved.chunk_current == saved.chunk_total
+
+
+def test_low_budget_yields_before_merge_and_next_run_merges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    text = FIVE_SENTENCES
+    chunks = chunk_text(text, max_chars=20)
+    assert len(chunks) == 5
+    job = _job(status=JobStatus.GENERATING_AUDIO, chunk_total=len(chunks))
+    _seed_completed_chunks(tmp_path / "jobs" / job.id, chunks, 4)
+    narrated = tmp_path / "jobs" / job.id / "chunks" / f"{chunks[4].id}.narrated.txt"
+    narrated.parent.mkdir(parents=True, exist_ok=True)
+    narrated.write_text("seed-narrated", encoding="utf-8")
+    translated = tmp_path / "jobs" / job.id / "chunks" / f"{chunks[4].id}.translated.txt"
+    translated.write_text("seed-translated", encoding="utf-8")
+    CheckpointStore(storage=CheckpointFilesystem(tmp_path / "jobs" / job.id)).record(
+        chunks[4].id, STAGE_TRANSLATED, translated
+    )
+    CheckpointStore(storage=CheckpointFilesystem(tmp_path / "jobs" / job.id)).record(
+        chunks[4].id, STAGE_NARRATED, narrated
+    )
+    voices = _voices_for(job.target_language)
+    tts = _ClockTTS(clock, voices, tmp_path / "tts-scratch", step=400)
+    orchestrator, workspace, _, _, tts, _, audio, _ = _orchestrator(
+        tmp_path, job=job, tts=tts, max_chars=20
+    )
+    first = _run(orchestrator, job, workspace, text=text, deadline=500)
+    assert first.status is JobStatus.GENERATING_AUDIO
+    assert first.continue_requested is True
+    assert audio.merge_calls == []
+    assert len(tts.calls) == 1
+
+    second = _run(orchestrator, first, workspace, text=text, deadline=clock.now + 500)
+    assert second.status is JobStatus.COMPLETED
+    assert len(audio.merge_calls) == 1
+    assert len(tts.calls) == 1
+
+
+def test_chunk_progress_resets_recovery_attempts_inside_generating_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    text = FIVE_SENTENCES
+    chunks = chunk_text(text, max_chars=20)
+    job = replace(
+        _job(status=JobStatus.GENERATING_AUDIO, chunk_total=len(chunks)),
+        recovery_attempts=2,
+    )
+    _seed_completed_chunks(tmp_path / "jobs" / job.id, chunks, 3)
+    for chunk in chunks[3:]:
+        folder = tmp_path / "jobs" / job.id / "chunks"
+        folder.mkdir(parents=True, exist_ok=True)
+        translated = folder / f"{chunk.id}.translated.txt"
+        narrated = folder / f"{chunk.id}.narrated.txt"
+        translated.write_text("seed-translated", encoding="utf-8")
+        narrated.write_text("seed-narrated", encoding="utf-8")
+        store = CheckpointStore(storage=CheckpointFilesystem(tmp_path / "jobs" / job.id))
+        store.record(chunk.id, STAGE_TRANSLATED, translated)
+        store.record(chunk.id, STAGE_NARRATED, narrated)
+    tts = _ClockTTS(clock, _voices_for(job.target_language), tmp_path / "tts-scratch", step=1)
+    orchestrator, workspace, *_ = _orchestrator(tmp_path, job=job, tts=tts, max_chars=20)
+    result = _run(orchestrator, job, workspace, text=text, deadline=0.5)
+    assert result.status is JobStatus.GENERATING_AUDIO
+    assert result.recovery_attempts == 0
+    assert result.continue_requested is True
+    assert len(tts.calls) == 1
+
+
+def test_stalled_runs_fail_when_a_deadline_makes_no_checkpoint_progress(tmp_path: Path) -> None:
+    text = FIVE_SENTENCES
+    job = _job()
+    orchestrator, workspace, translation, *_ = _orchestrator(
+        tmp_path, job=job, max_chars=20, max_stalled_runs=2
+    )
+    past = asyncio.run(_now()) - 1
+    first = _run(orchestrator, job, workspace, text=text, deadline=past)
+    assert first.status not in {JobStatus.COMPLETED, JobStatus.FAILED}
+    assert first.continue_requested is True
+    assert first.stalled_runs == 1
+    assert translation.calls == []
+
+    second = _run(orchestrator, first, workspace, text=text, deadline=past)
+    assert second.status is JobStatus.FAILED
+    assert second.error_type is ErrorType.TIMEOUT
+    assert second.message == "no progress in 2 consecutive runs"
+    assert second.continue_requested is False
+
+
+def test_max_job_runs_stops_continuation(tmp_path: Path) -> None:
+    job = replace(_job(), run_count=1)
+    orchestrator, workspace, *_ = _orchestrator(tmp_path, job=job, max_job_runs=1)
+    past = asyncio.run(_now()) - 1
+    result = _run(orchestrator, job, workspace, deadline=past)
+    assert result.status is JobStatus.FAILED
+    assert result.error_type is ErrorType.TIMEOUT
+    assert result.message == "job exceeded max runs (1)"
+
+
+async def _now() -> float:
+    import time
+
+    return time.monotonic()
+
+
+def test_fresh_run_merges_when_setup_uses_the_budget_but_adds_no_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    text = " ".join(f"Sentence {index} is here." for index in range(60))
+    chunks = chunk_text(text, max_chars=22)
+    assert len(chunks) >= 48
+    job = _job(status=JobStatus.GENERATING_AUDIO, chunk_total=len(chunks))
+
+    class _SlowSetup(FakeLanguageDetector):
+        async def detect(self, sample: str) -> object:
+            clock.now += 20
+            return await super().detect(sample)
+
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        detector=_SlowSetup(),  # type: ignore[arg-type]
+        max_chars=22,
+    )
+    _seed_completed_chunks(workspace, chunks, len(chunks))
+    result = _run(orchestrator, job, workspace, text=text, deadline=100)
+    assert result.status is JobStatus.COMPLETED
+    assert result.continue_requested is False
+    assert audio.merge_calls
+
+
+class _ClockNormalizer:
+    def __init__(self, clock: _Clock) -> None:
+        self._clock = clock
+        self.calls: list[str] = []
+
+    async def normalize(self, text: str, language: str) -> str:
+        del language
+        await asyncio.sleep(0)
+        self._clock.now += 1
+        self.calls.append(text)
+        return text
+
+
+def test_normalization_stops_at_the_budget_and_checkpoints_finished_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    text = " ".join(f"Sentence {index} is here." for index in range(4))
+    chunks = chunk_text(text, max_chars=22)
+    assert len(chunks) >= 3
+    job = _job(
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+        normalize_text=True,
+    )
+    normalizer = _ClockNormalizer(clock)
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        text_normalizer=normalizer,
+        max_chars=22,
+    )
+    first = _run(orchestrator, job, workspace, text=text, deadline=0.5)
+    assert first.status is JobStatus.PREPARING_TTS
+    assert first.continue_requested is True
+    assert len(normalizer.calls) == 1
+    done = normalizer.calls[0]
+    narrated = workspace / "chunks" / f"{chunks[0].id}.narrated.txt"
+    assert narrated.is_file()
+
+    clock.now = 0
+    second = _run(orchestrator, first, workspace, text=text, deadline=100)
+    assert second.status is JobStatus.COMPLETED
+    assert done not in normalizer.calls[1:]
+    assert len(normalizer.calls) == len(chunks)
+
+
+def test_expiring_deadline_finishes_in_flight_tts_and_starts_no_more(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    text = " ".join(f"Sentence {index} is here." for index in range(8))
+    chunks = chunk_text(text, max_chars=22)
+    assert len(chunks) >= 6
+    job = _job()
+    voices = _voices_for(job.target_language)
+    tts = _ClockTTS(clock, voices, tmp_path / "tts-scratch", step=1)
+    orchestrator, workspace, translation, _, tts, _, audio, _ = _orchestrator(
+        tmp_path, job=job, tts=tts, max_chars=22
+    )
+    orchestrator._tts_concurrency = 4
+    first = _run(orchestrator, job, workspace, text=text, deadline=0.5)
+    assert first.status is JobStatus.GENERATING_AUDIO
+    assert first.continue_requested is True
+    assert len(tts.calls) == 4
+    assert audio.merge_calls == []
+    started = {call[0] for call in tts.calls}
+
+    second = _run(orchestrator, first, workspace, text=text, deadline=clock.now + 1000)
+    assert second.status is JobStatus.COMPLETED
+    assert len(translation.calls) == len(chunks)
+    assert started.isdisjoint({call[0] for call in tts.calls[4:]})
+    assert len(tts.calls) == len(chunks)

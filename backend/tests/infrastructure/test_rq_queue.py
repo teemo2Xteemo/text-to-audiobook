@@ -5,8 +5,10 @@ from rq.job import Callback
 
 from app.infrastructure.rq_queue import (
     RQ_ON_FAILURE,
+    RQ_ON_SUCCESS,
     RQ_PROCESS_JOB,
     RQJobQueue,
+    rq_process_job_id,
 )
 
 
@@ -28,10 +30,18 @@ def test_enqueue_sets_timeout_and_on_failure() -> None:
     on_failure = queue.kwargs["on_failure"]
     assert isinstance(on_failure, Callback)
     assert on_failure.name == RQ_ON_FAILURE
+    on_success = queue.kwargs["on_success"]
+    assert isinstance(on_success, Callback)
+    assert on_success.name == RQ_ON_SUCCESS
 
 
 def test_rq_on_failure_path_resolves() -> None:
     module_path, name = RQ_ON_FAILURE.rsplit(".", 1)
+    assert callable(getattr(import_module(module_path), name))
+
+
+def test_rq_on_success_path_resolves() -> None:
+    module_path, name = RQ_ON_SUCCESS.rsplit(".", 1)
     assert callable(getattr(import_module(module_path), name))
 
 
@@ -86,10 +96,10 @@ def test_enqueue_uses_deterministic_job_id_and_skips_when_already_queued() -> No
     asyncio.run(rq_queue.enqueue(job_id))
     asyncio.run(rq_queue.enqueue(job_id))
     assert queue.calls == 1
-    assert queue.kwargs["job_id"] == f"process-{job_id}"
+    assert queue.kwargs["job_id"] == rq_process_job_id(job_id, 0)
 
     # When the previous RQ job is failed/finished, re-enqueueing is allowed (e.g. retry)
-    queue.existing[f"process-{job_id}"] = _ExistingJob("failed")
+    queue.existing[rq_process_job_id(job_id, 0)] = _ExistingJob("failed")
     asyncio.run(rq_queue.enqueue(job_id))
     assert queue.calls == 2
 
@@ -123,7 +133,80 @@ def test_enqueue_replaces_stale_started_entry_after_crash() -> None:
     asyncio.run(RQJobQueue(queue, job_timeout=1800).enqueue(job_id))  # type: ignore[arg-type]
     assert deleted == [rq_id]
     assert queue.calls == 1
-    assert queue.kwargs["job_id"] == rq_id
+    assert queue.kwargs["job_id"] == rq_process_job_id(job_id, 0)
+
+
+def test_keep_running_enqueues_a_new_id_without_deleting_the_started_job() -> None:
+    job_id = "11111111-1111-1111-1111-111111111111"
+    started_id = rq_process_job_id(job_id, 0)
+    deleted: list[str] = []
+
+    class _Row:
+        def __init__(self, status: str) -> None:
+            self._status = status
+
+        def get_status(self, refresh: bool = False) -> str:
+            del refresh
+            return self._status
+
+        def delete(self) -> None:
+            deleted.append(self._status)
+
+    class _LiveQueue(_CaptureQueue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rows = {started_id: _Row("started")}
+
+        def fetch_job(self, rq_job_id: str) -> _Row | None:
+            return self.rows.get(rq_job_id)
+
+        def enqueue(self, *args: object, **kwargs: object) -> None:
+            super().enqueue(*args, **kwargs)
+            self.rows[str(kwargs["job_id"])] = _Row("queued")
+
+    queue = _LiveQueue()
+    asyncio.run(
+        RQJobQueue(queue, job_timeout=30).enqueue(job_id, run_count=1, keep_running=True)  # type: ignore[arg-type]
+    )
+    assert deleted == []
+    assert queue.kwargs["job_id"] == rq_process_job_id(job_id, 1)
+    assert started_id in queue.rows
+
+
+def test_keep_running_suffixes_the_id_when_that_run_is_already_finished() -> None:
+    job_id = "11111111-1111-1111-1111-111111111111"
+    finished_id = rq_process_job_id(job_id, 2)
+
+    class _Row:
+        def __init__(self, status: str) -> None:
+            self._status = status
+
+        def get_status(self, refresh: bool = False) -> str:
+            del refresh
+            return self._status
+
+        def delete(self) -> None:
+            raise AssertionError("finished row must stay while the worker is bookkeeping it")
+
+    class _FinishedQueue(_CaptureQueue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rows = {finished_id: _Row("finished")}
+
+        def fetch_job(self, rq_job_id: str) -> _Row | None:
+            return self.rows.get(rq_job_id)
+
+        def enqueue(self, *args: object, **kwargs: object) -> None:
+            super().enqueue(*args, **kwargs)
+
+    queue = _FinishedQueue()
+    asyncio.run(
+        RQJobQueue(queue, job_timeout=30).enqueue(job_id, run_count=2, keep_running=True)  # type: ignore[arg-type]
+    )
+    new_id = str(queue.kwargs["job_id"])
+    assert new_id.startswith(finished_id + "-")
+    assert new_id != finished_id
+    assert finished_id in queue.rows
 
 
 def test_rq_queue_enqueue_cleans_started_job_registry_with_fakeredis() -> None:
@@ -149,8 +232,9 @@ def test_rq_queue_enqueue_cleans_started_job_registry_with_fakeredis() -> None:
     rq_queue = RQJobQueue(queue, job_timeout=1800)
     asyncio.run(rq_queue.enqueue(job_id))
 
+    fresh_id = rq_process_job_id(job_id, 0)
     assert job.id not in queue.started_job_registry
-    assert rq_job_id in queue.job_ids
-    new_job = queue.fetch_job(rq_job_id)
+    assert fresh_id in queue.job_ids
+    new_job = queue.fetch_job(fresh_id)
     assert new_job is not None
     assert new_job.get_status() == "queued"
