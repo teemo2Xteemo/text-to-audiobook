@@ -156,19 +156,20 @@ async def _assemble_one(
         duration_ms = await audio.get_duration_ms(destination)
         checkpoints.record(key, STAGE_CHAPTER, destination)
     except Exception as exc:
+        # Re-raise the original error. A disk failure stays STORAGE_FAILED, and a
+        # worker timeout must not be rewritten into AUDIO_PROCESSING_FAILED.
         if isinstance(exc, DomainError):
             record.error_type = exc.error_type.value
             record.message = exc.message
-            failure = exc
-        else:
-            record.error_type = ErrorType.AUDIO_PROCESSING_FAILED.value
+            _become(record, ChapterStatus.FAILED)
+        elif isinstance(exc, OSError):
+            record.error_type = ErrorType.STORAGE_FAILED.value
             record.message = f"chapter {record.ordinal} assembly failed"
-            failure = DomainError(ErrorType.AUDIO_PROCESSING_FAILED, record.message)
-        _become(record, ChapterStatus.FAILED)
+            _become(record, ChapterStatus.FAILED)
+        elif record.status is not ChapterStatus.PENDING:
+            record.invalidate()
         store.save(manifest)
-        if isinstance(exc, DomainError):
-            raise
-        raise failure from exc
+        raise
     record.file = relative
     record.duration_ms = duration_ms
     record.size_bytes = destination.stat().st_size

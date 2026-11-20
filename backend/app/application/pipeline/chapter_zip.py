@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import queue
 import shutil
@@ -43,6 +44,18 @@ class _QueueWriter(io.RawIOBase):
             except queue.Full:
                 continue
         raise BrokenPipeError("zip cancelled")
+
+
+def _wake_blocked_get(messages: queue.Queue[bytes | BaseException | None]) -> None:
+    while True:
+        try:
+            messages.get_nowait()
+        except queue.Empty:
+            break
+    try:
+        messages.put_nowait(None)
+    except queue.Full:
+        return
 
 
 def _offer(
@@ -105,4 +118,8 @@ async def iter_stored_zip(entries: list[tuple[str, Path]]) -> AsyncIterator[byte
             yield item
     finally:
         cancelled.set()
-        await asyncio.to_thread(thread.join, 2.0)
+        # A cancelled `to_thread(messages.get)` does not stop the executor thread.
+        # Wake it, or that worker stays blocked and later ZIP downloads hang.
+        _wake_blocked_get(messages)
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.shield(asyncio.to_thread(thread.join, 2.0))

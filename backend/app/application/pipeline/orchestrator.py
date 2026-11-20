@@ -181,6 +181,9 @@ class PipelineOrchestrator:
         if job.mode == JobMode.UNKNOWN:
             return await self._fail(job, ErrorType.INVALID_INPUT, "Unknown job mode")
         workspace.mkdir(parents=True, exist_ok=True)
+        self._manifest_bound = False
+        self._manifest = None
+        self._manifest_store = None
         checkpoints = CheckpointStore(storage=self._checkpoint_storage_factory(workspace))
         self._checkpoints = checkpoints
         self._deadline = deadline

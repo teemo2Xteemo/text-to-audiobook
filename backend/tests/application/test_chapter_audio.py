@@ -1,12 +1,18 @@
 """Per-chapter files are assembled before the book finishes and are not rebuilt."""
 
 import asyncio
+import contextlib
 import io
 import os
+import sys
 import threading
+import time
+import traceback
 import zipfile
 from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from app.application.pipeline.chapter_assembly import assemble_ready_chapters
 from app.application.pipeline.chapter_zip import iter_stored_zip
@@ -391,3 +397,102 @@ def test_zip_cancel_closes_the_source(tmp_path: Path) -> None:
         if linked == target:
             leaked.append(linked)
     assert leaked == []
+
+
+def _threads_blocked_in_queue_get() -> list[str]:
+    frames = sys._current_frames()
+    blocked: list[str] = []
+    for thread in threading.enumerate():
+        frame = frames.get(thread.ident)
+        if frame is None:
+            continue
+        for item in traceback.extract_stack(frame):
+            if item.name == "get" and item.filename.endswith("queue.py"):
+                blocked.append(thread.name)
+                break
+    return blocked
+
+
+def test_zip_cancel_unblocks_a_waiting_reader(tmp_path: Path, monkeypatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    source = tmp_path / "block.mp3"
+    source.write_bytes(b"placeholder")
+
+    class _Blocking(io.RawIOBase):
+        def readable(self) -> bool:
+            return True
+
+        def read(self, size: int = -1) -> bytes:
+            del size
+            started.set()
+            release.wait(timeout=5)
+            return b""
+
+    real_open = Path.open
+
+    def _open(self: Path, mode: str = "r", *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        if self == source and "b" in str(mode):
+            return _Blocking()
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _open)
+
+    async def _cancel_while_get_waits() -> None:
+        stream = iter_stored_zip([("0001 - Block.mp3", source)])
+        pending: asyncio.Task[bytes] | None = None
+        try:
+            while not started.is_set():
+                await asyncio.wait_for(stream.__anext__(), timeout=2)
+            pending = asyncio.create_task(stream.__anext__())
+            await asyncio.sleep(0.2)
+            assert not pending.done()
+            pending.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pending
+        finally:
+            release.set()
+            await stream.aclose()
+
+    asyncio.run(_cancel_while_get_waits())
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and _threads_blocked_in_queue_get():
+        time.sleep(0.05)
+    assert _threads_blocked_in_queue_get() == []
+
+
+def test_disk_error_during_assembly_stays_storage_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.application.pipeline import chapter_assembly
+
+    real_merge = chapter_assembly.merge_artifacts
+
+    async def _merge(audio, sources, destination, **kwargs):  # type: ignore[no-untyped-def]
+        if destination.name == "0002.mp3":
+            raise OSError("no space left on device")
+        return await real_merge(audio, sources, destination, **kwargs)
+
+    monkeypatch.setattr(chapter_assembly, "merge_artifacts", _merge)
+    job = _job(
+        id="66666666-6666-6666-6666-666666666666",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        max_chars=500,
+    )
+    failed = _run(orchestrator, job, workspace, text=_STORY)
+    assert failed.status is JobStatus.FAILED
+    assert failed.error_type is ErrorType.STORAGE_FAILED
+    manifest = FilesystemChapterManifest(workspace).load()
+    assert manifest is not None
+    assert manifest.chapters[0].status is ChapterStatus.READY
+    assert manifest.chapters[1].status is ChapterStatus.FAILED
+    assert manifest.chapters[1].error_type == ErrorType.STORAGE_FAILED.value
