@@ -32,7 +32,7 @@ from app.api.schemas import (
 )
 from app.application.capabilities import engine_label
 from app.application.jobs import JobService
-from app.application.pipeline.chapters import split_chapters
+from app.application.pipeline.chapters import ChapterKind, split_chapters_detailed
 from app.config.factory import build_artifact_cache
 from app.config.settings import Settings
 from app.domain.audio import TTSSettings, ensure_valid_speed
@@ -225,10 +225,23 @@ async def analyze_text(
         slice_text, detector, settings.language_confirm_threshold
     )
 
-    chapters = await run_in_threadpool(split_chapters, text)
-    chapters_count = sum(1 for c in chapters if c.index > 0)
+    detailed = await run_in_threadpool(split_chapters_detailed, text)
+    chapters = detailed.chapters
+    # Volumes and the preface are structure, not chapters, even though each has
+    # its own ordinal. A book with no headings is one synthetic chapter.
+    chapters_count = sum(1 for chapter in chapters if chapter.kind is ChapterKind.CHAPTER)
+    preview_limit = 100
     chapters_preview = [
-        ChapterSummary(index=c.index, title=c.title, char_count=c.char_count) for c in chapters[:10]
+        ChapterSummary(
+            index=chapter.index,
+            ordinal=chapter.ordinal,
+            kind=chapter.kind.value,
+            title=chapter.title,
+            char_count=chapter.char_count,
+            chapter_number=chapter.chapter_number,
+            confidence=detailed.detection_confidence,
+        )
+        for chapter in chapters[:preview_limit]
     ]
 
     char_len = len(text)
@@ -248,6 +261,9 @@ async def analyze_text(
         candidates=candidates,
         chapters_count=chapters_count,
         chapters_preview=chapters_preview,
+        chapters_preview_truncated=len(chapters) > preview_limit,
+        chapter_detection_confidence=detailed.detection_confidence,
+        chapter_detection_uncertain=detailed.uncertain,
         duration_estimate_seconds=duration_estimate_seconds,
         process_time_estimate_seconds=process_time_estimate_seconds,
         preview_lines=preview_lines,

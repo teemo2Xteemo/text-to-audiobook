@@ -71,6 +71,30 @@ function getVoicePreviewSample(lang: string, fallbackText: string): string {
   return SAMPLE_PREVIEWS[prefix] || fallbackText || "Hello, this is a voice sample preview.";
 }
 
+const CHAPTER_PREVIEW_LIMIT = 50;
+
+function chapterKindLabel(kind: string | undefined): string {
+  switch (kind) {
+    case "preface":
+      return "Preface";
+    case "volume":
+      return "Volume";
+    default:
+      return "Chapter";
+  }
+}
+
+function chapterTitle(title: string, kind: string | undefined): string {
+  const trimmed = title.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  if (kind === "preface") {
+    return "Preface";
+  }
+  return "Untitled";
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -1119,6 +1143,32 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
                       <span className="metric-value">~{Math.round(analysis.process_time_estimate_seconds)}s</span>
                     </div>
                   </div>
+
+                  {analysis.chapter_detection_uncertain ? (
+                    <div role="alert" className="confidence-warning-banner">
+                      Chapter detection is uncertain — please check the list before generating.
+                    </div>
+                  ) : null}
+
+                  {analysis.chapters_preview.length > 0 ? (
+                    <div className="chapter-preview">
+                      <span className="metric-label">Detected structure</span>
+                      <ol className="chapter-preview-list" aria-label="Detected chapters" tabIndex={0}>
+                        {analysis.chapters_preview.slice(0, CHAPTER_PREVIEW_LIMIT).map((chapter) => (
+                          <li key={`${chapter.ordinal ?? chapter.index}-${chapter.kind ?? "chapter"}`}>
+                            <span className="chapter-kind">{chapterKindLabel(chapter.kind)}</span>
+                            <span className="chapter-title">
+                              {chapterTitle(chapter.title, chapter.kind)}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                      {analysis.chapters_preview.length > CHAPTER_PREVIEW_LIMIT ||
+                      analysis.chapters_preview_truncated ? (
+                        <p className="chapter-preview-more">Showing the first 50 detected sections.</p>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   {(analysis.needs_confirmation || analysis.confidence < 0.7) && confirmedCandidate !== sourceLanguage && (
                     <div role="alert" className="confidence-warning-banner">

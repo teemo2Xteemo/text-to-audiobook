@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_serializer
 
 from app.domain.audio import SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, Voice
@@ -155,10 +157,24 @@ class DetectLanguageResponse(BaseModel):
     preview_lines: list[str]
 
 
+ChapterKindName = Literal["preface", "volume", "chapter"]
+
+
 class ChapterSummary(BaseModel):
+    """One detected span. ``index`` and ``ordinal`` are the same unique 1-based id.
+
+    ``chapter_number`` is the number printed on a chapter heading. It may
+    restart after a volume and is null for prefaces and volumes. ``confidence``
+    repeats the document score from ``AnalyzeResponse.chapter_detection_confidence``.
+    """
+
     index: int
+    ordinal: int
+    kind: ChapterKindName
     title: str
     char_count: int
+    chapter_number: int | None = None
+    confidence: float | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -169,6 +185,9 @@ class AnalyzeResponse(BaseModel):
     candidates: list[LanguageCandidate]
     chapters_count: int
     chapters_preview: list[ChapterSummary]
+    chapters_preview_truncated: bool = False
+    chapter_detection_confidence: float
+    chapter_detection_uncertain: bool
     duration_estimate_seconds: float
     process_time_estimate_seconds: float
     preview_lines: list[str]

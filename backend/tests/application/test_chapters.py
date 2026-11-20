@@ -1,10 +1,15 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from app.application.pipeline.chapters import (
     Chapter,
+    ChapterKind,
     chunk_by_chapter,
     is_chapter_heading,
     split_chapters,
+    split_chapters_detailed,
 )
 
 
@@ -34,16 +39,26 @@ def test_split_chapters_preface_emitted_before_first_chapter():
     text_cn = "序言\n这是一段前言。\n第一章 启程\n正文开始。\n第二章 结束\n正文结束。"
     chapters = split_chapters(text_cn)
     assert len(chapters) == 3
-    # Preface has index=0, title="" so Chapter 1 stays index=1
-    assert chapters[0].index == 0
+    # S2: index/ordinal are unique across preface and chapters. The printed
+    # chapter number lives on chapter_number, so chapter 1 is not index 1
+    # once a preface occupies ordinal 1.
+    assert chapters[0].kind is ChapterKind.PREFACE
+    assert chapters[0].index == 1
+    assert chapters[0].ordinal == 1
+    assert chapters[0].chapter_number is None
     assert chapters[0].title == ""
     assert "序言\n这是一段前言。" in chapters[0].body
 
-    assert chapters[1].index == 1
+    assert chapters[1].kind is ChapterKind.CHAPTER
+    assert chapters[1].index == 2
+    assert chapters[1].ordinal == 2
+    assert chapters[1].chapter_number == 1
     assert chapters[1].title == "第一章 启程"
     assert chapters[1].body == "正文开始。"
 
-    assert chapters[2].index == 2
+    assert chapters[2].index == 3
+    assert chapters[2].ordinal == 3
+    assert chapters[2].chapter_number == 2
     assert chapters[2].title == "第二章 结束"
     assert chapters[2].body == "正文结束。"
 
@@ -139,6 +154,9 @@ def test_split_chapters_no_headings_returns_full_text():
     chapters = split_chapters(text)
     assert len(chapters) == 1
     assert chapters[0].index == 1
+    assert chapters[0].ordinal == 1
+    assert chapters[0].kind is ChapterKind.CHAPTER
+    assert chapters[0].chapter_number is None
     assert chapters[0].title == "Full text"
     assert chapters[0].body == text
     assert chapters[0].char_count == len(text)
@@ -228,12 +246,18 @@ def test_split_chapters_and_chunk_volume_heading_with_empty_body():
     chapters = split_chapters(text)
     assert len(chapters) == 2
 
-    # Volume division has index=0 so Chapter 1 keeps index=1
-    assert chapters[0].index == 0
+    # Volume is its own span. It no longer shares index 0 with a preface.
+    assert chapters[0].kind is ChapterKind.VOLUME
+    assert chapters[0].index == 1
+    assert chapters[0].ordinal == 1
+    assert chapters[0].chapter_number is None
     assert chapters[0].title == "第一卷 少年出山"
     assert chapters[0].body == ""
 
-    assert chapters[1].index == 1
+    assert chapters[1].kind is ChapterKind.CHAPTER
+    assert chapters[1].index == 2
+    assert chapters[1].ordinal == 2
+    assert chapters[1].chapter_number == 1
     assert chapters[1].title == "第一章 天才少年"
     assert chapters[1].body == "正文内容在这里。"
 
@@ -302,14 +326,19 @@ def test_is_chapter_heading_unicode_whitespace_and_ordinal_dot(heading: str) -> 
 
 
 def test_split_chapters_unicode_whitespace_volume_and_chapter() -> None:
-    # S1 Acceptance: 第一卷\u3000X\n第一章\u3000Y\n正文 gives indices 0, 1
+    # S1: ideographic space stays in the title. S2: volume and chapter indices differ.
     text = "第一卷\u3000X\n第一章\u3000Y\n正文"
     chapters = split_chapters(text)
     assert len(chapters) == 2
-    assert chapters[0].index == 0
+    assert chapters[0].kind is ChapterKind.VOLUME
+    assert chapters[0].index == 1
+    assert chapters[0].ordinal == 1
     assert chapters[0].title == "第一卷\u3000X"
     assert chapters[0].body == ""
-    assert chapters[1].index == 1
+    assert chapters[1].kind is ChapterKind.CHAPTER
+    assert chapters[1].index == 2
+    assert chapters[1].ordinal == 2
+    assert chapters[1].chapter_number == 1
     assert chapters[1].title == "第一章\u3000Y"
     assert chapters[1].body == "正文"
 
@@ -333,10 +362,10 @@ def test_split_chapters_unicode_whitespace_volume_and_chapter() -> None:
         "Hồi 3 tuổi, cậu bé ...",
         "Book mild",
         "Act civil",
-        "chapter iv",  # Lowercase Roman numerals intentionally not detected as trade-off for T2
-        # Note (Y2 & Z2 trade-off): Multi-word sentence-case pronoun lines (e.g.
-        # "Chương 9: Hắn là thiên tài sao", "Chương 3: Ông lão.") are intentionally
-        # disqualified to prevent splitting narrative sentence lines.
+        "chapter iv",  # T2: lowercase Roman numerals are intentionally not headings.
+        # Y2 stays a line-level reject: a sentence-case unambiguous pronoun
+        # ("Chương 9: Hắn là thiên tài sao") is prose, so "Hắn bước vào phòng vắng"
+        # is not read as a title. Short "Ông lão." (Z2) is a title and is accepted.
     ],
 )
 def test_is_chapter_heading_disqualifies_sentences_and_english_words(line: str) -> None:
@@ -391,3 +420,114 @@ def test_is_chapter_heading_unicode_whitespace_before_delimiter() -> None:
     # T3: Whitespace before delimiter should accept NBSP (\u00a0)
     assert is_chapter_heading("Chương 1\u00a0: Mở đầu") is True
     assert is_chapter_heading("Chapter 1\u00a0: The Beginning") is True
+
+
+_CORPUS_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "chapters" / "headings.json"
+_CORPUS_ROWS = json.loads(_CORPUS_PATH.read_text(encoding="utf-8"))["rows"]
+
+
+def _assert_corpus_row(row: dict) -> None:
+    line = row["line"]
+    expect_detect = row["expect"] == "detect"
+    if row.get("scope", "line") == "line":
+        assert is_chapter_heading(line) is expect_detect
+        sample = f"{line}\nNội dung theo sau để còn một thân chương."
+        titles = [chapter.title for chapter in split_chapters(sample)]
+        assert (line in titles) is expect_detect
+        return
+
+    chapters = split_chapters(row["document"])
+    titles = [chapter.title for chapter in chapters]
+    assert (line in titles) is expect_detect
+    for keep in row.get("keep_titles", []):
+        assert keep in titles
+    if row.get("kind"):
+        match = next(chapter for chapter in chapters if chapter.title == line)
+        assert match.kind.value == row["kind"]
+
+
+@pytest.mark.parametrize(
+    "row",
+    [row for row in _CORPUS_ROWS if row["group"] == "must"],
+    ids=lambda row: row["id"],
+)
+def test_heading_corpus_must(row: dict) -> None:
+    _assert_corpus_row(row)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [row for row in _CORPUS_ROWS if row["group"] == "tradeoff"],
+    ids=lambda row: row["id"],
+)
+def test_heading_corpus_tradeoff(row: dict) -> None:
+    try:
+        _assert_corpus_row(row)
+    except AssertionError as exc:
+        if row.get("xfail"):
+            pytest.xfail(f"{row['source']}: {row.get('notes', 'known trade-off')} ({exc})")
+        raise
+
+
+def test_corpus_covers_tradeoff_finding_ids() -> None:
+    tradeoff_sources = {row["source"] for row in _CORPUS_ROWS if row["group"] == "tradeoff"}
+    assert tradeoff_sources >= {"CC2", "CC3", "Z2", "Y2", "T2", "T4"}
+
+
+def test_volume_restart_and_preface_have_unique_ordinals() -> None:
+    text = "序言\n前言。\n第一卷 上\n第一章 一\n正文一。\n第二卷 下\n第一章 二\n正文二。"
+    chapters = split_chapters(text)
+    assert [chapter.kind for chapter in chapters] == [
+        ChapterKind.PREFACE,
+        ChapterKind.VOLUME,
+        ChapterKind.CHAPTER,
+        ChapterKind.VOLUME,
+        ChapterKind.CHAPTER,
+    ]
+    ordinals = [chapter.ordinal for chapter in chapters]
+    assert ordinals == [1, 2, 3, 4, 5]
+    assert [chapter.index for chapter in chapters] == ordinals
+    assert len(set(ordinals)) == len(ordinals)
+    assert [chapter.chapter_number for chapter in chapters] == [None, None, 1, None, 1]
+    detail = split_chapters_detailed(text)
+    assert detail.uncertain is False
+
+
+def test_stray_heading_inside_later_chapter_is_not_split() -> None:
+    text = (
+        "Chương 55: Gió nổi\n"
+        "Nội dung năm mươi lăm đủ dài để không bị coi là tiêu đề ngắn.\n\n"
+        "Chương 56: Mưa đêm\n"
+        "Nội dung năm mươi sáu tiếp tục câu chuyện trong đêm mưa.\n\n"
+        "Chương 3: Ông lão bước vào căn phòng tối\n"
+        "Nội dung lạc giữa chương.\n\n"
+        "Chương 57: Lửa\n"
+        "Nội dung năm mươi bảy khép lại đoạn này.\n"
+    )
+    titles = [chapter.title for chapter in split_chapters(text)]
+    assert "Chương 3: Ông lão bước vào căn phòng tối" not in titles
+    assert titles == ["Chương 55: Gió nổi", "Chương 56: Mưa đêm", "Chương 57: Lửa"]
+
+
+def test_vietnamese_all_caps_headings_are_chapters() -> None:
+    text = "CHƯƠNG 1: MỞ ĐẦU\nNội dung.\n\nCHƯƠNG 2: CHÚNG TA LÊN ĐƯỜNG\nTiếp tục.\n"
+    chapters = split_chapters(text)
+    assert [chapter.title for chapter in chapters] == [
+        "CHƯƠNG 1: MỞ ĐẦU",
+        "CHƯƠNG 2: CHÚNG TA LÊN ĐƯỜNG",
+    ]
+    assert [chapter.chapter_number for chapter in chapters] == [1, 2]
+
+
+def test_printed_numbers_cover_han_fullwidth_and_roman() -> None:
+    samples = [
+        ("第十二章\n正文", 12),
+        ("第１章 开端\n正文", 1),
+        ("第一百零八章 大结局\n正文", 108),
+        ("CHAPTER XII.\nText", 12),
+        ("Book II\nText", 2),
+    ]
+    for text, number in samples:
+        chapter = split_chapters(text)[0]
+        assert chapter.chapter_number == number
+        assert chapter.kind is ChapterKind.CHAPTER
