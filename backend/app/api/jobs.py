@@ -239,7 +239,6 @@ async def analyze_text(
             title=chapter.title,
             char_count=chapter.char_count,
             chapter_number=chapter.chapter_number,
-            confidence=detailed.detection_confidence,
         )
         for chapter in chapters[:preview_limit]
     ]
@@ -260,6 +259,7 @@ async def analyze_text(
         needs_confirmation=needs_confirmation,
         candidates=candidates,
         chapters_count=chapters_count,
+        chapters_span_count=len(chapters),
         chapters_preview=chapters_preview,
         chapters_preview_truncated=len(chapters) > preview_limit,
         chapter_detection_confidence=detailed.detection_confidence,

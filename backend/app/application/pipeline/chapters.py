@@ -4,10 +4,13 @@ Detection is two steps:
 
 1. A permissive per-line candidate (prefix + number + optional title), with a
    small pronoun tie-breaker. This is what :func:`is_chapter_heading` reports.
-2. A document pass inside :func:`split_chapters`: drop candidates that break
-   the numbering sequence, that use a rare heading pattern, or that are as
-   long as a hard-wrapped prose line. Weak evidence keeps fewer splits and
-   lowers ``detection_confidence``.
+2. A document pass inside :func:`split_chapters`: drop a heading that uses a
+   rare pattern, that is as long as a hard-wrapped prose line, or that is a
+   numbering outlier. A forward typo (``1, 2, 30, 4 … 10``) is dropped and
+   does not hide the chapters that continue ``2``. A backward stray
+   (``… 57, 3, 58 …``) is dropped. A second run that restarts at 1 after a
+   finished book is kept and marked uncertain. Weak evidence lowers
+   ``detection_confidence``.
 
 There is no narrative-verb list. Kinship words (``anh/cô/ông/bà/lão/chị/cậu/y``)
 count as pronouns only when the next word is ``ấy/ta/kia/này/nọ/mình``.
@@ -68,6 +71,11 @@ __all__ = [
 _SOFT_MAX_HEADING_LEN = 100
 _UNCERTAIN_BELOW = 0.8
 _GLUED_ZHANG_MAX = 35
+# A later heading within this many counts of the previous one still belongs
+# to the same run. A larger jump is an outlier when the old run resumes.
+_FORWARD_TOLERANCE = 15
+_SEQUENCE_LOOKAHEAD = 6
+_NEW_BOOK_MIN_PREVIOUS = 4
 
 _DELIMS = set(":：、.·-_/\u2013\u2014「」『』【】《》〈〉()（）[]\"'")
 _CLAUSE_PUNCT = set(',，;；"“”')
@@ -183,6 +191,7 @@ class _Candidate:
     blank_before: bool
     blank_after: bool
     line_len: int
+    line_index: int
 
 
 def _norm_word(word: str) -> str:
@@ -311,6 +320,14 @@ def _parse_zh_number(raw: str) -> int | None:
     digits = raw.translate(_FULLWIDTH_DIGITS)
     if digits.isdigit():
         return int(digits)
+    # 一零五 / 二〇二四 have no 十/百/千/万. Read them as written digits.
+    if raw and not any(char in "十百千万" for char in raw):
+        if any(char not in _CN_DIGIT for char in raw):
+            return None
+        value = 0
+        for char in raw:
+            value = value * 10 + _CN_DIGIT[char]
+        return value
     total = 0
     section = 0
     number = 0
@@ -445,6 +462,98 @@ def _chapter_number_ok(number: int | None, last: int | None, volume_break: bool)
     return volume_break
 
 
+def _following_chapter_numbers(pool: list[_Candidate], index: int, limit: int) -> list[int]:
+    found: list[int] = []
+    for item in pool[index + 1 :]:
+        if item.role != "chapter" or item.number is None:
+            continue
+        found.append(item.number)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def _prior_run_resumes(pool: list[_Candidate], index: int, last: int) -> bool:
+    """True when a soon-following heading continues ``last``, so this jump is a typo."""
+    jump = pool[index].number
+    for number in _following_chapter_numbers(pool, index, _SEQUENCE_LOOKAHEAD):
+        if last < number <= last + _FORWARD_TOLERANCE:
+            return True
+        if jump is not None and jump < number <= jump + _FORWARD_TOLERANCE:
+            return False
+    return False
+
+
+def _implicit_new_book(pool: list[_Candidate], index: int, last: int) -> bool:
+    """A restart at 1 or 2 after a finished run, followed by the next numbers."""
+    number = pool[index].number
+    if number is None or number > 2 or last < _NEW_BOOK_MIN_PREVIOUS:
+        return False
+    upcoming = _following_chapter_numbers(pool, index, 3)
+    if len(upcoming) < 2:
+        return False
+    if not (number < upcoming[0] <= number + 2 and upcoming[0] <= upcoming[1]):
+        return False
+    # 57, then 1, 2, 58 is still the old book.
+    return upcoming[1] <= last
+
+
+def _drop_pattern_outliers(pool: list[_Candidate]) -> tuple[list[_Candidate], float]:
+    chapters = [item for item in pool if item.role == "chapter"]
+    if len(chapters) < 4:
+        return pool, 1.0
+    counts = Counter(item.pattern_key for item in chapters)
+    dominant_key, dominant_count = counts.most_common(1)[0]
+    share = dominant_count / len(chapters)
+    if share < 0.75:
+        return pool, share
+    kept = [item for item in pool if item.role == "volume" or item.pattern_key == dominant_key]
+    return kept, share
+
+
+def _filter_sequence(pool: list[_Candidate]) -> tuple[list[_Candidate], bool]:
+    """Keep the numbering run. One forward typo must not hide every later chapter."""
+    kept: list[_Candidate] = []
+    last: int | None = None
+    last_volume: int | None = None
+    volume_break = False
+    implicit_restart = False
+    for index, item in enumerate(pool):
+        if item.role == "volume":
+            if item.number is not None and last_volume is not None and item.number <= last_volume:
+                continue
+            kept.append(item)
+            if item.number is not None:
+                last_volume = item.number
+            volume_break = True
+            continue
+        number = item.number
+        if number is None or last is None or volume_break:
+            kept.append(item)
+            if number is not None:
+                last = number
+            volume_break = False
+            continue
+        if number >= last and number - last <= _FORWARD_TOLERANCE:
+            kept.append(item)
+            last = number
+            continue
+        if number > last and _prior_run_resumes(pool, index, last):
+            continue
+        if number > last:
+            kept.append(item)
+            last = number
+            continue
+        if _implicit_new_book(pool, index, last):
+            kept.append(item)
+            last = number
+            implicit_restart = True
+            continue
+    if not kept and pool:
+        kept = [pool[0]]
+    return kept, implicit_restart
+
+
 def _filter_candidates(
     candidates: list[_Candidate], body_lengths: list[int]
 ) -> tuple[list[_Candidate], float]:
@@ -458,50 +567,13 @@ def _filter_candidates(
     pool = [item for item in candidates if not _layout_suspect(item, median)]
     if not pool:
         pool = list(candidates)
-
-    chapter_pool = [item for item in pool if item.role == "chapter"]
-    dominant_key = ""
-    dominant_share = 1.0
-    if chapter_pool:
-        counts = Counter(item.pattern_key for item in chapter_pool)
-        dominant_key, dominant_count = counts.most_common(1)[0]
-        dominant_share = dominant_count / len(chapter_pool)
-
-    kept: list[_Candidate] = []
-    last_chapter: int | None = None
-    last_volume: int | None = None
-    volume_break = False
-    for item in pool:
-        if item.role == "volume":
-            if item.number is not None and last_volume is not None and item.number <= last_volume:
-                continue
-            kept.append(item)
-            if item.number is not None:
-                last_volume = item.number
-            volume_break = True
-            continue
-        if not _chapter_number_ok(item.number, last_chapter, volume_break):
-            continue
-        outlier = (
-            bool(dominant_key)
-            and item.pattern_key != dominant_key
-            and dominant_share >= 0.75
-            and len(chapter_pool) >= 4
-            and not (last_chapter is None or item.number == last_chapter + 1)
-        )
-        if outlier:
-            continue
-        kept.append(item)
-        if item.number is not None:
-            last_chapter = item.number
-        volume_break = False
-
-    if not kept:
-        kept = [pool[0]]
+    pool, dominant_share = _drop_pattern_outliers(pool)
+    kept, implicit_restart = _filter_sequence(pool)
     confidence = _multi_confidence(
         raw_count=len(candidates),
         kept=kept,
         dominant_share=dominant_share,
+        implicit_restart=implicit_restart,
     )
     return kept, confidence
 
@@ -534,7 +606,13 @@ def _sequence_health(kept: list[_Candidate]) -> float:
     return good / checked
 
 
-def _multi_confidence(*, raw_count: int, kept: list[_Candidate], dominant_share: float) -> float:
+def _multi_confidence(
+    *,
+    raw_count: int,
+    kept: list[_Candidate],
+    dominant_share: float,
+    implicit_restart: bool,
+) -> float:
     if raw_count == 0:
         return 1.0
     drop_ratio = 1 - (len(kept) / raw_count)
@@ -550,6 +628,8 @@ def _multi_confidence(*, raw_count: int, kept: list[_Candidate], dominant_share:
         score -= 0.28
     if _sequence_health(kept) < 0.8:
         score -= 0.18
+    if implicit_restart:
+        score = min(score, 0.62)
     return max(0.35, min(0.99, score))
 
 
@@ -604,13 +684,15 @@ def split_chapters_detailed(text: str) -> ChapterSplit:
                 blank_before=index > 0 and contents[index - 1].strip() == "",
                 blank_after=index + 1 < len(contents) and contents[index + 1].strip() == "",
                 line_len=len(stripped),
+                line_index=index,
             )
         )
 
+    candidate_lines = {item.line_index for item in raw}
     body_lengths = [
         len(content.strip())
-        for content in contents
-        if content.strip() and not any(content.strip() == item.title for item in raw)
+        for index, content in enumerate(contents)
+        if content.strip() and index not in candidate_lines
     ]
     kept, confidence = _filter_candidates(raw, body_lengths)
     confidence = round(confidence, 2)

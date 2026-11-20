@@ -59,6 +59,20 @@ class CheckpointStore:
         path = self._fs.resolve(entry.artifact_path)
         return path.is_file() and path.stat().st_size > 0
 
+    def forget_chunk(self, chunk_id: str) -> None:
+        """Drop every stage for ``chunk_id`` so a changed split cannot reuse it."""
+        index = self._index_of()
+        keys = [key for key in index if key[0] == chunk_id]
+        if not keys:
+            return
+        removed = [index.pop(key) for key in keys]
+        try:
+            self._fs.save_raw([item.to_dict() for item in index.values()])
+        except Exception:
+            for key, entry in zip(keys, removed, strict=True):
+                index[key] = entry
+            raise
+
     def record(self, chunk_id: str, stage: str, artifact: Path) -> None:
         index = self._index_of()
         key = (chunk_id, stage)

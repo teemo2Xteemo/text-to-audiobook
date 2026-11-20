@@ -23,6 +23,7 @@ from app.application.pipeline.chunk import chunk_source
 from app.application.pipeline.merge import merge_artifacts
 from app.application.pipeline.merge_srt import merge_srt_cues
 from app.application.pipeline.narrate import narrate_chunk
+from app.application.pipeline.narrate_plan import load_narrate_plan, save_narrate_plan
 from app.application.pipeline.normalize import normalize_chunk
 from app.application.pipeline.parse import is_srt_document, parse_source, prepare_narration_text
 from app.application.pipeline.parse_srt import parse_srt_cues, serialize_srt_cues
@@ -59,6 +60,24 @@ from app.domain.retry import RetryPolicy
 from app.domain.srt import SRTCue, TimedChunk
 
 logger = logging.getLogger(__name__)
+
+
+def _forget_chunks_whose_text_changed(
+    workspace: Path,
+    checkpoints: CheckpointStore,
+    chunks: list[Chunk],
+) -> None:
+    """A checkpoint is for one text. A new split must not reuse its audio."""
+    for chunk in chunks:
+        path = workspace / "chunks" / f"{chunk.id}.translated.txt"
+        if not path.is_file():
+            continue
+        try:
+            saved = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if saved != chunk.text:
+            checkpoints.forget_chunk(chunk.id)
 
 
 class _BudgetYield(Exception):
@@ -212,10 +231,16 @@ class PipelineOrchestrator:
     ) -> Job:
         normalized, resolved = await parse_source(text, job.source_language, self._detector)
         cleaned_text = prepare_narration_text(normalized)
-        chapters = split_chapters(cleaned_text)
-        chunks = chunk_by_chapter(chapters, max_chars=self._max_chars)
-        if not chunks:
-            raise DomainError(ErrorType.INVALID_INPUT, "No readable text found for narration")
+        chunks = load_narrate_plan(workspace)
+        if chunks is None:
+            chapters = split_chapters(cleaned_text)
+            chunks = chunk_by_chapter(chapters, max_chars=self._max_chars)
+            if not chunks:
+                raise DomainError(ErrorType.INVALID_INPUT, "No readable text found for narration")
+            # Written before any chunk work, so a resume keeps this split even if
+            # heading detection changes in a later deploy.
+            save_narrate_plan(workspace, chunks)
+        _forget_chunks_whose_text_changed(workspace, checkpoints, chunks)
         target_lang = (
             resolved
             if not job.target_language or job.target_language == AUTO_SOURCE_LANGUAGE

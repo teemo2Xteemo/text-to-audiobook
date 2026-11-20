@@ -382,6 +382,352 @@
           "kind": "chapter"
         }
       ]
+    },
+    {
+      "id": "zh-numbering-typo",
+      "lang": "zh",
+      "path": "zh/numbering_typo.txt",
+      "features": [
+        "forward-typo"
+      ],
+      "headings": [
+        {
+          "title": "第一章 甲",
+          "kind": "chapter"
+        },
+        {
+          "title": "第二章 乙",
+          "kind": "chapter"
+        },
+        {
+          "title": "第四章 丁",
+          "kind": "chapter"
+        },
+        {
+          "title": "第五章 戊",
+          "kind": "chapter"
+        },
+        {
+          "title": "第六章 己",
+          "kind": "chapter"
+        },
+        {
+          "title": "第七章 庚",
+          "kind": "chapter"
+        },
+        {
+          "title": "第八章 辛",
+          "kind": "chapter"
+        },
+        {
+          "title": "第九章 壬",
+          "kind": "chapter"
+        },
+        {
+          "title": "第十章 癸",
+          "kind": "chapter"
+        }
+      ]
+    },
+    {
+      "id": "vi-stray-late",
+      "lang": "vi",
+      "path": "vi/stray_late.txt",
+      "features": [
+        "backward-stray"
+      ],
+      "headings": [
+        {
+          "title": "Chương 1: Mục 1",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 2: Mục 2",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 3: Mục 3",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 4: Mục 4",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 5: Mục 5",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 6: Mục 6",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 7: Mục 7",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 8: Mục 8",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 9: Mục 9",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 10: Mục 10",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 11: Mục 11",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 12: Mục 12",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 13: Mục 13",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 14: Mục 14",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 15: Mục 15",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 16: Mục 16",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 17: Mục 17",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 18: Mục 18",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 19: Mục 19",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 20: Mục 20",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 21: Mục 21",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 22: Mục 22",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 23: Mục 23",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 24: Mục 24",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 25: Mục 25",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 26: Mục 26",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 27: Mục 27",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 28: Mục 28",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 29: Mục 29",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 30: Mục 30",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 31: Mục 31",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 32: Mục 32",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 33: Mục 33",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 34: Mục 34",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 35: Mục 35",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 36: Mục 36",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 37: Mục 37",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 38: Mục 38",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 39: Mục 39",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 40: Mục 40",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 41: Mục 41",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 42: Mục 42",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 43: Mục 43",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 44: Mục 44",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 45: Mục 45",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 46: Mục 46",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 47: Mục 47",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 48: Mục 48",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 49: Mục 49",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 50: Mục 50",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 51: Mục 51",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 52: Mục 52",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 53: Mục 53",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 54: Mục 54",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 55: Mục 55",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 56: Mục 56",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 57: Mục 57",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 58: Mục 58",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 59: Mục 59",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 60: Mục 60",
+          "kind": "chapter"
+        }
+      ]
+    },
+    {
+      "id": "vi-two-books",
+      "lang": "vi",
+      "path": "vi/two_books.txt",
+      "features": [
+        "implicit-restart"
+      ],
+      "headings": [
+        {
+          "title": "Chương 1: Trước",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 2: Trước",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 3: Trước",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 4: Trước",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 5: Trước",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 1: Sau",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 2: Sau",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 3: Sau",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 4: Sau",
+          "kind": "chapter"
+        },
+        {
+          "title": "Chương 5: Sau",
+          "kind": "chapter"
+        }
+      ]
     }
   ]
 }

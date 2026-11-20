@@ -164,8 +164,8 @@ class ChapterSummary(BaseModel):
     """One detected span. ``index`` and ``ordinal`` are the same unique 1-based id.
 
     ``chapter_number`` is the number printed on a chapter heading. It may
-    restart after a volume and is null for prefaces and volumes. ``confidence``
-    repeats the document score from ``AnalyzeResponse.chapter_detection_confidence``.
+    restart after a volume and is null for prefaces and volumes. The document
+    score lives on ``AnalyzeResponse.chapter_detection_confidence``.
     """
 
     index: int
@@ -174,7 +174,6 @@ class ChapterSummary(BaseModel):
     title: str
     char_count: int
     chapter_number: int | None = None
-    confidence: float | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -184,6 +183,7 @@ class AnalyzeResponse(BaseModel):
     needs_confirmation: bool
     candidates: list[LanguageCandidate]
     chapters_count: int
+    chapters_span_count: int
     chapters_preview: list[ChapterSummary]
     chapters_preview_truncated: bool = False
     chapter_detection_confidence: float

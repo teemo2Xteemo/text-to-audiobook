@@ -133,8 +133,6 @@ export type ChapterSummary = {
   kind?: ChapterKind;
   /** Printed chapter number. Null for preface and volume. May restart per volume. */
   chapter_number?: number | null;
-  /** Document-level score, repeated on each row. */
-  confidence?: number | null;
 };
 
 export type AnalyzeResponse = {
@@ -144,6 +142,8 @@ export type AnalyzeResponse = {
   needs_confirmation: boolean;
   candidates: LanguageCandidate[];
   chapters_count: number;
+  /** Every detected span, including ones past `chapters_preview`. */
+  chapters_span_count?: number;
   chapters_preview: ChapterSummary[];
   chapters_preview_truncated?: boolean;
   chapter_detection_confidence?: number;

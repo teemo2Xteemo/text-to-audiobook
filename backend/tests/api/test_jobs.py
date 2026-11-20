@@ -909,6 +909,8 @@ def test_analyze_endpoint(client: TestClient) -> None:
     data = res.json()
     assert data["encoding"] == "utf-8"
     assert data["chapters_count"] == 2
+    assert data["chapters_span_count"] == 2
+    assert "confidence" not in data["chapters_preview"][0]
     assert "duration_estimate_seconds" in data
     assert "process_time_estimate_seconds" in data
     assert "preview_lines" in data

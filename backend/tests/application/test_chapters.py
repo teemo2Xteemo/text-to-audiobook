@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -517,6 +518,84 @@ def test_vietnamese_all_caps_headings_are_chapters() -> None:
         "CHƯƠNG 2: CHÚNG TA LÊN ĐƯỜNG",
     ]
     assert [chapter.chapter_number for chapter in chapters] == [1, 2]
+
+
+def _numbered_story(numbers: list[int], *, prefix: str = "Chương", title: str = "Đoạn") -> str:
+    parts: list[str] = []
+    for number in numbers:
+        parts.append(f"{prefix} {number}: {title} {number}")
+        parts.append(f"Nội dung của mục {number}.")
+        parts.append("")
+    return "\n".join(parts)
+
+
+def test_forward_numbering_typo_does_not_swallow_later_chapters() -> None:
+    # 30 is a typo where 3 was meant. Chapters 4..10 must still split.
+    numbers = [1, 2, 30, *range(4, 11)]
+    chapters = [
+        chapter
+        for chapter in split_chapters(_numbered_story(numbers))
+        if chapter.kind is ChapterKind.CHAPTER
+    ]
+    kept = [chapter.chapter_number for chapter in chapters]
+    assert kept == [1, 2, *range(4, 11)]
+    assert 30 not in kept
+
+
+def test_real_forward_gap_is_kept_when_the_new_run_continues() -> None:
+    chapters = split_chapters(_numbered_story([1, 2, 20, 21, 22]))
+    assert [chapter.chapter_number for chapter in chapters] == [1, 2, 20, 21, 22]
+
+
+def test_backward_stray_inside_a_late_chapter_is_dropped() -> None:
+    numbers = [*range(1, 58), 3, *range(58, 61)]
+    chapters = split_chapters(_numbered_story(numbers))
+    kept = [chapter.chapter_number for chapter in chapters]
+    assert kept == [*range(1, 58), *range(58, 61)]
+    assert kept.count(3) == 1
+
+
+def test_backward_typo_does_not_hide_the_following_chapters() -> None:
+    text = _numbered_story([1, 2, 3, 2, 4, 5])
+    chapters = split_chapters(text)
+    kept = [chapter.chapter_number for chapter in chapters]
+    assert kept[:3] == [1, 2, 3]
+    assert 4 in kept and 5 in kept
+    assert kept[-2:] == [4, 5]
+
+
+def test_duplicate_chapter_numbers_are_both_kept() -> None:
+    chapters = split_chapters(_numbered_story([1, 2, 2, 3]))
+    assert [chapter.chapter_number for chapter in chapters] == [1, 2, 2, 3]
+
+
+def test_second_book_without_a_volume_line_restarts_and_is_uncertain() -> None:
+    text = _numbered_story([1, 2, 3, 4, 5, 1, 2, 3, 4, 5])
+    detail = split_chapters_detailed(text)
+    assert [chapter.chapter_number for chapter in detail.chapters] == [1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
+    assert detail.uncertain is True
+
+
+def test_positional_chinese_numerals_without_unit_marks() -> None:
+    samples = [
+        ("第一零五章\n正文", 105),
+        ("第二〇二四章\n正文", 2024),
+        ("第一百零五章\n正文", 105),
+    ]
+    for text, number in samples:
+        assert split_chapters(text)[0].chapter_number == number
+
+
+def test_split_five_thousand_chapters_stays_under_a_second() -> None:
+    lines: list[str] = []
+    for number in range(1, 5001):
+        lines.append(f"第{number}章 标题")
+        lines.append("正文一行。")
+    started = time.perf_counter()
+    chapters = split_chapters("\n".join(lines))
+    elapsed = time.perf_counter() - started
+    assert elapsed < 1.0
+    assert sum(1 for chapter in chapters if chapter.kind is ChapterKind.CHAPTER) == 5000
 
 
 def test_printed_numbers_cover_han_fullwidth_and_roman() -> None:

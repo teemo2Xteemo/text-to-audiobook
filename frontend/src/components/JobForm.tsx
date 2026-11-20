@@ -1165,7 +1165,10 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
                       </ol>
                       {analysis.chapters_preview.length > CHAPTER_PREVIEW_LIMIT ||
                       analysis.chapters_preview_truncated ? (
-                        <p className="chapter-preview-more">Showing the first 50 detected sections.</p>
+                        <p className="chapter-preview-more">
+                          Showing the first {Math.min(CHAPTER_PREVIEW_LIMIT, analysis.chapters_preview.length)} of{" "}
+                          {analysis.chapters_span_count ?? analysis.chapters_preview.length} detected sections.
+                        </p>
                       ) : null}
                     </div>
                   ) : null}
