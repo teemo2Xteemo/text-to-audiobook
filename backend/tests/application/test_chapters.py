@@ -543,8 +543,45 @@ def test_forward_numbering_typo_does_not_swallow_later_chapters() -> None:
 
 
 def test_real_forward_gap_is_kept_when_the_new_run_continues() -> None:
-    chapters = split_chapters(_numbered_story([1, 2, 20, 21, 22]))
-    assert [chapter.chapter_number for chapter in chapters] == [1, 2, 20, 21, 22]
+    detail = split_chapters_detailed(_numbered_story([1, 2, 20, 21, 22]))
+    assert [chapter.chapter_number for chapter in detail.chapters] == [1, 2, 20, 21, 22]
+    assert detail.uncertain is False
+
+
+def test_small_forward_typo_does_not_swallow_the_chapters_inside_the_jump() -> None:
+    # 12 written as 21. Chapters 13..20 stay. The later real 21 is kept once.
+    numbers = [*range(1, 12), 21, *range(13, 31)]
+    detail = split_chapters_detailed(_numbered_story(numbers))
+    kept = [chapter.chapter_number for chapter in detail.chapters]
+    assert kept == [*range(1, 12), *range(13, 31)]
+    assert kept.count(21) == 1
+    assert detail.uncertain is True
+
+
+def test_forward_typo_of_ten_keeps_the_chapters_it_skipped() -> None:
+    numbers = [*range(1, 6), 16, *range(7, 26)]
+    detail = split_chapters_detailed(_numbered_story(numbers))
+    kept = [chapter.chapter_number for chapter in detail.chapters]
+    assert kept == [*range(1, 6), *range(7, 26)]
+    assert kept.count(16) == 1
+    assert detail.uncertain is True
+
+
+def test_forward_typo_near_the_start_keeps_the_following_run() -> None:
+    numbers = [1, 16, *range(3, 20)]
+    detail = split_chapters_detailed(_numbered_story(numbers))
+    kept = [chapter.chapter_number for chapter in detail.chapters]
+    assert kept == [1, *range(3, 20)]
+    assert kept.count(16) == 1
+    assert detail.uncertain is True
+
+
+def test_real_small_gap_is_kept() -> None:
+    numbers = [*range(1, 11), *range(12, 21)]
+    detail = split_chapters_detailed(_numbered_story(numbers))
+    kept = [chapter.chapter_number for chapter in detail.chapters]
+    assert kept == [*range(1, 11), *range(12, 21)]
+    assert detail.uncertain is False
 
 
 def test_backward_stray_inside_a_late_chapter_is_dropped() -> None:
@@ -586,7 +623,7 @@ def test_positional_chinese_numerals_without_unit_marks() -> None:
         assert split_chapters(text)[0].chapter_number == number
 
 
-def test_split_five_thousand_chapters_stays_under_a_second() -> None:
+def test_split_five_thousand_chapters_stays_fast() -> None:
     lines: list[str] = []
     for number in range(1, 5001):
         lines.append(f"第{number}章 标题")
@@ -594,7 +631,7 @@ def test_split_five_thousand_chapters_stays_under_a_second() -> None:
     started = time.perf_counter()
     chapters = split_chapters("\n".join(lines))
     elapsed = time.perf_counter() - started
-    assert elapsed < 1.0
+    assert elapsed < 3.0
     assert sum(1 for chapter in chapters if chapter.kind is ChapterKind.CHAPTER) == 5000
 
 

@@ -6,11 +6,12 @@ Detection is two steps:
    small pronoun tie-breaker. This is what :func:`is_chapter_heading` reports.
 2. A document pass inside :func:`split_chapters`: drop a heading that uses a
    rare pattern, that is as long as a hard-wrapped prose line, or that is a
-   numbering outlier. A forward typo (``1, 2, 30, 4 … 10``) is dropped and
-   does not hide the chapters that continue ``2``. A backward stray
-   (``… 57, 3, 58 …``) is dropped. A second run that restarts at 1 after a
-   finished book is kept and marked uncertain. Weak evidence lowers
-   ``detection_confidence``.
+   numbering outlier. A forward typo is dropped when a later heading sits
+   between the previous number and the jump (``1 … 11, 21, 13 …`` and
+   ``1, 2, 30, 4 …``), and that split is marked uncertain. A real gap whose
+   following headings continue from the new number (``10, 12, 13``) is kept.
+   A backward stray (``… 57, 3, 58 …``) is dropped. A second run that
+   restarts at 1 after a finished book is kept and marked uncertain.
 
 There is no narrative-verb list. Kinship words (``anh/cô/ông/bà/lão/chị/cậu/y``)
 count as pronouns only when the next word is ``ấy/ta/kia/này/nọ/mình``.
@@ -71,10 +72,10 @@ __all__ = [
 _SOFT_MAX_HEADING_LEN = 100
 _UNCERTAIN_BELOW = 0.8
 _GLUED_ZHANG_MAX = 35
-# A later heading within this many counts of the previous one still belongs
-# to the same run. A larger jump is an outlier when the old run resumes.
-_FORWARD_TOLERANCE = 15
-_SEQUENCE_LOOKAHEAD = 6
+# How many later chapter headings to inspect when a number skips ahead.
+# The skip is a typo when one of them falls strictly between the previous
+# number and the skip. A real gap (10 then 12, 13) has no such heading.
+_SEQUENCE_LOOKAHEAD = 15
 _NEW_BOOK_MIN_PREVIOUS = 4
 
 _DELIMS = set(":：、.·-_/\u2013\u2014「」『』【】《》〈〉()（）[]\"'")
@@ -473,13 +474,19 @@ def _following_chapter_numbers(pool: list[_Candidate], index: int, limit: int) -
     return found
 
 
-def _prior_run_resumes(pool: list[_Candidate], index: int, last: int) -> bool:
-    """True when a soon-following heading continues ``last``, so this jump is a typo."""
+def _jump_is_typo(pool: list[_Candidate], index: int, last: int) -> bool:
+    """True when a later heading sits strictly between ``last`` and this jump.
+
+    ``11, 21, 13`` is a typo: 13 is between 11 and 21. ``10, 12, 13`` is a
+    real gap: nothing is strictly between 10 and 12, and 13 continues from 12.
+    """
     jump = pool[index].number
+    if jump is None:
+        return False
     for number in _following_chapter_numbers(pool, index, _SEQUENCE_LOOKAHEAD):
-        if last < number <= last + _FORWARD_TOLERANCE:
+        if last < number < jump:
             return True
-        if jump is not None and jump < number <= jump + _FORWARD_TOLERANCE:
+        if number > jump:
             return False
     return False
 
@@ -511,13 +518,18 @@ def _drop_pattern_outliers(pool: list[_Candidate]) -> tuple[list[_Candidate], fl
     return kept, share
 
 
-def _filter_sequence(pool: list[_Candidate]) -> tuple[list[_Candidate], bool]:
-    """Keep the numbering run. One forward typo must not hide every later chapter."""
+def _filter_sequence(pool: list[_Candidate]) -> tuple[list[_Candidate], bool, bool]:
+    """Keep the numbering run. One forward typo must not hide every later chapter.
+
+    The third value is true when a forward jump was dropped because the old
+    run resumes inside it. That split is uncertain.
+    """
     kept: list[_Candidate] = []
     last: int | None = None
     last_volume: int | None = None
     volume_break = False
     implicit_restart = False
+    numbering_typo = False
     for index, item in enumerate(pool):
         if item.role == "volume":
             if item.number is not None and last_volume is not None and item.number <= last_volume:
@@ -534,13 +546,14 @@ def _filter_sequence(pool: list[_Candidate]) -> tuple[list[_Candidate], bool]:
                 last = number
             volume_break = False
             continue
-        if number >= last and number - last <= _FORWARD_TOLERANCE:
+        if number == last or number == last + 1:
             kept.append(item)
             last = number
             continue
-        if number > last and _prior_run_resumes(pool, index, last):
-            continue
-        if number > last:
+        if number > last + 1:
+            if _jump_is_typo(pool, index, last):
+                numbering_typo = True
+                continue
             kept.append(item)
             last = number
             continue
@@ -551,7 +564,7 @@ def _filter_sequence(pool: list[_Candidate]) -> tuple[list[_Candidate], bool]:
             continue
     if not kept and pool:
         kept = [pool[0]]
-    return kept, implicit_restart
+    return kept, implicit_restart, numbering_typo
 
 
 def _filter_candidates(
@@ -568,12 +581,13 @@ def _filter_candidates(
     if not pool:
         pool = list(candidates)
     pool, dominant_share = _drop_pattern_outliers(pool)
-    kept, implicit_restart = _filter_sequence(pool)
+    kept, implicit_restart, numbering_typo = _filter_sequence(pool)
     confidence = _multi_confidence(
         raw_count=len(candidates),
         kept=kept,
         dominant_share=dominant_share,
         implicit_restart=implicit_restart,
+        numbering_typo=numbering_typo,
     )
     return kept, confidence
 
@@ -612,6 +626,7 @@ def _multi_confidence(
     kept: list[_Candidate],
     dominant_share: float,
     implicit_restart: bool,
+    numbering_typo: bool,
 ) -> float:
     if raw_count == 0:
         return 1.0
@@ -628,7 +643,7 @@ def _multi_confidence(
         score -= 0.28
     if _sequence_health(kept) < 0.8:
         score -= 0.18
-    if implicit_restart:
+    if implicit_restart or numbering_typo:
         score = min(score, 0.62)
     return max(0.35, min(0.99, score))
 

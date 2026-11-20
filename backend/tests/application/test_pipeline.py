@@ -1262,6 +1262,20 @@ def test_narrate_job_resumes_from_checkpoints_after_failure(tmp_path: Path) -> N
     assert (workspace / "output.mp3").is_file()
 
 
+def test_corrupt_narrate_plan_is_ignored_and_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from app.application.pipeline.narrate_plan import load_narrate_plan
+
+    assert load_narrate_plan(tmp_path) is None
+    plan = tmp_path / "chunks" / "narrate-plan.json"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("{", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        assert load_narrate_plan(tmp_path) is None
+    assert any(record.message == "narrate_plan_unreadable" for record in caplog.records)
+
+
 def test_narrate_resume_reuses_saved_plan_when_detection_would_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
