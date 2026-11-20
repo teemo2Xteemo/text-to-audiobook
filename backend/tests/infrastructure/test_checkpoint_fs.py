@@ -29,7 +29,7 @@ def test_checkpoint_roundtrip(tmp_path: Path) -> None:
         }
     ]
     assert (workspace / CHECKPOINT_JSONL_FILENAME).is_file()
-    assert not (workspace / CHECKPOINT_FILENAME).is_file()
+    assert json.loads((workspace / CHECKPOINT_FILENAME).read_text(encoding="utf-8")) == loaded
     assert fs.resolve(relative) == artifact.resolve()
 
 

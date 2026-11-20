@@ -24,12 +24,13 @@ class CheckpointFilesystem:
         self._file = workspace / CHECKPOINT_FILENAME
         self._jsonl = workspace / CHECKPOINT_JSONL_FILENAME
 
-    def load_raw(self) -> list[Any]:
+    def load_raw(self, *, migrate: bool = True) -> list[Any]:
         if self._jsonl.is_file():
             return self._read_jsonl(self._jsonl)
         if self._file.is_file():
             entries = self._read_legacy(self._file)
-            self._write_jsonl_atomic(entries)
+            if migrate:
+                self._write_jsonl_atomic(entries)
             return entries
         return []
 
@@ -44,10 +45,15 @@ class CheckpointFilesystem:
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to write checkpoint") from exc
 
     def save_raw(self, entries: list[dict[str, str]]) -> None:
+        """Rewrite the JSONL log and refresh ``checkpoint.json`` for rollback.
+
+        The legacy file is the last compact snapshot. A previous build reads it.
+        Appends since this compact stay in the JSONL until the next rewrite.
+        """
         try:
             self._workspace.mkdir(parents=True, exist_ok=True)
             self._write_jsonl_atomic(entries)
-            self._file.unlink(missing_ok=True)
+            self._write_legacy_atomic(entries)
         except OSError as exc:
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to write checkpoint") from exc
 
@@ -110,6 +116,16 @@ class CheckpointFilesystem:
         if invalid and not entries:
             raise DomainError(ErrorType.STORAGE_FAILED, "failed to read checkpoint")
         return entries
+
+    def _write_legacy_atomic(self, entries: list[Any]) -> None:
+        payload = json.dumps(entries, ensure_ascii=False, indent=2)
+        tmp = self._file.with_name(f".{CHECKPOINT_FILENAME}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(self._file)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def _write_jsonl_atomic(self, entries: list[Any]) -> None:
         lines = [json.dumps(entry, ensure_ascii=False, separators=(",", ":")) for entry in entries]

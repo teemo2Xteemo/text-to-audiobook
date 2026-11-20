@@ -616,7 +616,11 @@ class PipelineOrchestrator:
             await self._normalize_pending(job, pending, workspace) if job.normalize_text else {}
         )
         for chunk in pending:
-            if self._budget_exhausted():
+            if job.normalize_text and chunk.id not in spoken_by_id:
+                # In-flight normalizations already finished and are narrated below.
+                # Do not start another LLM call once the budget is spent.
+                raise _BudgetYield(job)
+            if not job.normalize_text and self._budget_exhausted():
                 raise _BudgetYield(job)
             self._active_chunk_id = chunk.id
             source = workspace / "chunks" / f"{chunk.id}.translated.txt"
@@ -644,44 +648,58 @@ class PipelineOrchestrator:
     async def _normalize_pending(
         self, job: Job, chunks: list[Chunk], workspace: Path
     ) -> dict[str, str]:
-        """Normalize chunks with bounded concurrency; narration itself stays sequential."""
+        """Normalize chunks with bounded concurrency; narration itself stays sequential.
+
+        Workers stop taking new chunks once the run budget is spent. Tasks already
+        started are allowed to finish so their output can be checkpointed.
+        """
+        if not chunks:
+            return {}
         limit = min(
             self._translation_concurrency,
             getattr(self._text_normalizer, "max_concurrency", self._translation_concurrency),
         )
-        semaphore = asyncio.Semaphore(max(1, limit))
         spoken_by_id: dict[str, str] = {}
+        lock = asyncio.Lock()
+        queue: asyncio.Queue[Chunk] = asyncio.Queue()
+        for chunk in chunks:
+            queue.put_nowait(chunk)
 
         async def _one(chunk: Chunk) -> None:
-            async with semaphore:
-                source = workspace / "chunks" / f"{chunk.id}.translated.txt"
-                text = source.read_text(encoding="utf-8")
+            source = workspace / "chunks" / f"{chunk.id}.translated.txt"
+            text = source.read_text(encoding="utf-8")
+            try:
+                spoken = await self._normalize_for_speech(job, chunk, text, workspace)
+                async with lock:
+                    spoken_by_id[chunk.id] = spoken
+                    done = len(spoken_by_id)
+                logger.info(
+                    "pipeline_chunk_normalized",
+                    extra={
+                        "job_id": job.id,
+                        "chunk_id": chunk.id,
+                        "done": done,
+                        "total": len(chunks),
+                    },
+                )
+            except Exception:
+                if self._active_chunk_id is None:
+                    self._active_chunk_id = chunk.id
+                raise
+
+        async def _worker() -> None:
+            while True:
+                if self._budget_exhausted():
+                    return
                 try:
-                    spoken_by_id[chunk.id] = await self._normalize_for_speech(
-                        job, chunk, text, workspace
-                    )
-                    logger.info(
-                        "pipeline_chunk_normalized",
-                        extra={
-                            "job_id": job.id,
-                            "chunk_id": chunk.id,
-                            "done": len(spoken_by_id),
-                            "total": len(chunks),
-                        },
-                    )
-                except Exception:
-                    if self._active_chunk_id is None:
-                        self._active_chunk_id = chunk.id
-                    raise
+                    chunk = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                await _one(chunk)
 
         self._active_chunk_id = None
-        tasks: list[asyncio.Task[None]] = []
-        for chunk in chunks:
-            if self._budget_exhausted():
-                break
-            tasks.append(asyncio.create_task(_one(chunk)))
-        if not tasks:
-            return spoken_by_id
+        worker_count = min(max(limit, 1), queue.qsize())
+        tasks = [asyncio.create_task(_worker()) for _ in range(worker_count)]
         try:
             await asyncio.gather(*tasks)
         except BaseException:
@@ -1028,11 +1046,16 @@ class PipelineOrchestrator:
         return self._deadline - time.monotonic()
 
     def _defer_heavy_step(self, input_count: int) -> bool:
-        """Yield before merge when this run has used its budget and a fresh run has more time.
+        """Yield before merge only after this run recorded new checkpoints.
 
-        A brand-new run still starts the merge when the estimate is larger than the
-        whole budget. Otherwise a book whose concat exceeds one budget would stall.
+        Setup (parse, chunk, checkpoint stats) on a large book can consume the
+        small tail of a fresh run. Deferring then, with no new checkpoint, makes
+        every later run look stalled and the job fails before concat. A run that
+        did not record anything always starts the merge.
         """
+        checkpoints = self._checkpoints
+        if checkpoints is None or checkpoints.entry_count() <= self._run_baseline:
+            return False
         remaining = self._remaining_budget()
         window = self._budget_window
         if remaining is None or window is None or window <= 0:

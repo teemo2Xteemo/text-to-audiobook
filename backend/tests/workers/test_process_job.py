@@ -793,7 +793,7 @@ def test_process_job_narrate_retry_resumes_unfinished_chunks_only(
 
     monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
     monkeypatch.setattr("app.workers.runner.build_orchestrator", _build)
-    monkeypatch.setattr(RQJobQueue, "_enqueue_sync", lambda self, job_id: None)
+    monkeypatch.setattr(RQJobQueue, "_enqueue_sync", lambda self, job_id, *args: None)
 
     process_job(job.id)
     failed = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job.id))
@@ -937,3 +937,131 @@ def test_rq_budget_continues_until_completed_without_retry(
     assert done.run_count > 1
     assert done.chunk_current == done.chunk_total
     assert (tmp_path / "jobs" / job.id / "output.mp3").is_file()
+
+
+def test_continuation_survives_expiry_of_the_finished_rq_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The yielding run's result TTL must not delete the continuation queued under a new id."""
+    import time
+
+    import fakeredis
+    from rq import Queue, SimpleWorker
+
+    from app.application.jobs import JobService
+    from app.domain.audio import AudioArtifact, TTSSettings, Voice
+    from app.infrastructure.job_store import DualWriteJobStore
+    from app.infrastructure.rq_queue import RQ_QUEUE_NAME, RQJobQueue, rq_process_job_id
+
+    class _Clock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    class _SlowTTS(FakeTTSProvider):
+        def __init__(self, clock: _Clock, voices: list[Voice], output_dir: Path) -> None:
+            super().__init__(voices, output_dir)
+            self._clock = clock
+
+        async def synthesize(
+            self, text: str, language: str, voice: str, settings: TTSSettings
+        ) -> AudioArtifact:
+            self._clock.now += 10
+            return await super().synthesize(text, language, voice, settings)
+
+    class _FsStore:
+        def __init__(self, filesystem: FilesystemJobStorage) -> None:
+            self._filesystem = filesystem
+
+        async def save(self, job: Job) -> None:
+            await self._filesystem.save_job(job)
+
+        async def get(self, job_id: str) -> Job | None:
+            return await self._filesystem.get_job(job_id)
+
+        async def delete(self, job_id: str) -> None:
+            await self._filesystem.delete_job(job_id)
+
+        async def list_ids(self) -> list[str]:
+            return list(await self._filesystem.list_job_ids())
+
+    clock = _Clock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    job = Job(
+        id="77777777-7777-7777-7777-777777777777",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="ja-JP",
+        voice="fake-ja-JP-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+    )
+    text = " ".join(f"Sentence {index} is here." for index in range(3))
+    _persist_job(tmp_path, job, text)
+    filesystem = FilesystemJobStorage(tmp_path)
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        job_run_budget_seconds=5,
+        rq_job_timeout_seconds=1800,
+    )
+    voices = [Voice(id="fake-ja-JP-a", language="ja-JP", label="Japanese A")]
+    tts = _SlowTTS(clock, voices, tmp_path / "tts")
+    orchestrator = PipelineOrchestrator(
+        translation=FakeTranslationProvider(["en-US", "ja-JP"]),
+        tts=tts,
+        narration=PassthroughNarrationProcessor(),
+        detector=FixedLanguageDetector("en-US"),
+        audio=FakeAudioProcessor(),
+        jobs=_FsStore(filesystem),
+        checkpoint_storage_factory=CheckpointFilesystem,
+        max_chars=22,
+        tts_concurrency=1,
+    )
+    connection = fakeredis.FakeStrictRedis()
+    queue = Queue(RQ_QUEUE_NAME, connection=connection)
+    rq_queue = RQJobQueue(queue, job_timeout=3600, result_ttl=1)
+    service = JobService(
+        jobs=DualWriteJobStore(filesystem, _FsStore(filesystem)),
+        source_storage=filesystem,
+        queue=rq_queue,
+        output_bitrate_kbps=128,
+        storage_path=tmp_path,
+        disk_jobs=filesystem,
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
+    monkeypatch.setattr("app.workers.rq_continue.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.rq_continue.build_job_service", lambda _s: service)
+
+    asyncio.run(rq_queue.enqueue(job.id, run_count=0))
+    worker = SimpleWorker([queue], connection=connection)
+    assert worker.work(burst=True, max_jobs=1, logging_level="ERROR")
+    yielded = asyncio.run(filesystem.get_job(job.id))
+    assert yielded is not None
+    assert yielded.status is not JobStatus.COMPLETED
+    assert yielded.run_count == 1
+    continuation_id = rq_process_job_id(job.id, 1)
+    assert continuation_id != rq_process_job_id(job.id, 0)
+    time.sleep(1.5)
+    continuation = queue.fetch_job(continuation_id)
+    assert continuation is not None
+    assert continuation.get_status() == "queued"
+    calls_after_yield = len(tts.calls)
+
+    for _ in range(8):
+        current = asyncio.run(filesystem.get_job(job.id))
+        assert current is not None
+        if current.status is JobStatus.COMPLETED:
+            break
+        assert current.status is not JobStatus.FAILED
+        worker.work(burst=True, max_jobs=1, logging_level="ERROR")
+    done = asyncio.run(filesystem.get_job(job.id))
+    assert done is not None
+    assert done.status is JobStatus.COMPLETED, done.message
+    assert done.run_count > 1
+    assert len(tts.calls) > calls_after_yield
+    assert len({call[0] for call in tts.calls}) == len(tts.calls)

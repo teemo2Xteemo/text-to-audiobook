@@ -2042,6 +2042,86 @@ async def _now() -> float:
     return time.monotonic()
 
 
+def test_fresh_run_merges_when_setup_uses_the_budget_but_adds_no_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    text = " ".join(f"Sentence {index} is here." for index in range(60))
+    chunks = chunk_text(text, max_chars=22)
+    assert len(chunks) >= 48
+    job = _job(status=JobStatus.GENERATING_AUDIO, chunk_total=len(chunks))
+
+    class _SlowSetup(FakeLanguageDetector):
+        async def detect(self, sample: str) -> object:
+            clock.now += 20
+            return await super().detect(sample)
+
+    orchestrator, workspace, _, _, _, _, audio, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        detector=_SlowSetup(),  # type: ignore[arg-type]
+        max_chars=22,
+    )
+    _seed_completed_chunks(workspace, chunks, len(chunks))
+    result = _run(orchestrator, job, workspace, text=text, deadline=100)
+    assert result.status is JobStatus.COMPLETED
+    assert result.continue_requested is False
+    assert audio.merge_calls
+
+
+class _ClockNormalizer:
+    def __init__(self, clock: _Clock) -> None:
+        self._clock = clock
+        self.calls: list[str] = []
+
+    async def normalize(self, text: str, language: str) -> str:
+        del language
+        await asyncio.sleep(0)
+        self._clock.now += 1
+        self.calls.append(text)
+        return text
+
+
+def test_normalization_stops_at_the_budget_and_checkpoints_finished_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    text = " ".join(f"Sentence {index} is here." for index in range(4))
+    chunks = chunk_text(text, max_chars=22)
+    assert len(chunks) >= 3
+    job = _job(
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+        normalize_text=True,
+    )
+    normalizer = _ClockNormalizer(clock)
+    orchestrator, workspace, _, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        text_normalizer=normalizer,
+        max_chars=22,
+    )
+    first = _run(orchestrator, job, workspace, text=text, deadline=0.5)
+    assert first.status is JobStatus.PREPARING_TTS
+    assert first.continue_requested is True
+    assert len(normalizer.calls) == 1
+    done = normalizer.calls[0]
+    narrated = workspace / "chunks" / f"{chunks[0].id}.narrated.txt"
+    assert narrated.is_file()
+
+    clock.now = 0
+    second = _run(orchestrator, first, workspace, text=text, deadline=100)
+    assert second.status is JobStatus.COMPLETED
+    assert done not in normalizer.calls[1:]
+    assert len(normalizer.calls) == len(chunks)
+
+
 def test_expiring_deadline_finishes_in_flight_tts_and_starts_no_more(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

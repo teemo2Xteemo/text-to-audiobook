@@ -56,7 +56,7 @@ def _progress_marker_reader(settings: Settings):
 
         workspace = settings.storage_path / "jobs" / job_id
         try:
-            raw = CheckpointFilesystem(workspace).load_raw()
+            raw = CheckpointFilesystem(workspace).load_raw(migrate=False)
         except DomainError:
             return 0
         keys: set[tuple[str, str]] = set()

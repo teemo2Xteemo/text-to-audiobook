@@ -208,6 +208,10 @@ def test_queued_rq_entry_is_not_duplicated_when_continuation_is_requested_twice(
         def fetch_job(self, rq_job_id: str) -> _Existing | None:
             return self.existing.get(rq_job_id)
 
+        @property
+        def job_ids(self) -> list[str]:
+            return list(self.existing)
+
         def enqueue(self, *args: object, **kwargs: object) -> None:
             del args
             self.calls += 1

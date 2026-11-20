@@ -89,14 +89,18 @@ class CheckpointStore:
         return len(self._index_of())
 
     def compact(self) -> None:
-        """Rewrite one line per chunk-stage when the log has duplicates or a legacy file."""
+        """Rewrite one line per chunk-stage, and mirror that snapshot to ``checkpoint.json``.
+
+        The mirror is how a rollback to a build that only reads ``checkpoint.json``
+        keeps already finished chunks. It is refreshed when the log has duplicate
+        lines or the mirror is missing, not on every append.
+        """
         index = self._index_of()
         legacy = getattr(self._fs, "has_legacy", None)
         lines = getattr(self._fs, "line_count", None)
-        needs = bool(callable(legacy) and legacy())
-        if callable(lines) and lines() != len(index):
-            needs = True
-        if not needs:
+        duplicate_log = callable(lines) and lines() != len(index)
+        missing_mirror = callable(legacy) and not legacy() and bool(index)
+        if not duplicate_log and not missing_mirror:
             return
         self._fs.save_raw([item.to_dict() for item in index.values()])
 

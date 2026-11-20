@@ -52,7 +52,14 @@ def test_compact_rewrites_duplicates_and_drops_legacy_json(tmp_path: Path) -> No
     assert store.entry_count() == 1
     assert store.load()[0].artifact_path == "chunks/one.txt"
     store.compact()
-    assert not (workspace / CHECKPOINT_FILENAME).is_file()
+    mirrored = json.loads((workspace / CHECKPOINT_FILENAME).read_text(encoding="utf-8"))
+    assert mirrored == [
+        {
+            "artifact_path": "chunks/one.txt",
+            "chunk_id": "chunk-001",
+            "stage": STAGE_TRANSLATED,
+        }
+    ]
     lines = [
         line
         for line in (workspace / CHECKPOINT_JSONL_FILENAME).read_text(encoding="utf-8").splitlines()

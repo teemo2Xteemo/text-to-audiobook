@@ -113,13 +113,11 @@ def test_timeout_with_checkpoint_progress_reenqueues(
     )
     monkeypatch.setattr("app.workers.rq_failure.build_job_service", lambda settings: service)
 
-    handle_rq_failure(
-        SimpleNamespace(args=(job_id,)),
-        None,
-        JobTimeoutException,
-        JobTimeoutException("Task exceeded maximum timeout value (180 seconds)"),
-        None,
-    )
+    rq_job = SimpleNamespace(id=f"process-{job_id}-r0", args=(job_id,))
+    timeout = JobTimeoutException("Task exceeded maximum timeout value (180 seconds)")
+    # RQ calls on_failure, then the worker exception handler, for one timeout.
+    handle_rq_failure(rq_job, None, JobTimeoutException, timeout, None)
+    handle_worker_exception(rq_job, JobTimeoutException, timeout, None)
 
     continued = asyncio.run(FilesystemJobStorage(tmp_path).get_job(job_id))
     assert continued is not None

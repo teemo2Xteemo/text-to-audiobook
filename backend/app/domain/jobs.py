@@ -142,6 +142,8 @@ class Job:
     progress_marker: int = 0
     run_baseline_marker: int = 0
     continue_requested: bool = False
+    # RQ job id already handled for a hard timeout, so the second failure hook no-ops.
+    handled_rq_id: str | None = None
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
@@ -203,6 +205,8 @@ class Job:
             payload["run_baseline_marker"] = self.run_baseline_marker
         if self.continue_requested:
             payload["continue_requested"] = True
+        if self.handled_rq_id:
+            payload["handled_rq_id"] = self.handled_rq_id
         if self.srt_timing is not SrtTiming.CONTINUOUS:
             payload["srt_timing"] = self.srt_timing.value
         if self.normalize_text:
@@ -247,6 +251,7 @@ class Job:
             progress_marker=int(data.get("progress_marker", 0)),
             run_baseline_marker=int(data.get("run_baseline_marker", 0)),
             continue_requested=data.get("continue_requested") is True,
+            handled_rq_id=_optional_pin_value(data, "handled_rq_id"),
             mode=mode,
             srt_timing=srt_timing,
             normalize_text=data.get("normalize_text") is True,
