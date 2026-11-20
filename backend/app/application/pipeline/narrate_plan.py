@@ -11,7 +11,9 @@ import logging
 import re
 from pathlib import Path
 
-from app.domain.chunking import Chunk
+from app.application.pipeline.chapters import ChapterChunkSpan, plan_chapter_chunks, split_chapters
+from app.application.pipeline.parse import prepare_narration_text, strip_srt
+from app.domain.chunking import CHUNK_MAX_CHARS, Chunk
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,19 @@ _CHUNK_ID = re.compile(r"^chunk-\d+$")
 
 def plan_path(workspace: Path) -> Path:
     return workspace / "chunks" / PLAN_FILENAME
+
+
+def prepared_narration_text(text: str) -> str:
+    """Text `_run_narrate` chunks: newline normalize, subtitle strip, then cleanup."""
+    normalized = strip_srt(text.replace("\r\n", "\n").replace("\r", "\n").strip())
+    return prepare_narration_text(normalized)
+
+
+def plan_narration_chunks(
+    text: str, *, max_chars: int = CHUNK_MAX_CHARS
+) -> tuple[list[Chunk], list[ChapterChunkSpan]]:
+    """Chunk narrate input. A saved plan, not a later call, is what resume uses."""
+    return plan_chapter_chunks(split_chapters(prepared_narration_text(text)), max_chars=max_chars)
 
 
 def save_narrate_plan(workspace: Path, chunks: list[Chunk]) -> None:

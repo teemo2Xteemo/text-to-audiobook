@@ -42,11 +42,21 @@ def test_chunks_do_not_cross_chapter_boundaries() -> None:
 
 
 def test_plain_text_and_srt_are_one_span() -> None:
+    from app.application.pipeline.parse import strip_srt
+
     plain, spans = plan_chapter_chunks(split_chapters("Just a short story."))
     assert len(spans) == 1
     assert spans[0].ordinal == 1
     assert spans[0].kind.value == "chapter"
     assert plain[0].text == "Just a short story."
+    srt = (
+        "1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n"
+        "2\n00:00:05,000 --> 00:00:06,000\nGoodbye now.\n"
+    )
+    spoken, srt_spans = plan_chapter_chunks(split_chapters(strip_srt(srt)))
+    assert len(srt_spans) == 1
+    assert "Hello there." in spoken[0].text
+    assert "-->" not in spoken[0].text
 
 
 def test_chapter_file_exists_before_the_job_finishes(tmp_path: Path) -> None:
@@ -501,6 +511,185 @@ def test_disk_error_during_assembly_stays_storage_failed(
     assert manifest.chapters[1].error_type == ErrorType.STORAGE_FAILED.value
 
 
+def test_narrate_chapter_files_ready_before_the_book_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chapter files exist when the run yields before the book merge, and resume keeps them."""
+    from tests.application.test_pipeline import _Clock, _ClockTTS, _patch_clock
+
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    job = _job(
+        id="77777777-7777-7777-7777-777777777777",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    voices = _voices_for("en-US")
+    # Two syntheses move the clock by 6s inside a 10s budget. Merge wants ~5s, so this run yields.
+    tts = _ClockTTS(clock, voices, tmp_path / "tts-scratch", step=3)
+    orchestrator, workspace, translation, _, _, _, audio, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=voices,
+        tts=tts,
+        max_chars=500,
+    )
+    first = _run(orchestrator, job, workspace, text=_STORY, deadline=10)
+    assert first.status is JobStatus.GENERATING_AUDIO
+    assert first.continue_requested is True
+    assert translation.calls == []
+    assert not (workspace / "output.mp3").exists()
+    first_bytes = (workspace / "chapters" / "0001.mp3").read_bytes()
+    second_bytes = (workspace / "chapters" / "0002.mp3").read_bytes()
+    assert first_bytes and second_bytes
+    manifest = FilesystemChapterManifest(workspace).load()
+    assert manifest is not None
+    assert [chapter.status for chapter in manifest.chapters] == [
+        ChapterStatus.READY,
+        ChapterStatus.READY,
+    ]
+    merges_one = len(_chapter_merges(audio.merge_calls, "chunk-001"))
+    merges_two = len(_chapter_merges(audio.merge_calls, "chunk-002"))
+    assert merges_one == 1
+    assert merges_two == 1
+
+    clock.now = 0
+    second = _run(orchestrator, first, workspace, text=_STORY, deadline=100)
+    assert second.status is JobStatus.COMPLETED
+    assert second.continue_requested is False
+    assert translation.calls == []
+    assert (workspace / "chapters" / "0001.mp3").read_bytes() == first_bytes
+    assert (workspace / "chapters" / "0002.mp3").read_bytes() == second_bytes
+    assert len(_chapter_merges(audio.merge_calls, "chunk-001")) == merges_one
+    assert len(_chapter_merges(audio.merge_calls, "chunk-002")) == merges_two
+    assert (workspace / "output.mp3").is_file()
+
+
+def test_narrate_yield_mid_chapter_does_not_publish_a_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.application.pipeline.chapters import plan_chapter_chunks, split_chapters
+    from app.application.pipeline.parse import prepare_narration_text
+    from tests.application.test_pipeline import _Clock, _ClockTTS, _patch_clock
+
+    text = (
+        "Chapter 1: Dawn\n\n"
+        "Alpha sentence is long enough. Bravo sentence is also long.\n\n"
+        "Chapter 2: Dusk\n\n"
+        "Night fell quickly."
+    )
+    chunks, spans = plan_chapter_chunks(split_chapters(prepare_narration_text(text)), max_chars=40)
+    assert len(spans) == 2
+    assert spans[0].chunk_last > spans[0].chunk_first
+    clock = _Clock()
+    _patch_clock(monkeypatch, clock)
+    job = _job(
+        id="88888888-8888-8888-8888-888888888888",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    voices = _voices_for("en-US")
+    tts = _ClockTTS(clock, voices, tmp_path / "tts-scratch", step=1)
+    orchestrator, workspace, translation, _, _, _, audio, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=voices,
+        tts=tts,
+        max_chars=40,
+    )
+    first = _run(orchestrator, job, workspace, text=text, deadline=0.5)
+    assert first.status is JobStatus.GENERATING_AUDIO
+    assert first.continue_requested is True
+    assert len(tts.calls) == 1
+    assert translation.calls == []
+    assert audio.merge_calls == []
+    assert not (workspace / "chapters" / "0001.mp3").exists()
+    assert not (workspace / "chapters" / "0002.mp3").exists()
+    manifest = FilesystemChapterManifest(workspace).load()
+    assert manifest is not None
+    assert all(chapter.status is ChapterStatus.PENDING for chapter in manifest.chapters)
+
+    clock.now = 0
+    second = _run(orchestrator, first, workspace, text=text, deadline=100)
+    assert second.status is JobStatus.COMPLETED
+    assert len(tts.calls) == len(chunks)
+    assert [call[0] for call in tts.calls].count(tts.calls[0][0]) == 1
+    # One merge per span, then one merge for the book. The partial chapter was not built early.
+    assert len(audio.merge_calls) == len(spans) + 1
+    assert (workspace / "chapters" / "0001.mp3").is_file()
+    assert (workspace / "chapters" / "0002.mp3").is_file()
+
+
+def test_unheaded_narrate_and_continuous_srt_stay_one_chapter(tmp_path: Path) -> None:
+    samples = {
+        "99999999-9999-9999-9999-999999999991": "Just a short story with no headings.",
+        "99999999-9999-9999-9999-999999999992": (
+            "1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n"
+            "2\n00:00:05,000 --> 00:00:06,000\nGoodbye now.\n"
+        ),
+    }
+    for job_id, text in samples.items():
+        job = _job(
+            id=job_id,
+            source_language="en-US",
+            target_language="en-US",
+            mode=JobMode.NARRATE,
+            voice="voice-en-US",
+        )
+        orchestrator, workspace, translation, _, _, _, _, _ = _orchestrator(
+            tmp_path,
+            job=job,
+            languages=["en-US"],
+            voices=_voices_for("en-US"),
+            max_chars=500,
+        )
+        result = _run(orchestrator, job, workspace, text=text)
+        assert result.status is JobStatus.COMPLETED
+        assert translation.calls == []
+        manifest = FilesystemChapterManifest(workspace).load()
+        assert manifest is not None and len(manifest.chapters) == 1
+        assert manifest.chapters[0].status is ChapterStatus.READY
+        assert (workspace / "chapters" / "0001.mp3").is_file()
+        assert not (workspace / "chapters" / "0002.mp3").exists()
+        assert (workspace / "output.mp3").is_file()
+
+
+def test_aligned_srt_narrate_has_no_chapter_files(tmp_path: Path) -> None:
+    from app.domain.jobs import SrtTiming
+
+    job = _job(
+        id="99999999-9999-9999-9999-999999999993",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+        srt_timing=SrtTiming.ALIGNED,
+    )
+    text = (
+        "1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n"
+        "2\n00:00:05,000 --> 00:00:06,000\nGoodbye now.\n"
+    )
+    orchestrator, workspace, translation, _, _, _, _, _ = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+    )
+    result = _run(orchestrator, job, workspace, text=text)
+    assert result.status is JobStatus.COMPLETED
+    assert translation.calls == []
+    assert not (workspace / "chapters.json").exists()
+    assert not (workspace / "chapters").exists()
+    assert (workspace / "output.mp3").is_file()
+    assert (workspace / "output.srt").is_file()
+
+
 def test_assembly_timeout_propagates_for_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -517,7 +706,7 @@ def test_assembly_timeout_propagates_for_resume(
 
     monkeypatch.setattr(chapter_assembly, "merge_artifacts", _merge)
     job = _job(
-        id="77777777-7777-7777-7777-777777777777",
+        id="17171717-1717-1717-1717-171717171717",
         source_language="en-US",
         target_language="en-US",
         mode=JobMode.NARRATE,

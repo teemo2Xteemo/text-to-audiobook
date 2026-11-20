@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from app.application.pipeline.checkpoint import CheckpointStore
 from app.application.pipeline.orchestrator import PipelineOrchestrator
 from app.application.pipeline.passthrough import (
     FixedLanguageDetector,
@@ -14,6 +15,7 @@ from app.application.pipeline.passthrough import (
 )
 from app.config.factory import build_job_service, build_orchestrator
 from app.config.settings import Settings
+from app.domain.chunking import Chunk
 from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
 from app.infrastructure.checkpoint_fs import CheckpointFilesystem
 from app.infrastructure.fake_audio import FakeAudioProcessor
@@ -231,6 +233,396 @@ def test_process_job_resumes_generating_audio(
     assert sum(1 for call in tts.calls if chunks[0].text in call[0]) == 0
     assert sum(1 for call in tts.calls if chunks[2].text in call[0]) == 1
     assert (tmp_path / "jobs" / job.id / "output.mp3").is_file()
+
+
+_NARRATE_CHAPTERS = "Chapter 1: Dawn\n\nThe sun rose.\n\nChapter 2: Dusk\n\nThe sun set."
+
+
+def _narrate_plan(text: str, max_chars: int) -> tuple[list[Chunk], list]:
+    """The split `_run_narrate` uses. Resume must load a saved plan instead."""
+    from app.application.pipeline.narrate_plan import plan_narration_chunks
+
+    chunks, spans = plan_narration_chunks(text, max_chars=max_chars)
+    return list(chunks), list(spans)
+
+
+def _save_narrate_plan(
+    workspace: Path, chunks: list[Chunk], spans: list, *, max_chars: int
+) -> None:
+    from app.application.pipeline.chapters import build_chapter_manifest
+    from app.application.pipeline.narrate_plan import save_narrate_plan
+    from app.infrastructure.chapter_manifest_fs import FilesystemChapterManifest
+
+    save_narrate_plan(workspace, chunks)
+    FilesystemChapterManifest(workspace).save(build_chapter_manifest(spans, max_chars=max_chars))
+
+
+def _seed_narrate_chunk(
+    workspace: Path,
+    checkpoints: CheckpointStore,
+    chunk: Chunk,
+    *,
+    narrated: str,
+) -> None:
+    from app.application.pipeline.checkpoint import STAGE_NARRATED, STAGE_TRANSLATED
+
+    # Pass-through stores the chunk text. A different file makes narrate drop the chunk.
+    translated_path = workspace / "chunks" / f"{chunk.id}.translated.txt"
+    translated_path.parent.mkdir(parents=True, exist_ok=True)
+    translated_path.write_text(chunk.text, encoding="utf-8")
+    checkpoints.record(chunk.id, STAGE_TRANSLATED, translated_path)
+    narrated_path = workspace / "chunks" / f"{chunk.id}.narrated.txt"
+    narrated_path.write_text(narrated, encoding="utf-8")
+    checkpoints.record(chunk.id, STAGE_NARRATED, narrated_path)
+
+
+def _seed_narrate_audio(workspace: Path, checkpoints: CheckpointStore, chunk: Chunk) -> None:
+    from app.application.pipeline.checkpoint import STAGE_NORMALIZED, STAGE_TTS
+
+    raw = workspace / "audio" / f"{chunk.id}.mp3"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_bytes(b"SEEDAUDIO")
+    checkpoints.record(chunk.id, STAGE_TTS, raw)
+    normalized = workspace / "audio" / f"{chunk.id}.normalized.mp3"
+    normalized.write_bytes(b"SEEDAUDIO")
+    checkpoints.record(chunk.id, STAGE_NORMALIZED, normalized)
+
+
+def _narrate_orchestrator(
+    tmp_path: Path,
+    store: InMemoryJobStore,
+    *,
+    max_chars: int,
+    translation: FakeTranslationProvider,
+    tts: FakeTTSProvider,
+) -> PipelineOrchestrator:
+    from app.application.pipeline.artifact_cache import CacheIdentity, PipelineArtifactCache
+    from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
+    from app.infrastructure.chapter_manifest_fs import FilesystemChapterManifest
+
+    return PipelineOrchestrator(
+        translation=translation,
+        tts=tts,
+        narration=PassthroughNarrationProcessor(),
+        detector=FixedLanguageDetector(),
+        audio=FakeAudioProcessor(),
+        jobs=store,
+        artifact_cache=PipelineArtifactCache(
+            FilesystemArtifactCache(tmp_path / "cache"),
+            CacheIdentity(
+                translation_provider="fake",
+                translation_model="fake",
+                tts_provider="fake",
+                tts_model="fake",
+            ),
+        ),
+        checkpoint_storage_factory=CheckpointFilesystem,
+        chapter_manifest_factory=FilesystemChapterManifest,
+        max_chars=max_chars,
+    )
+
+
+def test_process_job_resumes_generating_audio_narrate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A narrate job still GENERATING_AUDIO resumes without translation or a rebuilt chapter."""
+    from app.application.pipeline.checkpoint import STAGE_CHAPTER, CheckpointStore
+    from app.domain.chapters import chapter_checkpoint_id, chapter_disk_name
+
+    store = InMemoryJobStore()
+    job = Job(
+        id="77777777-7777-7777-7777-777777777777",
+        status=JobStatus.GENERATING_AUDIO,
+        source_language="en-US",
+        target_language="en-US",
+        voice="fake-en-US-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    chunks, spans = _narrate_plan(_NARRATE_CHAPTERS, max_chars=500)
+    assert len(spans) == 2
+    assert len(chunks) == 2
+    assert spans[0].chunk_first == spans[0].chunk_last == chunks[0].index
+    asyncio.run(store.save(job))
+    _persist_job(tmp_path, job, _NARRATE_CHAPTERS)
+
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    workspace = tmp_path / "jobs" / job.id
+    checkpoints = CheckpointStore(storage=CheckpointFilesystem(workspace))
+    _seed_narrate_chunk(workspace, checkpoints, chunks[0], narrated=chunks[0].text)
+    _seed_narrate_audio(workspace, checkpoints, chunks[0])
+    ready = workspace / chapter_disk_name(spans[0].ordinal, "mp3")
+    ready.parent.mkdir(parents=True, exist_ok=True)
+    ready.write_bytes(b"CHAPTER-ONE-READY")
+    checkpoints.record(chapter_checkpoint_id(spans[0].ordinal), STAGE_CHAPTER, ready)
+
+    translation = FakeTranslationProvider(["en-US"])
+    tts = FakeTTSProvider(output_dir=tmp_path / "tts")
+    orchestrator = _narrate_orchestrator(
+        tmp_path, store, max_chars=500, translation=translation, tts=tts
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
+
+    process_job(job.id)
+
+    done = asyncio.run(store.get(job.id))
+    assert done is not None
+    assert done.status is JobStatus.COMPLETED
+    assert translation.calls == []
+    assert not (tmp_path / "cache" / "translation").exists()
+    assert (tmp_path / "cache" / "tts").is_dir()
+    assert [call[0] for call in tts.calls] == [chunks[1].text]
+    assert ready.read_bytes() == b"CHAPTER-ONE-READY"
+    assert (workspace / chapter_disk_name(spans[1].ordinal, "mp3")).is_file()
+    assert (workspace / "output.mp3").is_file()
+
+
+def test_process_job_resumes_preparing_tts_narrate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A narrate job still PREPARING_TTS keeps finished narration and never translates."""
+    from app.application.pipeline.checkpoint import CheckpointStore
+
+    store = InMemoryJobStore()
+    job = Job(
+        id="88888888-8888-8888-8888-888888888888",
+        status=JobStatus.PREPARING_TTS,
+        source_language="en-US",
+        target_language="en-US",
+        voice="fake-en-US-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    chunks, spans = _narrate_plan(_NARRATE_CHAPTERS, max_chars=500)
+    assert len(chunks) == 2 and len(spans) == 2
+    asyncio.run(store.save(job))
+    _persist_job(tmp_path, job, _NARRATE_CHAPTERS)
+
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    workspace = tmp_path / "jobs" / job.id
+    checkpoints = CheckpointStore(storage=CheckpointFilesystem(workspace))
+    _seed_narrate_chunk(workspace, checkpoints, chunks[0], narrated="KEEP-NARRATED")
+
+    translation = FakeTranslationProvider(["en-US"])
+    tts = FakeTTSProvider(output_dir=tmp_path / "tts")
+    orchestrator = _narrate_orchestrator(
+        tmp_path, store, max_chars=500, translation=translation, tts=tts
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
+
+    process_job(job.id)
+
+    done = asyncio.run(store.get(job.id))
+    assert done is not None
+    assert done.status is JobStatus.COMPLETED
+    assert translation.calls == []
+    assert not (tmp_path / "cache" / "translation").exists()
+    assert (workspace / "chunks" / f"{chunks[0].id}.narrated.txt").read_text(
+        encoding="utf-8"
+    ) == "KEEP-NARRATED"
+    assert [call[0] for call in tts.calls] == ["KEEP-NARRATED", chunks[1].text]
+    assert (workspace / "output.mp3").is_file()
+
+
+def test_process_job_resumes_narrate_from_saved_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real resume loads narrate-plan.json even when that split is not today's max_chars."""
+    from app.application.pipeline.narrate_plan import load_narrate_plan
+
+    store = InMemoryJobStore()
+    job = Job(
+        id="19191919-1919-1919-1919-191919191919",
+        status=JobStatus.GENERATING_AUDIO,
+        source_language="en-US",
+        target_language="en-US",
+        voice="fake-en-US-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    saved_chunks, saved_spans = _narrate_plan(_NARRATE_CHAPTERS, max_chars=20)
+    fresh_chunks, _fresh_spans = _narrate_plan(_NARRATE_CHAPTERS, max_chars=500)
+    assert len(saved_spans) == 2
+    assert len(saved_chunks) > len(fresh_chunks)
+    assert [chunk.text for chunk in saved_chunks] != [chunk.text for chunk in fresh_chunks]
+    asyncio.run(store.save(job))
+    _persist_job(tmp_path, job, _NARRATE_CHAPTERS)
+
+    settings = Settings(_env_file=None, storage_path=tmp_path)
+    workspace = tmp_path / "jobs" / job.id
+    checkpoints = CheckpointStore(storage=CheckpointFilesystem(workspace))
+    _save_narrate_plan(workspace, saved_chunks, saved_spans, max_chars=20)
+    _seed_narrate_chunk(workspace, checkpoints, saved_chunks[0], narrated=saved_chunks[0].text)
+    _seed_narrate_audio(workspace, checkpoints, saved_chunks[0])
+
+    translation = FakeTranslationProvider(["en-US"])
+    tts = FakeTTSProvider(output_dir=tmp_path / "tts")
+    # 500 would pack each chapter into one chunk. The saved plan must win.
+    orchestrator = _narrate_orchestrator(
+        tmp_path, store, max_chars=500, translation=translation, tts=tts
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
+
+    process_job(job.id)
+
+    done = asyncio.run(store.get(job.id))
+    assert done is not None
+    assert done.status is JobStatus.COMPLETED
+    assert translation.calls == []
+    assert not (tmp_path / "cache" / "translation").exists()
+    assert [call[0] for call in tts.calls] == [chunk.text for chunk in saved_chunks[1:]]
+    reloaded = load_narrate_plan(workspace)
+    assert reloaded is not None
+    assert [(chunk.id, chunk.text) for chunk in reloaded] == [
+        (chunk.id, chunk.text) for chunk in saved_chunks
+    ]
+    assert (workspace / "chapters" / "0001.mp3").is_file()
+    assert (workspace / "chapters" / "0002.mp3").is_file()
+    assert (workspace / "output.mp3").is_file()
+
+
+def _resume_narrate_with_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    job_id: str,
+    status: JobStatus,
+) -> tuple[Path, list[Chunk], list, CheckpointStore, FakeTranslationProvider, FakeTTSProvider]:
+    store = InMemoryJobStore()
+    job = Job(
+        id=job_id,
+        status=status,
+        source_language="en-US",
+        target_language="en-US",
+        voice="fake-en-US-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+    )
+    chunks, spans = _narrate_plan(_NARRATE_CHAPTERS, max_chars=500)
+    assert len(chunks) == 2 and len(spans) == 2
+    asyncio.run(store.save(job))
+    _persist_job(tmp_path, job, _NARRATE_CHAPTERS)
+    workspace = tmp_path / "jobs" / job.id
+    checkpoints = CheckpointStore(storage=CheckpointFilesystem(workspace))
+    _save_narrate_plan(workspace, chunks, spans, max_chars=500)
+    translation = FakeTranslationProvider(["en-US"])
+    tts = FakeTTSProvider(output_dir=tmp_path / f"tts-{job_id[:8]}")
+    orchestrator = _narrate_orchestrator(
+        tmp_path, store, max_chars=500, translation=translation, tts=tts
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: _storage_settings(tmp_path))
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
+    return workspace, chunks, spans, checkpoints, translation, tts
+
+
+def _storage_settings(tmp_path: Path) -> Settings:
+    return Settings(_env_file=None, storage_path=tmp_path)
+
+
+def test_process_job_narrate_normalizes_a_chunk_without_calling_tts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TTS was checkpointed and the worker died before normalize."""
+    from app.application.pipeline.checkpoint import STAGE_TTS
+
+    workspace, chunks, _spans, checkpoints, translation, tts = _resume_narrate_with_plan(
+        tmp_path,
+        monkeypatch,
+        job_id="20202020-2020-2020-2020-202020202020",
+        status=JobStatus.GENERATING_AUDIO,
+    )
+    _seed_narrate_chunk(workspace, checkpoints, chunks[0], narrated=chunks[0].text)
+    _seed_narrate_audio(workspace, checkpoints, chunks[0])
+    _seed_narrate_chunk(workspace, checkpoints, chunks[1], narrated=chunks[1].text)
+    raw = workspace / "audio" / f"{chunks[1].id}.mp3"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_bytes(b"RAWAUDIO")
+    checkpoints.record(chunks[1].id, STAGE_TTS, raw)
+
+    process_job("20202020-2020-2020-2020-202020202020")
+
+    assert tts.calls == []
+    assert translation.calls == []
+    normalized = workspace / "audio" / f"{chunks[1].id}.normalized.mp3"
+    assert normalized.is_file()
+    assert normalized.read_bytes() == b"RAWAUDIO"
+    assert (workspace / "chapters" / "0002.mp3").is_file()
+    assert (workspace / "output.mp3").is_file()
+
+
+def test_process_job_narrate_rebuilds_a_chapter_file_without_a_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chapter file was written and the worker died before STAGE_CHAPTER."""
+    from app.domain.chapters import chapter_disk_name
+
+    workspace, chunks, _spans, checkpoints, translation, tts = _resume_narrate_with_plan(
+        tmp_path,
+        monkeypatch,
+        job_id="21212121-2121-2121-2121-212121212121",
+        status=JobStatus.GENERATING_AUDIO,
+    )
+    for chunk in chunks:
+        _seed_narrate_chunk(workspace, checkpoints, chunk, narrated=chunk.text)
+        _seed_narrate_audio(workspace, checkpoints, chunk)
+    stale = workspace / chapter_disk_name(1, "mp3")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"STALE-CHAPTER")
+
+    process_job("21212121-2121-2121-2121-212121212121")
+
+    assert tts.calls == []
+    assert translation.calls == []
+    assert stale.read_bytes() == b"SEEDAUDIO"
+    assert (workspace / "output.mp3").is_file()
+
+
+def test_process_job_narrate_rebuilds_a_ready_chapter_whose_file_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """chapters.json says ready, but the audio file is gone."""
+    from app.domain.chapters import ChapterStatus
+    from app.infrastructure.chapter_manifest_fs import FilesystemChapterManifest
+
+    workspace, chunks, _spans, checkpoints, translation, tts = _resume_narrate_with_plan(
+        tmp_path,
+        monkeypatch,
+        job_id="23232323-2323-2323-2323-232323232323",
+        status=JobStatus.GENERATING_AUDIO,
+    )
+    for chunk in chunks:
+        _seed_narrate_chunk(workspace, checkpoints, chunk, narrated=chunk.text)
+        _seed_narrate_audio(workspace, checkpoints, chunk)
+    store = FilesystemChapterManifest(workspace)
+    manifest = store.load()
+    assert manifest is not None
+    manifest.chapters[0].status = ChapterStatus.READY
+    manifest.chapters[0].file = "chapters/0001.mp3"
+    store.save(manifest)
+    assert not (workspace / "chapters" / "0001.mp3").exists()
+
+    process_job("23232323-2323-2323-2323-232323232323")
+
+    assert tts.calls == []
+    assert translation.calls == []
+    rebuilt = workspace / "chapters" / "0001.mp3"
+    assert rebuilt.is_file()
+    assert rebuilt.read_bytes() == b"SEEDAUDIO"
+    reloaded = FilesystemChapterManifest(workspace).load()
+    assert reloaded is not None
+    assert reloaded.chapters[0].status is ChapterStatus.READY
+    assert (workspace / "output.mp3").is_file()
 
 
 def test_boot_recovers_then_listens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

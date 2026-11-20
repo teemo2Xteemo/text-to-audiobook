@@ -103,6 +103,89 @@ describe("App", () => {
     expect(player).toHaveAttribute("src", `/api/jobs/${JOB_ID}/audio`);
   });
 
+  it("keeps the single audiobook download when a narrate job is one span", async () => {
+    sessionStorage.setItem(LAST_JOB_STORAGE_KEY, JOB_ID);
+    const fetchMock = mockFetch((url) => {
+      if (url.endsWith("/api/capabilities")) {
+        return jsonResponse(capabilitiesFixture);
+      }
+      if (url.endsWith(`/api/jobs/${JOB_ID}`)) {
+        return jsonResponse(
+          queuedJob({
+            status: "completed",
+            stage: "completed",
+            mode: "narrate",
+            source_language: "en-US",
+            target_language: "en-US",
+            chunk_current: 1,
+            chunk_total: 1,
+            chapters_total: 1,
+            chapters_ready: 1,
+            chapters_url: `/api/jobs/${JOB_ID}/chapters`,
+            audio_url: `/api/jobs/${JOB_ID}/audio`,
+          }),
+        );
+      }
+      return jsonResponse({ error_type: "INVALID_INPUT", message: `unexpected ${url}` }, 500);
+    });
+    render(<App />);
+    const download = await screen.findByRole("link", { name: "Download Audio File" });
+    expect(download).toHaveAttribute("href", `/api/jobs/${JOB_ID}/audio`);
+    expect(screen.queryByRole("region", { name: "Chapters" })).toBeNull();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/chapters"))).toBe(false);
+  });
+
+  it("shows chapter downloads and the audiobook file when several chapters are ready", async () => {
+    sessionStorage.setItem(LAST_JOB_STORAGE_KEY, JOB_ID);
+    mockFetch((url) => {
+      if (url.endsWith("/api/capabilities")) {
+        return jsonResponse(capabilitiesFixture);
+      }
+      if (url.includes(`/api/jobs/${JOB_ID}/chapters`)) {
+        return jsonResponse({
+          job_id: JOB_ID,
+          total: 2,
+          ready: 2,
+          failed: 0,
+          matched: 2,
+          offset: 0,
+          limit: 100,
+          partial: false,
+          items: [],
+        });
+      }
+      if (url.endsWith(`/api/jobs/${JOB_ID}`)) {
+        return jsonResponse(
+          queuedJob({
+            status: "completed",
+            stage: "completed",
+            mode: "narrate",
+            source_language: "en-US",
+            target_language: "en-US",
+            chunk_current: 2,
+            chunk_total: 2,
+            chapters_total: 2,
+            chapters_ready: 2,
+            chapters_url: `/api/jobs/${JOB_ID}/chapters`,
+            zip_url: `/api/jobs/${JOB_ID}/chapters.zip`,
+            audio_url: `/api/jobs/${JOB_ID}/audio`,
+          }),
+        );
+      }
+      return jsonResponse({ error_type: "INVALID_INPUT", message: `unexpected ${url}` }, 500);
+    });
+    render(<App />);
+    expect(await screen.findByRole("region", { name: "Chapters" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download all (ZIP)" })).toHaveAttribute(
+      "href",
+      `/api/jobs/${JOB_ID}/chapters.zip`,
+    );
+    expect(screen.getByRole("link", { name: "Download Audio File" })).toHaveAttribute(
+      "href",
+      `/api/jobs/${JOB_ID}/audio`,
+    );
+  });
+
   it("shows error_type from a failed create envelope", async () => {
     const user = userEvent.setup();
     mockFetch((url, init) => {

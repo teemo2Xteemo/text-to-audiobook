@@ -12,7 +12,7 @@ from app.api.schemas import JobStatusResponse
 from app.application.jobs import JobService
 from app.config.settings import Settings
 from app.domain.errors import ErrorType
-from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat, SrtTiming
 from app.domain.translation_profile import TranslationProfile
 from app.infrastructure.chapter_manifest_fs import FilesystemChapterManifest
 from app.infrastructure.fs_storage import FilesystemJobStorage
@@ -1570,3 +1570,139 @@ def test_legacy_job_has_empty_chapter_list_and_keeps_audio(
     downloaded = jobs_client.get(f"/api/jobs/{job_id}/audio")
     assert downloaded.status_code == 200
     assert downloaded.content == b"book"
+
+
+def _run_narrate_job(
+    tmp_path: Path,
+    store: InMemoryJobStore,
+    *,
+    job_id: str,
+    text: str,
+    srt_timing: SrtTiming = SrtTiming.CONTINUOUS,
+) -> tuple[Job, Path]:
+    from tests.application.test_pipeline import _orchestrator, _run, _voices_for
+
+    job = Job(
+        id=job_id,
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="en-US",
+        voice="voice-en-US",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.NARRATE,
+        srt_timing=srt_timing,
+    )
+    asyncio.run(store.save(job))
+    orchestrator, workspace, translation, *_rest = _orchestrator(
+        tmp_path,
+        job=job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        jobs=store,
+        max_chars=500,
+    )
+    result = _run(orchestrator, job, workspace, text=text)
+    assert result.status is JobStatus.COMPLETED
+    assert translation.calls == []
+    return result, workspace
+
+
+def test_narrate_chapters_match_analyze_and_download(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    import io
+    import zipfile
+
+    text = "Chapter 1: Dawn\n\nThe sun rose.\n\nChapter 2: Dusk\n\nThe sun set."
+    analyzed = jobs_client.post("/api/analyze", json={"text": text})
+    assert analyzed.status_code == 200
+    analysis = analyzed.json()
+    assert analysis["chapters_count"] == 2
+    assert analysis["chapters_span_count"] == 2
+
+    _, store, _, _ = memory
+    job_id = "12121212-1212-1212-1212-121212121212"
+    _result, workspace = _run_narrate_job(tmp_path, store, job_id=job_id, text=text)
+    assert (workspace / "chapters" / "0001.mp3").is_file()
+    assert (workspace / "chapters" / "0002.mp3").is_file()
+
+    status = jobs_client.get(f"/api/jobs/{job_id}")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["mode"] == "narrate"
+    assert body["chapters_total"] == analysis["chapters_span_count"]
+    assert body["chapters_ready"] == analysis["chapters_count"]
+    assert body["chapters_url"] == f"/api/jobs/{job_id}/chapters"
+    assert body["zip_url"] == f"/api/jobs/{job_id}/chapters.zip"
+    assert body["audio_url"] == f"/api/jobs/{job_id}/audio"
+
+    listed = jobs_client.get(f"/api/jobs/{job_id}/chapters")
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert payload["total"] == 2
+    assert payload["ready"] == 2
+    assert payload["partial"] is False
+    assert [item["ordinal"] for item in payload["items"]] == [1, 2]
+    assert all(item["status"] == "ready" and item["download_url"] for item in payload["items"])
+
+    zipped = jobs_client.get(f"/api/jobs/{job_id}/chapters.zip")
+    assert zipped.status_code == 200
+    assert zipped.headers["x-chapters-partial"] == "false"
+    assert zipped.headers["x-chapters-included"] == "2/2"
+    with zipfile.ZipFile(io.BytesIO(zipped.content)) as archive:
+        assert archive.namelist() == [item["filename"] for item in payload["items"]]
+        assert all(archive.read(name) for name in archive.namelist())
+
+    audio = jobs_client.get(f"/api/jobs/{job_id}/audio")
+    assert audio.status_code == 200
+    assert audio.content
+
+
+def test_unheaded_narrate_and_srt_keep_the_single_download(
+    jobs_client: TestClient,
+    memory: tuple[JobService, InMemoryJobStore, InMemorySourceStorage, InMemoryQueue],
+    tmp_path: Path,
+) -> None:
+    _, store, _, _ = memory
+    plain = "Just a short story with no headings."
+    analyzed = jobs_client.post("/api/analyze", json={"text": plain})
+    assert analyzed.status_code == 200
+    assert analyzed.json()["chapters_count"] == 1
+    assert analyzed.json()["chapters_span_count"] == 1
+
+    plain_id = "13131313-1313-1313-1313-131313131313"
+    _run_narrate_job(tmp_path, store, job_id=plain_id, text=plain)
+    plain_status = jobs_client.get(f"/api/jobs/{plain_id}").json()
+    assert plain_status["chapters_total"] == 1
+    assert plain_status["chapters_ready"] == 1
+    assert plain_status["audio_url"] == f"/api/jobs/{plain_id}/audio"
+    assert jobs_client.get(f"/api/jobs/{plain_id}/audio").status_code == 200
+    assert jobs_client.get(f"/api/jobs/{plain_id}/chapters.zip").status_code == 200
+
+    srt = (
+        "1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n"
+        "2\n00:00:05,000 --> 00:00:06,000\nGoodbye now.\n"
+    )
+    srt_id = "14141414-1414-1414-1414-141414141414"
+    _run_narrate_job(tmp_path, store, job_id=srt_id, text=srt)
+    srt_status = jobs_client.get(f"/api/jobs/{srt_id}").json()
+    assert srt_status["chapters_total"] == 1
+    assert srt_status["audio_url"] == f"/api/jobs/{srt_id}/audio"
+    assert jobs_client.get(f"/api/jobs/{srt_id}/chapters").json()["total"] == 1
+
+    aligned_id = "15151515-1515-1515-1515-151515151515"
+    _run_narrate_job(tmp_path, store, job_id=aligned_id, text=srt, srt_timing=SrtTiming.ALIGNED)
+    aligned = jobs_client.get(f"/api/jobs/{aligned_id}").json()
+    # Analyze still counts one synthetic chapter for cue text. Aligned narration
+    # keeps a single timeline and writes no chapter manifest, so the job reports 0.
+    assert aligned["chapters_total"] == 0
+    assert aligned["chapters_url"] is None
+    assert aligned["zip_url"] is None
+    assert aligned["audio_url"] == f"/api/jobs/{aligned_id}/audio"
+    assert aligned["subtitles_url"] == f"/api/jobs/{aligned_id}/subtitles"
+    assert jobs_client.get(f"/api/jobs/{aligned_id}/chapters.zip").status_code == 409
+    assert jobs_client.get(f"/api/jobs/{aligned_id}/audio").status_code == 200
