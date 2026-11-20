@@ -91,7 +91,7 @@ class FFmpegAudioProcessor:
             destination,
             executable=self._resolved_executable(),
         )
-        await run_ffmpeg_argv(argv)
+        await run_ffmpeg_argv(argv, timeout_seconds=self.merge_timeout_seconds(sources))
         return AudioArtifact(path=destination)
 
     async def get_duration_ms(self, path: Path) -> int:
@@ -179,6 +179,30 @@ class FFmpegAudioProcessor:
                     return str(candidate_exe)
             raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "ffprobe is not available")
         return found
+
+    def merge_timeout_seconds(self, sources: Sequence[Path]) -> float:
+        """Scale concat time with input count and payload size, capped by the encode ceiling.
+
+        Probing every input with ffprobe is too expensive for thousands of chunks.
+        Byte size is a stand-in for duration (16 KB/s is a slow-disk lower bound).
+        """
+        count_timeout = max(DEFAULT_FFMPEG_TIMEOUT_SECONDS, 2.0 * len(sources))
+        total_bytes = 0
+        for source in sources:
+            try:
+                total_bytes += source.stat().st_size
+            except OSError:
+                continue
+        estimated_seconds = total_bytes / 16_000 if total_bytes else 0.0
+        duration_timeout = scaled_subprocess_timeout_seconds(
+            estimated_seconds,
+            ceiling_seconds=self._encode_timeout_ceiling_seconds,
+        )
+        raw = max(count_timeout, duration_timeout)
+        ceiling = self._encode_timeout_ceiling_seconds
+        if ceiling <= 0:
+            return raw
+        return min(raw, ceiling)
 
     async def _full_encode_timeout(self, source: Path) -> float:
         try:

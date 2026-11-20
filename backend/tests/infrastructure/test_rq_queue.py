@@ -5,6 +5,7 @@ from rq.job import Callback
 
 from app.infrastructure.rq_queue import (
     RQ_ON_FAILURE,
+    RQ_ON_SUCCESS,
     RQ_PROCESS_JOB,
     RQJobQueue,
 )
@@ -28,10 +29,18 @@ def test_enqueue_sets_timeout_and_on_failure() -> None:
     on_failure = queue.kwargs["on_failure"]
     assert isinstance(on_failure, Callback)
     assert on_failure.name == RQ_ON_FAILURE
+    on_success = queue.kwargs["on_success"]
+    assert isinstance(on_success, Callback)
+    assert on_success.name == RQ_ON_SUCCESS
 
 
 def test_rq_on_failure_path_resolves() -> None:
     module_path, name = RQ_ON_FAILURE.rsplit(".", 1)
+    assert callable(getattr(import_module(module_path), name))
+
+
+def test_rq_on_success_path_resolves() -> None:
+    module_path, name = RQ_ON_SUCCESS.rsplit(".", 1)
     assert callable(getattr(import_module(module_path), name))
 
 

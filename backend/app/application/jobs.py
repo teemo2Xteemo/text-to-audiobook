@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -66,6 +66,9 @@ class JobService:
         storage_path: Path,
         disk_jobs: DiskJobStore | None = None,
         max_recovery_attempts: int = 3,
+        max_stalled_runs: int = 3,
+        max_job_runs: int = 500,
+        progress_marker_reader: Callable[[str], int] | None = None,
         translation_provider: str = "fake",
         translation_model: str = "fake",
         available_profiles: Sequence[TranslationProfile] | None = None,
@@ -85,6 +88,9 @@ class JobService:
             disk_jobs if disk_jobs is not None else _JobStoreDiskAdapter(jobs)
         )
         self._max_recovery_attempts = max_recovery_attempts
+        self._max_stalled_runs = max_stalled_runs
+        self._max_job_runs = max_job_runs
+        self._progress_marker_reader = progress_marker_reader
         self._translation_provider = translation_provider
         self._translation_model = translation_model
         self._available_profiles = (
@@ -353,6 +359,11 @@ class JobService:
             chunk_current=0,
             chunk_total=0,
             recovery_attempts=0,
+            run_count=0,
+            stalled_runs=0,
+            continue_requested=False,
+            progress_marker=0,
+            run_baseline_marker=0,
         )
         await self._jobs.save(job)
         await self._queue.enqueue(job.id)
@@ -366,6 +377,95 @@ class JobService:
             },
         )
         return job
+
+    async def continue_if_requested(self, job_id: str) -> Job | None:
+        """Re-enqueue a non-terminal job that yielded at its run budget.
+
+        Chunk counters stay as they are. ``run_count`` increments here, after the
+        RQ task has finished, so the same id can be queued again.
+        """
+        job = await self._filesystem().get_job(job_id)
+        if job is None or is_terminal(job.status) or not job.continue_requested:
+            return job
+        blocked = self._continuation_blocked(job)
+        if blocked is not None:
+            return await self.mark_failed(job.id, ErrorType.TIMEOUT, blocked)
+        job = replace(
+            job,
+            run_count=job.run_count + 1,
+            continue_requested=False,
+            run_baseline_marker=job.progress_marker,
+        )
+        await self._jobs.save(job)
+        await self._queue.enqueue(job.id)
+        logger.info(
+            "job_continued",
+            extra={
+                "chunk_id": None,
+                "job_id": job.id,
+                "run_count": job.run_count,
+                "status": job.status.value,
+            },
+        )
+        return job
+
+    async def continue_after_timeout(self, job_id: str, *, timeout_seconds: int) -> Job | None:
+        """Re-enqueue a timed-out run that moved the checkpoint marker. Otherwise fail it."""
+        job = await self._filesystem().get_job(job_id)
+        if job is None or is_terminal(job.status):
+            return job
+        live_marker = self._live_progress_marker(job)
+        if live_marker <= job.run_baseline_marker:
+            return await self.mark_failed(
+                job.id,
+                ErrorType.TIMEOUT,
+                f"job exceeded the worker timeout ({timeout_seconds}s)",
+            )
+        blocked = self._continuation_blocked(job)
+        if blocked is not None:
+            return await self.mark_failed(job.id, ErrorType.TIMEOUT, blocked)
+        job = replace(
+            job,
+            progress_marker=live_marker,
+            run_count=job.run_count + 1,
+            continue_requested=False,
+            stalled_runs=0,
+            recovery_attempts=0,
+            run_baseline_marker=live_marker,
+        )
+        await self._jobs.save(job)
+        await self._queue.enqueue(job.id)
+        logger.info(
+            "job_continued",
+            extra={
+                "chunk_id": None,
+                "job_id": job.id,
+                "reason": "timeout",
+                "run_count": job.run_count,
+                "status": job.status.value,
+            },
+        )
+        return job
+
+    def _live_progress_marker(self, job: Job) -> int:
+        reader = self._progress_marker_reader
+        if reader is None:
+            return job.progress_marker
+        try:
+            return max(job.progress_marker, reader(job.id))
+        except Exception:
+            logger.warning(
+                "job_progress_marker_unreadable",
+                extra={"chunk_id": None, "job_id": job.id},
+            )
+            return job.progress_marker
+
+    def _continuation_blocked(self, job: Job) -> str | None:
+        if job.stalled_runs >= self._max_stalled_runs:
+            return f"no progress in {self._max_stalled_runs} consecutive runs"
+        if job.run_count >= self._max_job_runs:
+            return f"job exceeded max runs ({self._max_job_runs})"
+        return None
 
     async def recover_in_progress(self) -> list[str]:
         """Re-enqueue non-terminal jobs from filesystem ``status.json`` only.

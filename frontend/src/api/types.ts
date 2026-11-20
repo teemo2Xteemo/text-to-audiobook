@@ -84,6 +84,7 @@ export type JobStatusResponse = {
   mode?: JobMode;
   srt_timing?: SrtTiming;
   normalize_text?: boolean;
+  run_count?: number;
 };
 
 export type ErrorEnvelope = {

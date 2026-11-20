@@ -65,30 +65,44 @@ export function progressCopy(
   chunkCurrent: number,
   chunkTotal: number,
   mode?: JobMode,
+  runCount = 0,
 ): string {
+  let copy: string;
   switch (status) {
     case "queued":
-      return "Waiting in queue";
+      copy = "Waiting in queue";
+      break;
     case "parsing":
-      return "Reading story";
+      copy = "Reading story";
+      break;
     case "translating":
       if (mode === "narrate") {
-        return chunkTotal > 0 ? `Preparing text ${chunkCurrent}/${chunkTotal}` : "Preparing text";
+        copy = chunkTotal > 0 ? `Preparing text ${chunkCurrent}/${chunkTotal}` : "Preparing text";
+      } else {
+        copy = chunkTotal > 0 ? `Translating ${chunkCurrent}/${chunkTotal}` : "Translating";
       }
-      return chunkTotal > 0 ? `Translating ${chunkCurrent}/${chunkTotal}` : "Translating";
+      break;
     case "preparing_tts":
-      return "Preparing narration";
+      copy = "Preparing narration";
+      break;
     case "generating_audio":
-      return chunkTotal > 0
-        ? `Generating audio ${chunkCurrent}/${chunkTotal}`
-        : "Generating audio";
+      copy =
+        chunkTotal > 0 ? `Generating audio ${chunkCurrent}/${chunkTotal}` : "Generating audio";
+      break;
     case "merging":
-      return "Merging";
+      copy = "Merging";
+      break;
     case "completed":
-      return "Completed";
+      copy = "Completed";
+      break;
     case "failed":
-      return "Failed";
+      copy = "Failed";
+      break;
   }
+  if (runCount > 1 && !isTerminalStatus(status)) {
+    return `${copy} · run ${runCount}`;
+  }
+  return copy;
 }
 
 export function languageLabel(code: string): string {

@@ -1,8 +1,31 @@
+import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+
+def resolve_job_run_budget_seconds(timeout_seconds: int, configured: float | None) -> float:
+    """Budget for one cooperative run.
+
+    Unset: ``timeout - 120`` with a floor of 60 when the RQ timeout is longer than
+    a minute. A timeout of 60s or less uses ``timeout - 5`` (at least 1s, and still
+    below the timeout). An explicit value is kept when it is already below the
+    timeout; otherwise it is clamped to that same limit.
+    """
+    timeout = float(timeout_seconds)
+    if timeout <= 60:
+        limit = max(1.0, timeout - 5.0)
+    else:
+        limit = max(60.0, timeout - 120.0)
+    if limit >= timeout:
+        limit = timeout / 2 if timeout <= 1 else timeout - 1.0
+    if configured is None or configured >= timeout:
+        return limit
+    return configured
 
 
 def parse_tts_default_voice_by_language(value: object) -> dict[str, str]:
@@ -104,6 +127,41 @@ class Settings(BaseSettings):
     retry_rate_limit_backoff_seconds: float = Field(default=5.0, ge=0.0)
     max_recovery_attempts: int = Field(default=3, ge=1)
     rq_job_timeout_seconds: int = Field(default=1800, ge=1)
+    # None: derive a budget strictly below the RQ timeout (timeout - 120, floor 60).
+    job_run_budget_seconds: float | None = Field(default=None, gt=0)
+    max_stalled_runs: int = Field(default=3, ge=1)
+    max_job_runs: int = Field(default=500, ge=1)
+
+    @field_validator("job_run_budget_seconds", mode="before")
+    @classmethod
+    def empty_job_run_budget_is_unset(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def warn_when_run_budget_is_clamped(self) -> "Settings":
+        configured = self.job_run_budget_seconds
+        timeout = self.rq_job_timeout_seconds
+        if timeout <= 60 or (configured is not None and configured >= timeout):
+            logger.warning(
+                "job_run_budget_clamped",
+                extra={
+                    "chunk_id": None,
+                    "job_id": None,
+                    "job_run_budget_seconds": self.effective_job_run_budget_seconds,
+                    "rq_job_timeout_seconds": timeout,
+                },
+            )
+        return self
+
+    @property
+    def effective_job_run_budget_seconds(self) -> float:
+        """Seconds of useful work per worker run, always below the RQ timeout."""
+        return resolve_job_run_budget_seconds(
+            self.rq_job_timeout_seconds,
+            self.job_run_budget_seconds,
+        )
 
     @property
     def text_normalization_enabled(self) -> bool:

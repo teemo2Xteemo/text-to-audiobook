@@ -37,6 +37,7 @@ class JobStatusResponse(BaseModel):
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
     tts_engine: str | None = None
+    run_count: int = 0
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -72,6 +73,7 @@ class JobStatusResponse(BaseModel):
             srt_timing=job.srt_timing,
             normalize_text=job.normalize_text,
             tts_engine=job.tts_engine,
+            run_count=job.run_count,
         )
 
 

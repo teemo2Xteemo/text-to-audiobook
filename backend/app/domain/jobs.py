@@ -134,6 +134,14 @@ class Job:
     translation_provider: str | None = None
     translation_model: str | None = None
     recovery_attempts: int = 0
+    # Continuation bookkeeping. Omitted from ``to_dict`` when zero/false so old
+    # status.json files stay valid. ``run_baseline_marker`` is the checkpoint
+    # count at the start of the current worker run (timeout progress check).
+    run_count: int = 0
+    stalled_runs: int = 0
+    progress_marker: int = 0
+    run_baseline_marker: int = 0
+    continue_requested: bool = False
     mode: JobMode = JobMode.TRANSLATE
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
@@ -143,8 +151,15 @@ class Job:
         if not self.id:
             raise ValueError("id is required")
 
-        if self.recovery_attempts < 0:
-            raise ValueError("recovery_attempts must be >= 0")
+        for name, value in (
+            ("recovery_attempts", self.recovery_attempts),
+            ("run_count", self.run_count),
+            ("stalled_runs", self.stalled_runs),
+            ("progress_marker", self.progress_marker),
+            ("run_baseline_marker", self.run_baseline_marker),
+        ):
+            if value < 0:
+                raise ValueError(f"{name} must be >= 0")
 
         provider = self.translation_provider
         model = self.translation_model
@@ -178,6 +193,16 @@ class Job:
             payload["translation_provider"] = self.translation_provider
         if self.recovery_attempts > 0:
             payload["recovery_attempts"] = self.recovery_attempts
+        if self.run_count > 0:
+            payload["run_count"] = self.run_count
+        if self.stalled_runs > 0:
+            payload["stalled_runs"] = self.stalled_runs
+        if self.progress_marker > 0:
+            payload["progress_marker"] = self.progress_marker
+        if self.run_baseline_marker > 0:
+            payload["run_baseline_marker"] = self.run_baseline_marker
+        if self.continue_requested:
+            payload["continue_requested"] = True
         if self.srt_timing is not SrtTiming.CONTINUOUS:
             payload["srt_timing"] = self.srt_timing.value
         if self.normalize_text:
@@ -217,6 +242,11 @@ class Job:
             translation_provider=provider,
             translation_model=model,
             recovery_attempts=int(data.get("recovery_attempts", 0)),
+            run_count=int(data.get("run_count", 0)),
+            stalled_runs=int(data.get("stalled_runs", 0)),
+            progress_marker=int(data.get("progress_marker", 0)),
+            run_baseline_marker=int(data.get("run_baseline_marker", 0)),
+            continue_requested=data.get("continue_requested") is True,
             mode=mode,
             srt_timing=srt_timing,
             normalize_text=data.get("normalize_text") is True,

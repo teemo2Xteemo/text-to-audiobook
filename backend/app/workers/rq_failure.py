@@ -41,8 +41,14 @@ def _apply(job: Any, exc_type: Any, exc_value: Any) -> None:
 
 async def _mark(job_id: str, exc_type: Any, exc_value: Any) -> None:
     settings = Settings()
-    error_type, message = _map_error(exc_type, exc_value, settings.rq_job_timeout_seconds)
     service = build_job_service(settings)
+    if exc_type is JobTimeoutException or isinstance(exc_value, JobTimeoutException):
+        await service.continue_after_timeout(
+            job_id,
+            timeout_seconds=settings.rq_job_timeout_seconds,
+        )
+        return
+    error_type, message = _map_error(exc_type, exc_value, settings.rq_job_timeout_seconds)
     await service.mark_failed(job_id, error_type, message)
 
 

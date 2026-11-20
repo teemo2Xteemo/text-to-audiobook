@@ -244,6 +244,48 @@ def test_job_srt_timing_round_trip_and_legacy_default() -> None:
     assert Job.from_dict({**data, "srt_timing": "future"}).srt_timing is SrtTiming.CONTINUOUS
 
 
+def test_run_budget_fields_roundtrip_and_old_dicts_default_to_zero() -> None:
+    legacy = Job.from_dict(_legacy_job_payload())
+    assert legacy.run_count == 0
+    assert legacy.stalled_runs == 0
+    assert legacy.progress_marker == 0
+    assert legacy.run_baseline_marker == 0
+    assert legacy.continue_requested is False
+    assert "run_count" not in legacy.to_dict()
+    assert "stalled_runs" not in legacy.to_dict()
+    assert "progress_marker" not in legacy.to_dict()
+    assert "continue_requested" not in legacy.to_dict()
+
+    bumped = Job(
+        id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        status=JobStatus.GENERATING_AUDIO,
+        source_language="en-US",
+        target_language="ko-KR",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        run_count=4,
+        stalled_runs=1,
+        progress_marker=1830,
+        run_baseline_marker=1800,
+        continue_requested=True,
+    )
+    payload = bumped.to_dict()
+    assert payload["run_count"] == 4
+    assert payload["stalled_runs"] == 1
+    assert payload["progress_marker"] == 1830
+    assert payload["continue_requested"] is True
+    assert Job.from_dict(payload) == bumped
+
+
+def test_negative_run_count_rejected() -> None:
+    payload = _legacy_job_payload()
+    payload["run_count"] = -1
+    with pytest.raises(ValueError, match="run_count"):
+        Job.from_dict(payload)
+
+
 def test_tts_engine_roundtrips_and_is_omitted_when_unset() -> None:
     old = Job.from_dict(_legacy_job_payload())
     assert old.tts_engine is None

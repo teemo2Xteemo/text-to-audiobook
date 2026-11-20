@@ -97,8 +97,15 @@ def test_process_job_completed_is_noop(tmp_path: Path, monkeypatch: pytest.Monke
     runs: list[JobStatus] = []
 
     class _Capture:
-        async def run(self, captured: Job, text: str, *, workspace: Path) -> Job:
-            del text, workspace
+        async def run(
+            self,
+            captured: Job,
+            text: str,
+            *,
+            workspace: Path,
+            deadline: float | None = None,
+        ) -> Job:
+            del text, workspace, deadline
             runs.append(captured.status)
             return captured
 
@@ -128,8 +135,15 @@ def test_process_job_failed_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     runs: list[JobStatus] = []
 
     class _Capture:
-        async def run(self, captured: Job, text: str, *, workspace: Path) -> Job:
-            del text, workspace
+        async def run(
+            self,
+            captured: Job,
+            text: str,
+            *,
+            workspace: Path,
+            deadline: float | None = None,
+        ) -> Job:
+            del text, workspace, deadline
             runs.append(captured.status)
             return captured
 
@@ -318,8 +332,14 @@ def _capture_pin(
         captured["translation"] = orchestrator._translation
         captured["nllb_constructed"] = list(constructed)
 
-        async def _stop(job: Job, text: str, *, workspace: Path) -> Job:
-            del text, workspace
+        async def _stop(
+            job: Job,
+            text: str,
+            *,
+            workspace: Path,
+            deadline: float | None = None,
+        ) -> Job:
+            del text, workspace, deadline
             return job
 
         orchestrator.run = _stop  # type: ignore[method-assign]
@@ -651,8 +671,6 @@ def test_process_job_narrate_mode_fails_cleanly_when_tts_provider_fails(
 def test_process_job_pinned_fish_rate_limit_fails_job_keeps_checkpoints_and_never_uses_edge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import json
-
     from app.domain.audio import Voice
     from app.domain.errors import DomainError, ErrorType
     from app.providers.tts.edge import EdgeTTSProvider
@@ -724,9 +742,12 @@ def test_process_job_pinned_fish_rate_limit_fails_job_keeps_checkpoints_and_neve
     assert done.status is JobStatus.FAILED
     assert done.error_type is ErrorType.PROVIDER_RATE_LIMIT
     assert len(fish.calls) == 2
-    checkpoints = list((tmp_path / "jobs" / job.id).rglob("checkpoint.json"))
+    checkpoints = list((tmp_path / "jobs" / job.id).rglob("checkpoint.jsonl"))
     assert checkpoints, "finished chunks must stay checkpointed"
-    assert len(json.loads(checkpoints[0].read_text())) >= 1
+    rows = [
+        line for line in checkpoints[0].read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    assert len(rows) >= 1
     assert edge_calls == []
 
 
@@ -789,4 +810,130 @@ def test_process_job_narrate_retry_resumes_unfinished_chunks_only(
     first_texts = {call[0] for call in failing.calls}
     assert len(healthy.calls) > 0
     assert not first_texts & {call[0] for call in healthy.calls}  # finished chunks not redone
+    assert (tmp_path / "jobs" / job.id / "output.mp3").is_file()
+
+
+def test_rq_budget_continues_until_completed_without_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A short run budget plus slow TTS still reaches COMPLETED across RQ successes."""
+    import time
+
+    import fakeredis
+    from rq import Queue, SimpleWorker
+
+    from app.application.jobs import JobService
+    from app.domain.audio import AudioArtifact, TTSSettings, Voice
+    from app.infrastructure.job_store import DualWriteJobStore
+    from app.infrastructure.rq_queue import RQ_QUEUE_NAME, RQJobQueue
+
+    class _Clock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    class _SlowTTS(FakeTTSProvider):
+        def __init__(self, clock: _Clock, voices: list[Voice], output_dir: Path) -> None:
+            super().__init__(voices, output_dir)
+            self._clock = clock
+
+        async def synthesize(
+            self, text: str, language: str, voice: str, settings: TTSSettings
+        ) -> AudioArtifact:
+            await asyncio.sleep(0)
+            self._clock.now += 10
+            return await super().synthesize(text, language, voice, settings)
+
+    class _FsStore:
+        def __init__(self, filesystem: FilesystemJobStorage) -> None:
+            self._filesystem = filesystem
+
+        async def save(self, job: Job) -> None:
+            await self._filesystem.save_job(job)
+
+        async def get(self, job_id: str) -> Job | None:
+            return await self._filesystem.get_job(job_id)
+
+        async def delete(self, job_id: str) -> None:
+            await self._filesystem.delete_job(job_id)
+
+        async def list_ids(self) -> list[str]:
+            return list(await self._filesystem.list_job_ids())
+
+    clock = _Clock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    job = Job(
+        id="66666666-6666-6666-6666-666666666666",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="ja-JP",
+        voice="fake-ja-JP-a",
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+    )
+    text = " ".join(f"Sentence {index} is here." for index in range(4))
+    _persist_job(tmp_path, job, text)
+    filesystem = FilesystemJobStorage(tmp_path)
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        job_run_budget_seconds=5,
+        rq_job_timeout_seconds=1800,
+        max_stalled_runs=3,
+        max_job_runs=20,
+    )
+    voices = [Voice(id="fake-ja-JP-a", language="ja-JP", label="Japanese A")]
+    tts = _SlowTTS(clock, voices, tmp_path / "tts")
+    orchestrator = PipelineOrchestrator(
+        translation=FakeTranslationProvider(["en-US", "ja-JP"]),
+        tts=tts,
+        narration=PassthroughNarrationProcessor(),
+        detector=FixedLanguageDetector("en-US"),
+        audio=FakeAudioProcessor(),
+        jobs=_FsStore(filesystem),
+        checkpoint_storage_factory=CheckpointFilesystem,
+        max_chars=22,
+        tts_concurrency=1,
+    )
+    connection = fakeredis.FakeStrictRedis()
+    queue = Queue(RQ_QUEUE_NAME, connection=connection)
+    rq_queue = RQJobQueue(queue, job_timeout=3600)
+    service = JobService(
+        jobs=DualWriteJobStore(filesystem, _FsStore(filesystem)),
+        source_storage=filesystem,
+        queue=rq_queue,
+        output_bitrate_kbps=128,
+        storage_path=tmp_path,
+        disk_jobs=filesystem,
+        max_stalled_runs=3,
+        max_job_runs=20,
+    )
+    monkeypatch.setattr("app.workers.runner.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.runner.build_orchestrator", lambda _s, **_kw: orchestrator)
+    monkeypatch.setattr("app.workers.rq_continue.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.rq_continue.build_job_service", lambda _s: service)
+    monkeypatch.setattr("app.workers.rq_failure.Settings", lambda **_: settings)
+    monkeypatch.setattr("app.workers.rq_failure.build_job_service", lambda _s: service)
+
+    asyncio.run(rq_queue.enqueue(job.id))
+    worker = SimpleWorker([queue], connection=connection)
+    seen_failed = False
+    for _ in range(12):
+        current = asyncio.run(filesystem.get_job(job.id))
+        assert current is not None
+        if current.status is JobStatus.FAILED:
+            seen_failed = True
+            break
+        if current.status is JobStatus.COMPLETED:
+            break
+        worker.work(burst=True, logging_level="ERROR")
+    done = asyncio.run(filesystem.get_job(job.id))
+    assert done is not None
+    assert not seen_failed
+    assert done.status is JobStatus.COMPLETED, done.message
+    assert done.run_count > 1
+    assert done.chunk_current == done.chunk_total
     assert (tmp_path / "jobs" / job.id / "output.mp3").is_file()

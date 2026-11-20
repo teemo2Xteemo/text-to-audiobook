@@ -74,7 +74,7 @@ def test_factory_builds_edge_provider_without_calling_sdk(tmp_path: Path) -> Non
     assert provider._timeout_seconds == 90.0
     processor = build_audio_processor(settings)
     assert isinstance(processor, FFmpegAudioProcessor)
-    assert processor._encode_timeout_ceiling_seconds == 1800.0
+    assert processor._encode_timeout_ceiling_seconds == 1680.0
 
 
 def test_ffmpeg_processor_ceiling_follows_job_timeout(tmp_path: Path) -> None:
@@ -86,7 +86,7 @@ def test_ffmpeg_processor_ceiling_follows_job_timeout(tmp_path: Path) -> None:
     )
     processor = build_audio_processor(settings)
     assert isinstance(processor, FFmpegAudioProcessor)
-    assert processor._encode_timeout_ceiling_seconds == 3600.0
+    assert processor._encode_timeout_ceiling_seconds == 3480.0
 
 
 def test_factory_builds_conservative_narration() -> None:

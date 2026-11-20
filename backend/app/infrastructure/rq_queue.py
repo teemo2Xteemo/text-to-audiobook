@@ -9,6 +9,7 @@ from app.domain.errors import DomainError, ErrorType
 
 RQ_PROCESS_JOB = "app.workers.process_job"
 RQ_ON_FAILURE = "app.workers.rq_failure.handle_rq_failure"
+RQ_ON_SUCCESS = "app.workers.rq_continue.handle_rq_success"
 RQ_QUEUE_NAME = "jobs"
 
 
@@ -42,4 +43,5 @@ class RQJobQueue:
             job_id=rq_job_id,
             job_timeout=self._job_timeout,
             on_failure=Callback(RQ_ON_FAILURE),
+            on_success=Callback(RQ_ON_SUCCESS),
         )

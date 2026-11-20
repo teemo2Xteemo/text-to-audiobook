@@ -48,6 +48,30 @@ class UnknownProviderError(ProviderConfigurationError):
     """Raised when ``TRANSLATION_PROVIDER`` or ``TTS_PROVIDER`` is not registered."""
 
 
+def _progress_marker_reader(settings: Settings):
+    """Checkpoint count on disk, so a timeout between record and status save still counts."""
+
+    def read(job_id: str) -> int:
+        from app.domain.errors import DomainError
+
+        workspace = settings.storage_path / "jobs" / job_id
+        try:
+            raw = CheckpointFilesystem(workspace).load_raw()
+        except DomainError:
+            return 0
+        keys: set[tuple[str, str]] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            chunk_id = item.get("chunk_id")
+            stage = item.get("stage")
+            if chunk_id and stage:
+                keys.add((str(chunk_id), str(stage)))
+        return len(keys)
+
+    return read
+
+
 def build_job_service(settings: Settings) -> JobService:
     filesystem, store, queue = _infrastructure(settings)
     provider, model = translation_pin_from_settings(settings)
@@ -62,6 +86,9 @@ def build_job_service(settings: Settings) -> JobService:
         storage_path=settings.storage_path,
         disk_jobs=filesystem,
         max_recovery_attempts=settings.max_recovery_attempts,
+        max_stalled_runs=settings.max_stalled_runs,
+        max_job_runs=settings.max_job_runs,
+        progress_marker_reader=_progress_marker_reader(settings),
         translation_provider=provider,
         translation_model=model,
         available_profiles=profiles,
@@ -366,6 +393,8 @@ def build_orchestrator(
         translation_concurrency=settings.chunk_translation_concurrency,
         tts_concurrency=settings.chunk_tts_concurrency,
         chapter_pause_ms=settings.narrate_chapter_pause_ms,
+        max_stalled_runs=settings.max_stalled_runs,
+        max_job_runs=settings.max_job_runs,
         # Built only for jobs that opted in, so a missing LLM key never fails other jobs.
         text_normalizer=(
             build_text_normalizer(normalizer_settings) if normalizer_settings is not None else None
@@ -535,7 +564,7 @@ def build_audio_processor(settings: Settings) -> AudioProcessor:
     if settings.tts_provider.strip().lower() == "fake":
         return FakeAudioProcessor()
     return FFmpegAudioProcessor(
-        encode_timeout_ceiling_seconds=float(settings.rq_job_timeout_seconds),
+        encode_timeout_ceiling_seconds=float(settings.effective_job_run_budget_seconds),
     )
 
 

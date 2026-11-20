@@ -331,7 +331,7 @@ async def test_orchestrator_caps_concurrency_at_provider_max_concurrency(tmp_pat
 
 
 @pytest.mark.anyio
-async def test_recovery_attempts_preserved_when_intermediate_chunk_fails(tmp_path: Path) -> None:
+async def test_recovery_attempts_preserved_when_the_first_chunk_fails(tmp_path: Path) -> None:
     from dataclasses import replace
 
     job = replace(
@@ -351,7 +351,7 @@ async def test_recovery_attempts_preserved_when_intermediate_chunk_fails(tmp_pat
                 raise DomainError(ErrorType.TRANSLATION_FAILED, "chunk failure")
             return await super().translate(text, source_language, target_language)
 
-    story = "Chunk one ok. Chunk two fail."
+    story = "fail this chunk. second is fine."
     orchestrator, workspace, store = _concurrency_orchestrator(
         tmp_path,
         job=job,
