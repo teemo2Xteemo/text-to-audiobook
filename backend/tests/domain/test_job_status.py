@@ -2,6 +2,7 @@ import pytest
 
 from app.domain.jobs import (
     IllegalJobTransition,
+    JobMode,
     JobStatus,
     assert_legal_transition,
     can_transition,
@@ -79,6 +80,22 @@ def test_is_terminal() -> None:
     assert is_terminal(JobStatus.FAILED)
     assert not is_terminal(JobStatus.QUEUED)
     assert not is_terminal(JobStatus.GENERATING_AUDIO)
+
+
+def test_subtitle_may_skip_tts_stages() -> None:
+    assert can_transition(JobStatus.TRANSLATING, JobStatus.MERGING, mode=JobMode.SUBTITLE)
+    assert_legal_transition(JobStatus.TRANSLATING, JobStatus.MERGING, mode=JobMode.SUBTITLE)
+    assert not can_transition(JobStatus.PARSING, JobStatus.MERGING, mode=JobMode.SUBTITLE)
+    assert not can_transition(
+        JobStatus.TRANSLATING, JobStatus.GENERATING_AUDIO, mode=JobMode.SUBTITLE
+    )
+
+
+@pytest.mark.parametrize("mode", [None, JobMode.TRANSLATE, JobMode.NARRATE, JobMode.UNKNOWN])
+def test_translate_and_narrate_cannot_skip_tts_stages(mode: JobMode | None) -> None:
+    assert not can_transition(JobStatus.TRANSLATING, JobStatus.MERGING, mode=mode)
+    with pytest.raises(IllegalJobTransition):
+        assert_legal_transition(JobStatus.TRANSLATING, JobStatus.MERGING, mode=mode)
 
 
 def test_is_at_or_past_forward_pipeline() -> None:

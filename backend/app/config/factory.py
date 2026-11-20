@@ -363,6 +363,24 @@ def build_capabilities_service(settings: Settings) -> CapabilitiesService:
     )
 
 
+class _UnusedTTS:
+    """Stand-in for translate-only jobs. Synthesize is never called."""
+
+    def voices_for(self, language: str) -> list[object]:
+        del language
+        return []
+
+    def languages(self) -> set[str]:
+        return set()
+
+    def all_voices(self) -> list[object]:
+        return []
+
+    async def synthesize(self, text: str, language: str, voice: str, settings: object) -> object:
+        del text, language, voice, settings
+        raise ProviderConfigurationError("subtitle jobs do not synthesize audio")
+
+
 def build_orchestrator(
     settings: Settings,
     *,
@@ -379,9 +397,11 @@ def build_orchestrator(
         translation = NullTranslationProvider()
     else:
         translation = build_translation_provider(settings)
+    # Translate-only never speaks, so a missing TTS key must not block the job.
+    tts = _UnusedTTS() if for_mode is JobMode.SUBTITLE else build_tts_provider(settings)
     return PipelineOrchestrator(
         translation=translation,
-        tts=build_tts_provider(settings),
+        tts=tts,
         narration=build_narration_processor(),
         detector=build_language_detector(settings),
         audio=build_audio_processor(settings),
@@ -514,7 +534,7 @@ def build_tts_engines(settings: Settings) -> dict[str, TTSProvider | None]:
 
 
 def settings_for_tts_pin(settings: Settings, job: Job) -> Settings:
-    if job.tts_engine is None:
+    if job.mode is JobMode.SUBTITLE or job.tts_engine is None:
         return settings
     return settings.model_copy(update={"tts_provider": job.tts_engine})
 

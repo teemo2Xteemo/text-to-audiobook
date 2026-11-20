@@ -5,6 +5,7 @@ import type {
   AnalyzeResponse,
   Capabilities,
   CreateJobInput,
+  DocumentFormat,
   JobMode,
   OutputFormat,
   SrtTiming,
@@ -23,6 +24,7 @@ import { utf8ByteLength } from "../lib/bytes";
 import { envDefaultSourceLanguage, envDefaultTargetLanguage } from "../lib/env";
 import {
   canGenerate,
+  detectSubtitleFormat,
   estimateTextMetrics,
   formatDuration,
   friendlyError,
@@ -35,6 +37,22 @@ import {
   voicesForTarget,
 } from "../lib/jobUi";
 import { StudioSelect, type StudioSelectOption } from "./StudioSelect";
+
+function readFileSample(file: File): Promise<string> {
+  const blob = file.slice(0, 65_536);
+  if (typeof blob.text === "function") {
+    return blob.text();
+  }
+  if (typeof file.text === "function") {
+    return file.text().then((value) => value.slice(0, 65_536));
+  }
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => resolve("");
+    reader.readAsText(blob);
+  });
+}
 
 type JobFormProps = {
   capabilities: Capabilities;
@@ -137,6 +155,11 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
   const [voiceId, setVoiceId] = useState("");
   const [speed, setSpeed] = useState(SPEED_DEFAULT);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("mp3");
+  const [outputDocumentFormat, setOutputDocumentFormat] = useState<DocumentFormat>("txt");
+  const [detectedDocumentFormat, setDetectedDocumentFormat] = useState<DocumentFormat | null>(
+    null,
+  );
+  const documentFormats: DocumentFormat[] = ["txt", "srt", "vtt", "ass"];
   const [srtTiming, setSrtTiming] = useState<SrtTiming>("continuous");
   const [normalizeText, setNormalizeText] = useState(false);
   const [text, setText] = useState("");
@@ -319,6 +342,25 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
   }, [capabilities.translation_profiles]);
 
   useEffect(() => {
+    if (mode !== "subtitle") {
+      setDetectedDocumentFormat(null);
+      return;
+    }
+    let cancelled = false;
+    async function sniff() {
+      const sample = file ? await readFileSample(file) : text;
+      const detected = detectSubtitleFormat(sample);
+      if (!cancelled) {
+        setDetectedDocumentFormat(detected);
+      }
+    }
+    void sniff();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, file, text]);
+
+  useEffect(() => {
     setVoiceId((current) => {
       if (current && targetVoices.some((voice) => voice.id === current)) {
         return current;
@@ -396,6 +438,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
     text,
     file,
     speed,
+    requiresVoice: mode !== "subtitle",
   });
 
   function handleTextChange(value: string) {
@@ -422,7 +465,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
     const lowerName = candidate.name.toLowerCase();
     const isAllowedExt = ALLOWED_FILE_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
     if (!isAllowedExt) {
-      return "Only .txt, .srt, and .vtt files are supported.";
+      return "Only .txt, .srt, .vtt, and .ass files are supported.";
     }
     if (candidate.size > maxUploadBytes) {
       return `File exceeds maximum allowed size of ${formatFileSize(maxUploadBytes)} (${formatFileSize(candidate.size)}).`;
@@ -533,19 +576,27 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
     if (!ready || disabled || pasteError) {
       return;
     }
+    const lockedFormat =
+      mode === "subtitle" ? (detectedDocumentFormat ?? outputDocumentFormat) : undefined;
     const input: CreateJobInput = {
       source_language: sourceLanguage,
       target_language: mode === "narrate" ? sourceLanguage : targetLanguage,
-      voice: voiceId || undefined,
+      voice: mode === "subtitle" ? undefined : voiceId || undefined,
       speed,
       output_format: outputFormat,
       translation_profile_id:
         mode === "narrate" ? undefined : (translationProfileId || undefined),
       mode,
-      ttsEngine: ttsEngine && ttsEngine !== defaultEngineId ? ttsEngine : undefined,
+      ttsEngine:
+        mode === "subtitle"
+          ? undefined
+          : ttsEngine && ttsEngine !== defaultEngineId
+            ? ttsEngine
+            : undefined,
       srt_timing: mode === "narrate" && isSubtitleInput ? srtTiming : undefined,
       normalize_text:
         mode === "narrate" && capabilities.text_normalization && normalizeText ? true : undefined,
+      document_format: lockedFormat,
     };
     if (file) {
       input.file = file;
@@ -589,6 +640,15 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
             >
               <span>Narrate</span>
               <span className="mode-pill-free">No model cost</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "subtitle"}
+              className={`mode-toggle-btn ${mode === "subtitle" ? "mode-toggle-btn-active" : ""}`}
+              onClick={() => handleModeChange("subtitle")}
+            >
+              Translate only
             </button>
           </div>
         </div>
@@ -637,7 +697,9 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
             <span className="section-hint">
               {mode === "narrate"
                 ? "Direct speech synthesis without translation"
-                : "Auto-detect or lock source language"}
+                : mode === "subtitle"
+                  ? "Translate subtitles or text. No audio."
+                  : "Auto-detect or lock source language"}
             </span>
           </div>
 
@@ -660,7 +722,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
               }
             />
 
-            {mode === "translate" && (
+            {mode !== "narrate" && (
               <>
                 <button
                   type="button"
@@ -792,9 +854,31 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
               </span>
             </label>
           ) : null}
+
+          {mode === "subtitle" ? (
+            <div className="format-toggle" role="group" aria-label="Output format">
+              {documentFormats.map((fmt) => {
+                const locked = detectedDocumentFormat !== null;
+                const pressed = (detectedDocumentFormat ?? outputDocumentFormat) === fmt;
+                return (
+                  <button
+                    key={fmt}
+                    type="button"
+                    className={`mode-toggle-btn ${pressed ? "mode-toggle-btn-active" : ""}`}
+                    aria-pressed={pressed}
+                    disabled={disabled || (locked && !pressed)}
+                    onClick={() => setOutputDocumentFormat(fmt)}
+                  >
+                    .{fmt}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
 
         {/* Voice & Mastering */}
+        {mode !== "subtitle" ? (
         <div className="form-section">
           <div className="section-label-row">
             <span className="section-title">
@@ -923,6 +1007,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
             </div>
           </div>
         </div>
+        ) : null}
 
         {/* Story / SRT Input */}
         <div className="form-section">
@@ -1043,7 +1128,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
                   />
                 </svg>
                 <div>
-                  <label htmlFor="story-file">Or upload a .txt or .srt file</label>
+                  <label htmlFor="story-file">Or upload a .txt, .srt, .vtt, or .ass file</label>
                   <p className="upload-subtext">
                     Drag &amp; drop or browse · Supports <code>.txt</code> and <code>.srt</code>{" "}
                     subtitle scripts (UTF-8)
@@ -1065,7 +1150,7 @@ export function JobForm({ capabilities, disabled, onSubmit, createErrorType }: J
               ref={fileInputRef}
               id="story-file"
               type="file"
-              accept=".txt,.srt,.vtt,text/plain,text/vtt"
+              accept=".txt,.srt,.vtt,.ass,text/plain,text/vtt,text/x-ssa"
               onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
             />
 

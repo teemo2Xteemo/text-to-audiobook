@@ -35,6 +35,8 @@ export default function App() {
   const currentJob = jobFromView(job);
   const audioUrl = job.status === "success" ? job.job.audio_url : null;
   const subtitlesUrl = job.status === "success" ? job.job.subtitles_url : null;
+  const documentUrl = job.status === "success" ? (job.job.document_url ?? null) : null;
+  const lineTotal = job.status === "success" ? (job.job.line_total ?? 0) : 0;
 
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
 
@@ -183,6 +185,15 @@ export default function App() {
               src={playerSrc(apiBaseUrl(), audioUrl)}
               subtitlesSrc={subtitlesUrl ? playerSrc(apiBaseUrl(), subtitlesUrl) : null}
             />
+          ) : null}
+
+          {documentUrl ? (
+            <section className="panel download-panel" aria-label="Translation download">
+              <p className="download-count">Translated {lineTotal} / {lineTotal} lines</p>
+              <a className="btn-generate download-link" href={playerSrc(apiBaseUrl(), documentUrl)}>
+                Download translation
+              </a>
+            </section>
           ) : null}
 
           <section className="panel workflow-card" aria-label="Studio pipeline overview">

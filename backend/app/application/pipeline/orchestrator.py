@@ -38,10 +38,27 @@ from app.application.pipeline.narrate_plan import (
     save_narrate_plan,
 )
 from app.application.pipeline.normalize import normalize_chunk
-from app.application.pipeline.parse import is_srt_document, parse_source
+from app.application.pipeline.parse import is_srt_document, parse_source, prepare_narration_text
 from app.application.pipeline.parse_srt import parse_srt_cues, serialize_srt_cues
 from app.application.pipeline.retry import with_chunk_retry
 from app.application.pipeline.speech_normalization import normalization_problem
+from app.application.pipeline.subtitle_batch import (
+    estimate_duration_ms,
+    join_batch,
+    pack_batches,
+    split_batch,
+)
+from app.application.pipeline.subtitle_formats import (
+    detect_document_format,
+    parse_document,
+    render_document,
+    write_timed_document,
+)
+from app.application.pipeline.subtitle_sentences import (
+    assign_cue_texts,
+    group_sentences,
+    split_long_line,
+)
 from app.application.pipeline.timeline import schedule_srt_timeline
 from app.application.pipeline.translate import translate_chunk
 from app.application.pipeline.tts import select_voice, synthesize_chunk
@@ -73,6 +90,7 @@ from app.domain.ports import (
 )
 from app.domain.retry import RetryPolicy
 from app.domain.srt import SRTCue, TimedChunk
+from app.domain.subtitles import SUBTITLE_FORMATS, DocumentFormat, SubtitleDocument
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +224,11 @@ class PipelineOrchestrator:
                 job = replace(job, run_baseline_marker=self._run_baseline)
                 await self._jobs.save(job)
             job = await self._advance(job, JobStatus.PARSING)
-            if job.mode == JobMode.NARRATE and not (
+            if job.mode is JobMode.SUBTITLE:
+                result = await self._run_subtitle(
+                    job, text, workspace=workspace, checkpoints=checkpoints
+                )
+            elif job.mode == JobMode.NARRATE and not (
                 job.srt_timing is SrtTiming.ALIGNED and is_srt_document(text)
             ):
                 result = await self._run_narrate(
@@ -395,6 +417,94 @@ class PipelineOrchestrator:
 
         return await self._advance(job, JobStatus.COMPLETED)
 
+    async def _run_subtitle(
+        self,
+        job: Job,
+        text: str,
+        *,
+        workspace: Path,
+        checkpoints: CheckpointStore,
+    ) -> Job:
+        """Translate subtitles or text and write ``output.<fmt>``. No TTS."""
+        detected = detect_document_format(text)
+        doc = parse_document(text) if detected in SUBTITLE_FORMATS else None
+        if doc is not None and job.document_format is not doc.format:
+            job = replace(job, document_format=doc.format)
+        groups: list[list[int]] = []
+        layout: list[int | None] | None = None
+        if doc is not None:
+            groups = group_sentences(doc.cues)
+            units = [" ".join(doc.cues[index].text for index in group) for group in groups]
+            line_total = sum(1 for cue in doc.cues if cue.translatable)
+        else:
+            prepared = prepare_narration_text(text)
+            units = []
+            layout = []
+            for line in prepared.split("\n") if prepared else []:
+                collapsed = " ".join(line.split())
+                if collapsed:
+                    layout.append(len(units))
+                    units.append(collapsed)
+                else:
+                    layout.append(None)
+            line_total = len(units)
+            if not units:
+                raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+
+        sample = " ".join(units) if units else text[:8192]
+        resolved = await resolve_source_language(sample, job.source_language, self._detector)
+        batches = pack_batches(units, self._max_chars) if units else []
+        chunks = [
+            Chunk(
+                id=f"chunk-{number:03d}",
+                text=join_batch([units[index] for index in batch]),
+                index=number,
+            )
+            for number, batch in enumerate(batches, start=1)
+        ]
+        job = replace(
+            job,
+            source_language=resolved,
+            chunk_current=0 if job.status is JobStatus.PARSING else job.chunk_current,
+            chunk_total=len(chunks),
+            line_total=line_total,
+        )
+        await self._jobs.save(job)
+        job = await self._advance(job, JobStatus.TRANSLATING)
+        same_language = job.source_language == job.target_language
+
+        if doc is not None and (same_language or not groups):
+            rendered = render_document(doc, [cue.raw for cue in doc.cues])
+            if job.status is JobStatus.TRANSLATING:
+                job = replace(job, chunk_current=job.chunk_total)
+                await self._jobs.save(job)
+        else:
+            if same_language:
+                translated_units = list(units)
+                if job.status is JobStatus.TRANSLATING:
+                    job = replace(job, chunk_current=job.chunk_total)
+                    await self._jobs.save(job)
+            else:
+                job = await self._translate_chunks(
+                    job, chunks, workspace, checkpoints, batched=True
+                )
+                translated_units = _read_translated_units(chunks, batches, workspace)
+            rendered = _compose_subtitle_text(job, doc, groups, layout, translated_units)
+
+        fmt = job.document_format
+        if fmt is None:
+            raise DomainError(ErrorType.INVALID_INPUT, "document_format is required")
+        job = await self._advance(job, JobStatus.MERGING)
+        output = workspace / f"output.{fmt.value}"
+        output.write_bytes(rendered.encode("utf-8"))
+        if not _nonempty(output):
+            raise DomainError(ErrorType.STORAGE_FAILED, "failed to write translated document")
+        logger.info(
+            "pipeline_merged",
+            extra={"job_id": job.id, "chunk_id": None, "stage": "merging"},
+        )
+        return await self._advance(job, JobStatus.COMPLETED)
+
     async def _pass_through_chunks(
         self,
         job: Job,
@@ -561,6 +671,8 @@ class PipelineOrchestrator:
         chunks: list[Chunk],
         workspace: Path,
         checkpoints: CheckpointStore,
+        *,
+        batched: bool = False,
     ) -> Job:
         job = await self._reset_chunk_progress(job, JobStatus.TRANSLATING)
         lock = asyncio.Lock()
@@ -593,9 +705,13 @@ class PipelineOrchestrator:
                             checkpoints.record(chunk.id, STAGE_TRANSLATED, path)
                     else:
 
-                        async def _translate(text: str = chunk.text) -> str:
+                        async def _translate() -> str:
+                            if batched:
+                                return await self._translate_batch(
+                                    job, chunk, workspace, checkpoints, lock
+                                )
                             return await translate_chunk(
-                                text,
+                                chunk.text,
                                 source_language=job.source_language,
                                 target_language=job.target_language,
                                 provider=self._translation,
@@ -665,6 +781,85 @@ class PipelineOrchestrator:
         if self._budget_exhausted() and not queue.empty():
             raise _BudgetYield(job)
         return job
+
+    async def _translate_batch(
+        self,
+        job: Job,
+        chunk: Chunk,
+        workspace: Path,
+        checkpoints: CheckpointStore,
+        lock: asyncio.Lock,
+    ) -> str:
+        """Translate one newline-separated batch. Fall back per line on a bad count.
+
+        Each fallback line is checkpointed, so a resume does not repeat it and a
+        line cannot drift onto another line's cues.
+        """
+        source_lines = [line.strip() for line in chunk.text.split("\n") if line.strip()]
+        if not source_lines:
+            return ""
+        sentences: list[str | None] = [None] * len(source_lines)
+        for index in range(len(source_lines)):
+            sentence_id = f"{chunk.id}.s{index:03d}"
+            path = workspace / "chunks" / f"{sentence_id}.translated.txt"
+            if checkpoints.is_complete(sentence_id, STAGE_TRANSLATED):
+                stored = path.read_text(encoding="utf-8").strip()
+                sentences[index] = stored or source_lines[index]
+        missing = [index for index, value in enumerate(sentences) if value is None]
+        if not missing:
+            return join_batch([value or "" for value in sentences])
+
+        if len(missing) == len(source_lines):
+            translated = await translate_chunk(
+                chunk.text,
+                source_language=job.source_language,
+                target_language=job.target_language,
+                provider=self._translation,
+            )
+            parts = split_batch(translated, len(source_lines))
+            if parts is not None:
+                return join_batch(parts)
+
+        for index in missing:
+            if self._budget_exhausted() and any(value is not None for value in sentences):
+                raise _BudgetYield(job)
+            line = source_lines[index]
+            sentence_id = f"{chunk.id}.s{index:03d}"
+            path = workspace / "chunks" / f"{sentence_id}.translated.txt"
+            filled = False
+            if self._artifact_cache is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                filled = self._artifact_cache.fill_translation(
+                    text=line,
+                    source_language=job.source_language,
+                    target_language=job.target_language,
+                    destination=path,
+                    job_id=job.id,
+                    chunk_id=sentence_id,
+                )
+            if not filled:
+                translated = await translate_chunk(
+                    line,
+                    source_language=job.source_language,
+                    target_language=job.target_language,
+                    provider=self._translation,
+                )
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(translated.strip() or line, encoding="utf-8")
+                if self._artifact_cache is not None:
+                    self._artifact_cache.store_translation(
+                        text=line,
+                        source_language=job.source_language,
+                        target_language=job.target_language,
+                        source=path,
+                        job_id=job.id,
+                        chunk_id=sentence_id,
+                    )
+            stored = path.read_text(encoding="utf-8").strip() or line
+            async with lock:
+                checkpoints.record(sentence_id, STAGE_TRANSLATED, path)
+            sentences[index] = stored
+        return join_batch([value or "" for value in sentences])
 
     async def _narrate_chunks(
         self,
@@ -1348,7 +1543,7 @@ class PipelineOrchestrator:
     async def _advance(self, job: Job, status: JobStatus) -> Job:
         if is_at_or_past(job.status, status):
             return job
-        assert_legal_transition(job.status, status)
+        assert_legal_transition(job.status, status, mode=job.mode)
         reset_progress = status in {
             JobStatus.TRANSLATING,
             JobStatus.PREPARING_TTS,
@@ -1426,3 +1621,48 @@ def _place_artifact(source: Path, destination: Path) -> None:
 
 def _nonempty(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
+
+
+def _read_translated_units(
+    chunks: list[Chunk], batches: list[list[int]], workspace: Path
+) -> list[str]:
+    units: list[str] = []
+    for chunk, batch in zip(chunks, batches, strict=True):
+        raw = (workspace / "chunks" / f"{chunk.id}.translated.txt").read_text(encoding="utf-8")
+        parts = split_batch(raw, len(batch))
+        if parts is None:
+            raise DomainError(ErrorType.TRANSLATION_FAILED, "translated batch could not be split")
+        units.extend(parts)
+    return units
+
+
+def _compose_subtitle_text(
+    job: Job,
+    doc: SubtitleDocument | None,
+    groups: list[list[int]],
+    layout: list[int | None] | None,
+    translated_units: list[str],
+) -> str:
+    if doc is not None:
+        return render_document(doc, assign_cue_texts(doc.cues, groups, translated_units))
+    fmt = job.document_format
+    if fmt is None or fmt is DocumentFormat.TXT:
+        lines: list[str] = []
+        for item in layout or []:
+            if item is None:
+                lines.append("")
+            else:
+                lines.append(translated_units[item] or "")
+        body = "\n".join(lines)
+        return body + "\n" if body else ""
+    cues: list[tuple[int, int, str]] = []
+    cursor = 0
+    for line in translated_units:
+        pieces = split_long_line(line) or [line]
+        for piece in pieces:
+            duration = estimate_duration_ms(piece)
+            cues.append((cursor, cursor + duration, piece))
+            cursor += duration
+    if not cues:
+        raise DomainError(ErrorType.INVALID_INPUT, "text is required")
+    return write_timed_document(fmt, cues)

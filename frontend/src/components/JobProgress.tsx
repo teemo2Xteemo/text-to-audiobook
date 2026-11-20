@@ -28,6 +28,7 @@ export function JobProgress({
     job.run_count ?? 0,
     job.chapters_ready ?? 0,
     job.chapters_total ?? 0,
+    job.line_total ?? 0,
   );
   const percent = computeProgressPercent(job.status, job.chunk_current, job.chunk_total);
   const steps = pipelineStepsForMode(job.mode);
@@ -105,9 +106,17 @@ export function JobProgress({
         <span className="telemetry-tag">
           {job.source_language} → {job.target_language}
         </span>
-        {job.voice ? <span className="telemetry-tag">{job.voice}</span> : null}
-        <span className="telemetry-tag">{job.speed}x</span>
-        <span className="telemetry-tag">{job.output_format.toUpperCase()}</span>
+        {job.mode === "subtitle" ? (
+          <span className="telemetry-tag">
+            {(job.document_format ?? "txt").toUpperCase()}
+          </span>
+        ) : (
+          <>
+            {job.voice ? <span className="telemetry-tag">{job.voice}</span> : null}
+            <span className="telemetry-tag">{job.speed}x</span>
+            <span className="telemetry-tag">{job.output_format.toUpperCase()}</span>
+          </>
+        )}
         {job.translation_provider ? (
           <span className="telemetry-tag">
             {job.translation_provider}

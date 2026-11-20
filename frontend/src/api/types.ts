@@ -8,7 +8,9 @@ export type JobStatus =
   | "completed"
   | "failed";
 
-export type JobMode = "translate" | "narrate";
+export type JobMode = "translate" | "narrate" | "subtitle";
+
+export type DocumentFormat = "txt" | "srt" | "vtt" | "ass";
 
 export type OutputFormat = "mp3" | "wav";
 
@@ -93,6 +95,9 @@ export type JobStatusResponse = {
   tts_engine?: string | null;
   continue_with_edge?: boolean;
   tts_mix_warning?: string | null;
+  document_url?: string | null;
+  document_format?: DocumentFormat | null;
+  line_total?: number;
 };
 
 export type ChapterAudioStatus = "pending" | "generating" | "ready" | "failed";
@@ -147,6 +152,7 @@ export type CreateJobInput = {
   srt_timing?: SrtTiming;
   normalize_text?: boolean;
   ttsEngine?: string;
+  document_format?: DocumentFormat;
 };
 
 export type CreateJobPayload = CreateJobInput;

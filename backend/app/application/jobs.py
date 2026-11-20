@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
@@ -22,6 +23,7 @@ from app.application.pipeline.edge_fallback import (
     stamp_edge_on_unfinished,
 )
 from app.application.pipeline.parse import is_srt_document, strip_srt
+from app.application.pipeline.subtitle_formats import detect_document_format
 from app.application.pipeline.tts import resolve_voice
 from app.domain.audio import SPEED_DEFAULT, ensure_valid_speed
 from app.domain.chapters import ChapterManifest, chapter_disk_name, display_filename
@@ -46,6 +48,7 @@ from app.domain.ports import (
     SourceTextStorage,
     TTSProvider,
 )
+from app.domain.subtitles import SUBTITLE_FORMATS, DocumentFormat
 from app.domain.translation_profile import TranslationProfile
 
 logger = logging.getLogger(__name__)
@@ -64,6 +67,8 @@ class CreateJobCommand:
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
     tts_engine: str | None = None
+    document_format: str | None = None
+    source_filename: str | None = None
 
 
 class JobService:
@@ -125,15 +130,24 @@ class JobService:
     async def create(self, command: CreateJobCommand) -> Job:
         source_language = command.source_language.strip()
         target_language = command.target_language.strip()
-        ensure_valid_speed(command.speed)
+        subtitle = command.mode is JobMode.SUBTITLE
+        if not subtitle:
+            ensure_valid_speed(command.speed)
         text = command.text.strip()
         if not text:
             raise DomainError(ErrorType.INVALID_INPUT, "text is required")
-        output_format = _parse_output_format(command.output_format)
-        voice = command.voice.strip() if command.voice and command.voice.strip() else None
-        tts_engine = (command.tts_engine or "").strip().lower() or None
+        if subtitle:
+            output_format = OutputFormat.MP3
+            voice = None
+            tts_engine = None
+            speed = SPEED_DEFAULT
+        else:
+            output_format = _parse_output_format(command.output_format)
+            voice = command.voice.strip() if command.voice and command.voice.strip() else None
+            tts_engine = (command.tts_engine or "").strip().lower() or None
+            speed = command.speed
         tts = self._tts
-        if tts_engine is not None:
+        if not subtitle and tts_engine is not None:
             if tts_engine not in self._tts_engines:
                 raise DomainError(
                     ErrorType.INVALID_INPUT, f"tts_engine is not enabled: {tts_engine[:32]}"
@@ -151,14 +165,14 @@ class JobService:
                     ErrorType.PROVIDER_CONFIGURATION_ERROR,
                     f"{engine_label(tts_engine)} is not available right now",
                 )
-        if tts is not None:
+        if not subtitle and tts is not None:
             await refresh_engine_voices(tts, backoff_seconds=0)
-        if command.normalize_text and command.mode is not JobMode.NARRATE:
+        if command.normalize_text and command.mode is not JobMode.NARRATE and not subtitle:
             # Translate already runs an LLM; a second rewrite would also stretch SRT timing.
             raise DomainError(
                 ErrorType.INVALID_INPUT, "normalize_text is only supported in narrate mode"
             )
-        if command.normalize_text and not self._text_normalization_available:
+        if command.normalize_text and not subtitle and not self._text_normalization_available:
             raise DomainError(
                 ErrorType.PROVIDER_CONFIGURATION_ERROR,
                 "text normalization is not configured on this server",
@@ -217,13 +231,13 @@ class JobService:
             target_language = resolved_target
             voice = resolved_voice
         else:
-            if command.srt_timing is not SrtTiming.CONTINUOUS:
+            if not subtitle and command.srt_timing is not SrtTiming.CONTINUOUS:
                 # Translate mode always voices subtitles on their cue timeline.
                 raise DomainError(
                     ErrorType.INVALID_INPUT, "srt_timing is only supported in narrate mode"
                 )
             ensure_valid_languages(source_language, target_language)
-            if tts is not None and (voice is not None or tts_engine is not None):
+            if not subtitle and tts is not None and (voice is not None or tts_engine is not None):
                 # A pinned engine must cover the target language before we pay for translation.
                 checked = resolve_voice(tts, target_language, voice)
                 if voice is not None:
@@ -277,6 +291,20 @@ class JobService:
                         ),
                     )
 
+        if command.mode is not JobMode.SUBTITLE and command.document_format:
+            raise DomainError(
+                ErrorType.INVALID_INPUT, "document_format is only supported in subtitle mode"
+            )
+        document_format: DocumentFormat | None = None
+        source_name: str | None = None
+        if subtitle:
+            detected = detect_document_format(text)
+            if detected in SUBTITLE_FORMATS:
+                document_format = detected
+            else:
+                document_format = _parse_document_format(command.document_format)
+            source_name = sanitize_source_name(command.source_filename)
+
         job_id = str(uuid.uuid4())
         job = Job(
             id=job_id,
@@ -284,15 +312,17 @@ class JobService:
             source_language=source_language,
             target_language=target_language,
             voice=voice,
-            speed=command.speed,
+            speed=speed,
             output_format=output_format,
             output_bitrate_kbps=self._output_bitrate_kbps,
             translation_provider=translation_provider,
             translation_model=translation_model,
             mode=command.mode,
-            srt_timing=command.srt_timing,
-            normalize_text=command.normalize_text,
+            srt_timing=SrtTiming.CONTINUOUS if subtitle else command.srt_timing,
+            normalize_text=False if subtitle else command.normalize_text,
             tts_engine=tts_engine,
+            document_format=document_format,
+            source_name=source_name,
         )
         try:
             await self._source_storage.write_source(job_id, text)
@@ -740,6 +770,21 @@ class JobService:
     def output_subtitles_path(self, job: Job) -> Path:
         return self._job_directory(job.id) / "output.srt"
 
+    def output_document_path(self, job: Job) -> Path:
+        if job.document_format is None:
+            raise DomainError(ErrorType.INVALID_INPUT, "document_format is required")
+        directory = self._job_directory(job.id)
+        path = (directory / f"output.{job.document_format.value}").resolve()
+        if not path.is_relative_to(directory):
+            raise DomainError(ErrorType.INVALID_INPUT, "invalid document path")
+        return path
+
+    def document_download_name(self, job: Job) -> str:
+        stem = sanitize_source_name(job.source_name) or "translation"
+        language = re.sub(r"[^\w.-]+", "_", job.target_language).strip("._") or "translation"
+        fmt = job.document_format.value if job.document_format is not None else "txt"
+        return f"{stem}.{language}.{fmt}"
+
     def load_chapter_manifest(self, job_id: str) -> ChapterManifest | None:
         factory = self._chapter_manifest_factory
         if factory is None:
@@ -829,6 +874,31 @@ def _edge_continue_eligible(job: Job, *, default_engine: str) -> bool:
     if _effective_engine(job, default_engine) == EDGE_ENGINE:
         return False
     return is_tts_engine_failure(job)
+
+
+_UNSAFE_NAME = re.compile(r"[^\w.-]+")
+
+
+def sanitize_source_name(filename: str | None) -> str | None:
+    """Basename stem safe for storage and Content-Disposition."""
+    if filename is None:
+        return None
+    base = filename.replace("\\", "/").split("/")[-1]
+    stem = Path(base).stem
+    cleaned = _UNSAFE_NAME.sub("_", stem)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._")[:80]
+    return cleaned or None
+
+
+def _parse_document_format(value: str | None) -> DocumentFormat:
+    if value is None or not value.strip():
+        return DocumentFormat.TXT
+    try:
+        return DocumentFormat(value.strip().lower().lstrip("."))
+    except ValueError:
+        raise DomainError(
+            ErrorType.INVALID_INPUT, "document_format must be txt, srt, vtt or ass"
+        ) from None
 
 
 def _parse_output_format(value: str) -> OutputFormat:

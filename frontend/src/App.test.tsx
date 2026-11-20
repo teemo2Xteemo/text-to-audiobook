@@ -79,6 +79,36 @@ describe("App", () => {
     expect(sessionStorage.getItem(LAST_JOB_STORAGE_KEY)).toBe(JOB_ID);
   });
 
+  it("shows a translation download for a completed subtitle job", async () => {
+    sessionStorage.setItem(LAST_JOB_STORAGE_KEY, JOB_ID);
+    mockFetch((url) => {
+      if (url.endsWith("/api/capabilities")) {
+        return jsonResponse(capabilitiesFixture);
+      }
+      if (url.endsWith(`/api/jobs/${JOB_ID}`)) {
+        return jsonResponse(
+          queuedJob({
+            status: "completed",
+            stage: "completed",
+            mode: "subtitle",
+            chunk_current: 2,
+            chunk_total: 2,
+            line_total: 3,
+            audio_url: null,
+            document_url: `/api/jobs/${JOB_ID}/document`,
+            document_format: "srt",
+          }),
+        );
+      }
+      return jsonResponse({ error_type: "INVALID_INPUT", message: `unexpected ${url}` }, 500);
+    });
+    render(<App />);
+    expect(await screen.findAllByText("Translated 3 / 3 lines")).not.toHaveLength(0);
+    const link = screen.getByRole("link", { name: "Download translation" });
+    expect(link).toHaveAttribute("href", `/api/jobs/${JOB_ID}/document`);
+    expect(screen.queryByLabelText("Generated audiobook")).toBeNull();
+  });
+
   it("restores the last job from sessionStorage", async () => {
     sessionStorage.setItem(LAST_JOB_STORAGE_KEY, JOB_ID);
     mockFetch((url) => {

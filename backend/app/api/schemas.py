@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, Field, model_serializer, model_validator
 
 from app.domain.audio import SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, Voice
 from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat, SrtTiming
+from app.domain.subtitles import DocumentFormat
 
 
 class ErrorEnvelope(BaseModel):
@@ -47,6 +48,9 @@ class JobStatusResponse(BaseModel):
     zip_url: str | None = None
     continue_with_edge: bool = False
     tts_mix_warning: str | None = None
+    document_url: str | None = None
+    document_format: DocumentFormat | None = None
+    line_total: int = 0
 
     @model_serializer(mode="wrap")
     def _omit_absent_pin(self, handler: object) -> dict[str, object]:
@@ -71,8 +75,12 @@ class JobStatusResponse(BaseModel):
         zip_url: str | None = None,
         continue_with_edge: bool = False,
         tts_mix_warning: str | None = None,
+        document_url: str | None = None,
     ) -> JobStatusResponse:
-        audio_url = f"/api/jobs/{job.id}/audio" if job.status is JobStatus.COMPLETED else None
+        if job.mode is JobMode.SUBTITLE or job.status is not JobStatus.COMPLETED:
+            audio_url = None
+        else:
+            audio_url = f"/api/jobs/{job.id}/audio"
         return cls(
             job_id=job.id,
             status=job.status,
@@ -102,6 +110,9 @@ class JobStatusResponse(BaseModel):
             zip_url=zip_url,
             continue_with_edge=continue_with_edge,
             tts_mix_warning=tts_mix_warning,
+            document_url=document_url,
+            document_format=job.document_format,
+            line_total=job.line_total,
         )
 
 
@@ -117,6 +128,24 @@ class CreateJobJsonBody(BaseModel):
     srt_timing: SrtTiming = SrtTiming.CONTINUOUS
     normalize_text: bool = False
     tts_engine: str | None = None
+    document_format: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_tts_fields_for_subtitle(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        mode = data.get("mode", JobMode.TRANSLATE)
+        if mode not in {JobMode.SUBTITLE, JobMode.SUBTITLE.value}:
+            return data
+        cleaned = dict(data)
+        cleaned["speed"] = SPEED_DEFAULT
+        cleaned["voice"] = None
+        cleaned["output_format"] = OutputFormat.MP3.value
+        cleaned["tts_engine"] = None
+        cleaned["normalize_text"] = False
+        cleaned["srt_timing"] = SrtTiming.CONTINUOUS.value
+        return cleaned
 
 
 class VoiceResponse(BaseModel):

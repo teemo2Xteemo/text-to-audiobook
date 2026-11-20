@@ -9,5 +9,5 @@ export const THEME_STORAGE_KEY = "audiobook_studio_theme";
 // Fallback only, used when capabilities.limits.max_upload_bytes is missing.
 // MAX_UPLOAD_BYTES on the API is the source of truth (default 50 MiB).
 export const MAX_FILE_SIZE_BYTES = 52_428_800;
-export const ALLOWED_FILE_EXTENSIONS = [".txt", ".srt", ".vtt"] as const;
+export const ALLOWED_FILE_EXTENSIONS = [".txt", ".srt", ".vtt", ".ass"] as const;
 
