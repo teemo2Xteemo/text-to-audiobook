@@ -272,13 +272,28 @@ curl -sS -X POST http://127.0.0.1:8000/api/analyze \
   ],
   "chapters_count": 10,
   "chapters_preview": [
-    {"index": 1, "title": "第一章 少年", "char_count": 2840}
+    {
+      "index": 1,
+      "ordinal": 1,
+      "kind": "chapter",
+      "title": "第一章 少年",
+      "char_count": 2840,
+      "chapter_number": 1
+    }
   ],
+  "chapters_span_count": 12,
+  "chapters_preview_truncated": false,
+  "chapter_detection_confidence": 0.97,
+  "chapter_detection_uncertain": false,
   "duration_estimate_seconds": 189.3,
   "process_time_estimate_seconds": 28.4,
   "preview_lines": ["第一章 少年", "..."]
 }
 ```
+
+`chapters_count` counts `kind: "chapter"` only. `chapters_span_count` counts every span, including a preface or volume. `index` and `ordinal` are the same unique 1-based span id. `chapter_number` is the printed chapter number and may restart after a volume; it is `null` for a preface or volume. When `chapter_detection_uncertain` is true, the narrate panel asks the user to check the list before generating. Preview returns at most 100 spans.
+
+A narrate job writes `chunks/narrate-plan.json` on its first split and reuses that plan if the worker resumes. Deploying a new heading detector therefore does not hand an already finished chunk's audio to different text. A job that already has checkpoints but no plan (started before this file existed) redoes any chunk whose saved text no longer matches the new split, instead of mixing the old audio into the new chapter.
 
 #### 3. Voice Audition Preview (`POST /api/tts/preview`)
 

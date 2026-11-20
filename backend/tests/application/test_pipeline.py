@@ -1262,6 +1262,114 @@ def test_narrate_job_resumes_from_checkpoints_after_failure(tmp_path: Path) -> N
     assert (workspace / "output.mp3").is_file()
 
 
+def test_corrupt_narrate_plan_is_ignored_and_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from app.application.pipeline.narrate_plan import load_narrate_plan
+
+    assert load_narrate_plan(tmp_path) is None
+    plan = tmp_path / "chunks" / "narrate-plan.json"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("{", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        assert load_narrate_plan(tmp_path) is None
+    assert any(record.message == "narrate_plan_unreadable" for record in caplog.records)
+
+
+def test_narrate_resume_reuses_saved_plan_when_detection_would_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    story = "Chapter 1: Alpha\n\nThe first body.\n\nChapter 2: Beta\n\nThe second body."
+    job = _job(
+        id="test-narrate-plan-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=job, languages=["en-US"], voices=_voices_for("en-US"), max_chars=500
+    )
+    first = _run(orchestrator, job, workspace, text=story)
+    assert first.status is JobStatus.COMPLETED
+    assert (workspace / "chunks" / "narrate-plan.json").is_file()
+    original = (workspace / "chunks" / "chunk-001.translated.txt").read_text(encoding="utf-8")
+    assert "Chapter 1: Alpha" in original
+
+    def _must_not_resplit(text: str) -> list:
+        raise AssertionError(f"resume must reuse narrate-plan.json, not re-split {text!r}")
+
+    monkeypatch.setattr(
+        "app.application.pipeline.orchestrator.split_chapters",
+        _must_not_resplit,
+    )
+    resume_job = replace(
+        first,
+        status=JobStatus.QUEUED,
+        chunk_current=0,
+        chunk_total=0,
+        error_type=None,
+        message=None,
+    )
+    fresh_tts = FakeTTSProvider(_voices_for("en-US"), tmp_path / "tts-plan-2")
+    orchestrator2, workspace2, *_ = _orchestrator(
+        tmp_path,
+        job=resume_job,
+        languages=["en-US"],
+        voices=_voices_for("en-US"),
+        tts=fresh_tts,
+        max_chars=500,
+    )
+    second = _run(orchestrator2, resume_job, workspace2, text=story)
+    assert second.status is JobStatus.COMPLETED
+    assert fresh_tts.calls == []
+    assert tts.calls  # the first run did synthesize
+    saved = (workspace / "chunks" / "chunk-001.translated.txt").read_text(encoding="utf-8")
+    assert saved == original
+
+
+def test_narrate_resume_redoes_a_chunk_whose_saved_text_no_longer_matches(tmp_path: Path) -> None:
+    story = "Chapter 1: Fresh\n\nA new body that is not the stale one."
+    job = _job(
+        id="test-narrate-stale-1",
+        source_language="en-US",
+        target_language="en-US",
+        mode=JobMode.NARRATE,
+        voice="voice-en-US",
+    )
+    orchestrator, workspace, _, _, tts, _, _, _ = _orchestrator(
+        tmp_path, job=job, languages=["en-US"], voices=_voices_for("en-US"), max_chars=500
+    )
+    stale = "STALE TEXT THAT MUST NOT BE SPOKEN"
+    chunk_dir = workspace / "chunks"
+    chunk_dir.mkdir(parents=True)
+    translated = chunk_dir / "chunk-001.translated.txt"
+    translated.write_text(stale, encoding="utf-8")
+    narrated = chunk_dir / "chunk-001.narrated.txt"
+    narrated.write_text(stale, encoding="utf-8")
+    audio_dir = workspace / "audio"
+    audio_dir.mkdir()
+    raw = audio_dir / "chunk-001.mp3"
+    raw.write_bytes(b"SEEDAUDIO")
+    normalized = audio_dir / "chunk-001.normalized.mp3"
+    normalized.write_bytes(b"SEEDAUDIO")
+    store = CheckpointStore(storage=CheckpointFilesystem(workspace))
+    store.record("chunk-001", STAGE_TRANSLATED, translated)
+    store.record("chunk-001", STAGE_NARRATED, narrated)
+    store.record("chunk-001", STAGE_TTS, raw)
+    store.record("chunk-001", STAGE_NORMALIZED, normalized)
+
+    result = _run(orchestrator, job, workspace, text=story)
+    assert result.status is JobStatus.COMPLETED
+    spoken = [call[0] for call in tts.calls]
+    assert spoken
+    assert all(stale not in text for text in spoken)
+    assert any("Chapter 1: Fresh" in text for text in spoken)
+    saved = (workspace / "chunks" / "chunk-001.translated.txt").read_text(encoding="utf-8")
+    assert stale not in saved
+    assert "Chapter 1: Fresh" in saved
+
+
 def test_narrate_mode_splits_chapters_and_preserves_titles(tmp_path: Path) -> None:
     job = _job(
         id="test-narrate-chapters-1",

@@ -549,6 +549,73 @@ describe("JobForm", () => {
     );
   });
 
+  it("shows chapter kinds and warns when detection is uncertain", async () => {
+    const user = userEvent.setup();
+    const fakeAnalyze = {
+      encoding: "UTF-8",
+      language: "vi-VN",
+      confidence: 0.95,
+      needs_confirmation: false,
+      candidates: [{ language: "vi-VN", confidence: 0.95 }],
+      chapters_count: 1,
+      chapter_detection_confidence: 0.62,
+      chapter_detection_uncertain: true,
+      chapters_preview: [
+        { index: 1, ordinal: 1, kind: "preface", title: "", char_count: 12, chapter_number: null },
+        {
+          index: 2,
+          ordinal: 2,
+          kind: "volume",
+          title: "Quyển 1: Sơn Môn",
+          char_count: 0,
+          chapter_number: null,
+        },
+        {
+          index: 3,
+          ordinal: 3,
+          kind: "chapter",
+          title: "Chương 1: Mở đầu",
+          char_count: 40,
+          chapter_number: 1,
+        },
+      ],
+      duration_estimate_seconds: 30,
+      process_time_estimate_seconds: 4,
+      preview_lines: ["Lời nói đầu"],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/analyze")) {
+          return new Response(JSON.stringify(fakeAnalyze), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={vi.fn()} />);
+    await user.type(screen.getByLabelText("Paste story"), "Chương 1");
+
+    expect(
+      await screen.findByText(
+        "Chapter detection is uncertain — please check the list before generating.",
+      ),
+    ).toBeInTheDocument();
+    const items = within(screen.getByRole("list", { name: "Detected chapters" })).getAllByRole(
+      "listitem",
+    );
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent("Preface");
+    expect(items[1]).toHaveTextContent("Volume");
+    expect(items[1]).toHaveTextContent("Quyển 1: Sơn Môn");
+    expect(items[2]).toHaveTextContent("Chapter");
+    expect(items[2]).toHaveTextContent("Chương 1: Mở đầu");
+  });
+
   it("displays friendly error message when preview tts times out", async () => {
     const user = userEvent.setup();
     const fakeAnalyze = {

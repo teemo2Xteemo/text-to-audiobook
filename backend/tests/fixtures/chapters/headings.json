@@ -1,0 +1,1385 @@
+{
+  "about": "One row per issue #34 corpus line. Add a row here; do not add a new test function. scope=line checks is_chapter_heading and a one-line document. scope=document checks split_chapters on `document` and, when set, `keep_titles`. group=must must pass. group=tradeoff is the known-trade-off set (CC2, CC3, Z2, Y2, T2, T4). xfail=true means the target is not met yet; the row stays. Finding ids are in `source`.",
+  "rows": [
+    {
+      "id": "N1-space",
+      "source": "N1",
+      "lang": "zh",
+      "line": "第一章 天才少年",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N1-colon",
+      "source": "N1",
+      "lang": "zh",
+      "line": "第一章：天才",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N1-ideo",
+      "source": "N1",
+      "lang": "zh",
+      "line": "第一章　天才少年",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N1-hui",
+      "source": "N1",
+      "lang": "zh",
+      "line": "第二回 宝玉",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N1-glued",
+      "source": "N1",
+      "lang": "zh",
+      "line": "第一章天才少年",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N1-bracket",
+      "source": "N1",
+      "lang": "zh",
+      "line": "第1章「开端」",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N1-lenticular",
+      "source": "N1",
+      "lang": "zh",
+      "line": "第3章【突破】",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N1-title-marks",
+      "source": "N1",
+      "lang": "zh",
+      "line": "第4章《重逢》",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "M5-fullwidth",
+      "source": "M5",
+      "lang": "zh",
+      "line": "第１章 开端",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "M5-bare",
+      "source": "M5",
+      "lang": "zh",
+      "line": "第十二章",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "S1-hui-ideo",
+      "source": "S1",
+      "lang": "zh",
+      "line": "第一回　启程",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "S1-jie-ideo",
+      "source": "S1",
+      "lang": "zh",
+      "line": "第一节　概述",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R1-volume",
+      "source": "R1",
+      "lang": "zh",
+      "line": "第一卷 少年出山",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "S1-volume-ideo",
+      "source": "S1",
+      "lang": "zh",
+      "line": "第一卷　少年出山",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "M5-huihe",
+      "source": "M5",
+      "lang": "zh",
+      "line": "第三回合，他一拳打向…",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "M5-class",
+      "source": "M5",
+      "lang": "zh",
+      "line": "第一节课，老师说…",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "M5-juanru",
+      "source": "M5",
+      "lang": "zh",
+      "line": "第二卷入…",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R2-zh-glued",
+      "source": "R2",
+      "lang": "zh",
+      "line": "第一回见到他时他很紧张",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R1-doc",
+      "source": "R1",
+      "lang": "zh",
+      "line": "第一卷 少年出山",
+      "expect": "detect",
+      "group": "must",
+      "scope": "document",
+      "kind": "volume",
+      "document": "第一卷 少年出山\n第一章 天才少年\n正文内容在这里。\n",
+      "keep_titles": [
+        "第一卷 少年出山",
+        "第一章 天才少年"
+      ],
+      "notes": "Volume plus chapter. Both titles are kept; the volume is kind=volume."
+    },
+    {
+      "id": "S2-doc",
+      "source": "S2",
+      "lang": "zh",
+      "line": "第一章 一",
+      "expect": "detect",
+      "group": "must",
+      "scope": "document",
+      "document": "序言\n前言。\n第一卷 上\n第一章 一\n正文一。\n第二卷 下\n第一章 二\n正文二。\n",
+      "keep_titles": [
+        "第一卷 上",
+        "第一章 一",
+        "第二卷 下",
+        "第一章 二"
+      ],
+      "notes": "Preface, two volumes, and a restarted 第一章. No shared index."
+    },
+    {
+      "id": "M5-single",
+      "source": "M5",
+      "lang": "en",
+      "line": "Chapter 1: The Only One",
+      "expect": "detect",
+      "group": "must",
+      "scope": "document",
+      "document": "Chapter 1: The Only One\nContent\n",
+      "notes": "A text with exactly one heading keeps that heading."
+    },
+    {
+      "id": "M5-preface",
+      "source": "M5",
+      "lang": "zh",
+      "line": "第一章 启程",
+      "expect": "detect",
+      "group": "must",
+      "scope": "document",
+      "document": "序言\n这是一段前言。\n第一章 启程\n正文开始。\n",
+      "keep_titles": [
+        "第一章 启程"
+      ],
+      "notes": "Preface text is its own span and is not a heading line."
+    },
+    {
+      "id": "T1-vi",
+      "source": "T1",
+      "lang": "vi",
+      "line": "Chương 1: Mở đầu",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "S1-nbsp",
+      "source": "S1",
+      "lang": "vi",
+      "line": "Chương 1 Mở đầu",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "T3-nbsp-colon",
+      "source": "T3",
+      "lang": "vi",
+      "line": "Chương 1 : Mở đầu",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "S3-vi-dot",
+      "source": "S3",
+      "lang": "vi",
+      "line": "Chương 12.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R2-vi-comma",
+      "source": "R2",
+      "lang": "vi",
+      "line": "Chương 5: Gió, mưa và lửa",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U1-ellipsis",
+      "source": "U1",
+      "lang": "vi",
+      "line": "Chương 5: Đêm...",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U1-ellipsis-char",
+      "source": "U1",
+      "lang": "vi",
+      "line": "Chương 5: Đêm…",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U1-period",
+      "source": "U1",
+      "lang": "vi",
+      "line": "Chương 10: Kết thúc.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U1-tap",
+      "source": "U1",
+      "lang": "vi",
+      "line": "Tập 2: Đi.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X1-vi",
+      "source": "X1",
+      "lang": "vi",
+      "line": "Chương 1. Kết thúc.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-post",
+      "source": "V1",
+      "lang": "vi",
+      "line": "Chương 7: Người Đưa Thư",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-elder",
+      "source": "V1",
+      "lang": "vi",
+      "line": "Chương 3: Ông Lão Bí Ẩn",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-hero",
+      "source": "V1",
+      "lang": "vi",
+      "line": "Chương 3: Anh Hùng Xạ Điêu",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-han-title",
+      "source": "V1",
+      "lang": "vi",
+      "line": "Chương 3: Hắn Là Ai",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-wind",
+      "source": "V1",
+      "lang": "vi",
+      "line": "Chương 2: Khi Gió Nổi",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-years",
+      "source": "V1",
+      "lang": "vi",
+      "line": "Chương 8: Năm Tháng Vô Tình",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X2-han-title",
+      "source": "X2",
+      "lang": "vi",
+      "line": "Chương 9: Hắn Là Thiên Tài Sao",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X2-no-title",
+      "source": "X2",
+      "lang": "vi",
+      "line": "Chương 9: Nó Đến Rồi Đây Này",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "Y1-elder-dot",
+      "source": "Y1",
+      "lang": "vi",
+      "line": "Chương 3: Ông Lão.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "Z1-ta-title",
+      "source": "Z1",
+      "lang": "vi",
+      "line": "Chương 3: Ta Trở Về.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "Z1-nang-title",
+      "source": "Z1",
+      "lang": "vi",
+      "line": "Chương 7: Nàng Là Ai",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "AA1-girl",
+      "source": "AA1",
+      "lang": "vi",
+      "line": "Chương 12: Cô gái áo trắng trên lầu",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "AA1-elder",
+      "source": "AA1",
+      "lang": "vi",
+      "line": "Chương 4: Lão già bí ẩn ở núi",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "AA1-medicine",
+      "source": "AA1",
+      "lang": "vi",
+      "line": "Chương 5: Y thuật thần kỳ của ta",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "AA1-hero",
+      "source": "AA1",
+      "lang": "vi",
+      "line": "Chương 6: Anh hùng xuất thiếu niên",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "AA1-demon",
+      "source": "AA1",
+      "lang": "vi",
+      "line": "Chương 9: Bà la sát hiện thân",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "AA1-girl-dot",
+      "source": "AA1",
+      "lang": "vi",
+      "line": "Chương 2: Cô gái.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "AA1-control",
+      "source": "AA1",
+      "lang": "vi",
+      "line": "Chương 1: Thiếu niên áo trắng xuất hiện",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "BB1-ancestor",
+      "source": "BB1",
+      "lang": "vi",
+      "line": "Chương 4: Lão tổ lại xuất thế",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "BB1-hero-back",
+      "source": "BB1",
+      "lang": "vi",
+      "line": "Chương 3: Anh hùng đã trở lại nơi cũ",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "BB1-lost",
+      "source": "BB1",
+      "lang": "vi",
+      "line": "Chương 8: Cô gái đi lạc giữa rừng sâu",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "BB1-waiting",
+      "source": "BB1",
+      "lang": "vi",
+      "line": "Chương 15: Ông lão đang chờ ở cổng",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V2-battle",
+      "source": "V2",
+      "lang": "vi",
+      "line": "Chương 12: Trận chiến cuối cùng trên đỉnh núi.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V2-rain",
+      "source": "V2",
+      "lang": "vi",
+      "line": "Chương 4: Một ngày mưa gió ở kinh thành.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "CC1-brothers",
+      "source": "CC1",
+      "lang": "vi",
+      "line": "Chương 4: Chúng ta là anh em",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "CC1-depart",
+      "source": "CC1",
+      "lang": "vi",
+      "line": "Chương 9: Chúng ta lên đường thôi",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N2-age",
+      "source": "N2",
+      "lang": "vi",
+      "line": "Hồi 3 tuổi, tôi ở quê.",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R2-age-wrap",
+      "source": "R2",
+      "lang": "vi",
+      "line": "Hồi 3 tuổi tôi ở quê với bà",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-age",
+      "source": "V1",
+      "lang": "vi",
+      "line": "Hồi 3 tuổi, cậu bé ...",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "T1-prose",
+      "source": "T1",
+      "lang": "vi",
+      "line": "Chương 3. Ông ấy bước vào nhà.",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X2-han-prose",
+      "source": "X2",
+      "lang": "vi",
+      "line": "Chương 3: Hắn bước vào phòng vắng",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "CC1-chung-no",
+      "source": "CC1",
+      "lang": "vi",
+      "line": "Chương 3: Chúng nó …",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "Z1-ta-prose",
+      "source": "Z1",
+      "lang": "vi",
+      "line": "Chương 3: Ta bước vào căn phòng tối",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "Z1-nang-prose",
+      "source": "Z1",
+      "lang": "vi",
+      "line": "Chương 3: Nàng mỉm cười nhìn hắn rồi đi",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "BB1-anh-ay",
+      "source": "BB1",
+      "lang": "vi",
+      "line": "Chương 2: Anh ấy bước vào phòng",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "BB2-anh-ta",
+      "source": "BB2",
+      "lang": "vi",
+      "line": "Chương 1: Anh ta ngẩng đầu lên nhìn trời",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "BB1-co-ay",
+      "source": "BB1",
+      "lang": "vi",
+      "line": "Chương 2: Cô ấy mỉm cười rồi quay đi",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X3-han-short",
+      "source": "X3",
+      "lang": "vi",
+      "line": "Chương 3: Hắn bước vào phòng",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X3-nguoi",
+      "source": "X3",
+      "lang": "vi",
+      "line": "Chương 3: Người đàn ông bước vào căn phòng tối",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 55: Gió nổi\nNội dung năm mươi lăm đủ dài để không bị coi là tiêu đề ngắn.\n\nChương 56: Mưa đêm\nNội dung năm mươi sáu tiếp tục câu chuyện trong đêm mưa.\n\nChương 3: Người đàn ông bước vào căn phòng tối\nNội dung lạc giữa chương.\n\nChương 57: Lửa\nNội dung năm mươi bảy khép lại đoạn này.\n",
+      "keep_titles": [
+        "Chương 55: Gió nổi",
+        "Chương 56: Mưa đêm",
+        "Chương 57: Lửa"
+      ],
+      "notes": "Not pronoun-led. Rejected because chapter 3 breaks 55–57."
+    },
+    {
+      "id": "BB2-lao-gia",
+      "source": "BB2",
+      "lang": "vi",
+      "line": "Chương 2: Lão già nhếch mép cười lạnh lùng",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 55: Gió nổi\nNội dung năm mươi lăm đủ dài để không bị coi là tiêu đề ngắn.\n\nChương 56: Mưa đêm\nNội dung năm mươi sáu tiếp tục câu chuyện trong đêm mưa.\n\nChương 2: Lão già nhếch mép cười lạnh lùng\nNội dung lạc giữa chương.\n\nChương 57: Lửa\nNội dung năm mươi bảy khép lại đoạn này.\n",
+      "keep_titles": [
+        "Chương 55: Gió nổi",
+        "Chương 56: Mưa đêm",
+        "Chương 57: Lửa"
+      ]
+    },
+    {
+      "id": "BB2-lao-gia-2",
+      "source": "BB2",
+      "lang": "vi",
+      "line": "Chương 1: Lão giả khẽ gật đầu nói",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 55: Gió nổi\nNội dung năm mươi lăm đủ dài để không bị coi là tiêu đề ngắn.\n\nChương 56: Mưa đêm\nNội dung năm mươi sáu tiếp tục câu chuyện trong đêm mưa.\n\nChương 1: Lão giả khẽ gật đầu nói\nNội dung lạc giữa chương.\n\nChương 57: Lửa\nNội dung năm mươi bảy khép lại đoạn này.\n",
+      "keep_titles": [
+        "Chương 55: Gió nổi",
+        "Chương 56: Mưa đêm",
+        "Chương 57: Lửa"
+      ]
+    },
+    {
+      "id": "SEQ-stray-57",
+      "source": "SEQ",
+      "lang": "vi",
+      "line": "Chương 3: Ông lão bước vào căn phòng tối",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 55: Gió nổi\nNội dung năm mươi lăm đủ dài để không bị coi là tiêu đề ngắn.\n\nChương 56: Mưa đêm\nNội dung năm mươi sáu tiếp tục câu chuyện trong đêm mưa.\n\nChương 3: Ông lão bước vào căn phòng tối\nNội dung lạc giữa chương.\n\nChương 57: Lửa\nNội dung năm mươi bảy khép lại đoạn này.\n",
+      "keep_titles": [
+        "Chương 55: Gió nổi",
+        "Chương 56: Mưa đêm",
+        "Chương 57: Lửa"
+      ],
+      "notes": "Acceptance example: a stray Chương 3 inside chapter 57 is not split."
+    },
+    {
+      "id": "Y2-han-sentence",
+      "source": "Y2",
+      "lang": "vi",
+      "line": "Chương 9: Hắn là thiên tài sao",
+      "expect": "detect",
+      "group": "tradeoff",
+      "scope": "line",
+      "xfail": true,
+      "notes": "Target is detect. Kept as a reject so sentence-case pronoun prose like 'Hắn bước vào phòng vắng' is not a title. No verb list."
+    },
+    {
+      "id": "Z2-elder-dot",
+      "source": "Z2",
+      "lang": "vi",
+      "line": "Chương 3: Ông lão.",
+      "expect": "detect",
+      "group": "tradeoff",
+      "scope": "line"
+    },
+    {
+      "id": "CC3-ba-ay",
+      "source": "CC3",
+      "lang": "vi",
+      "line": "Chương 6: Bà ấy.",
+      "expect": "detect",
+      "group": "tradeoff",
+      "scope": "line"
+    },
+    {
+      "id": "CC3-anh-ay",
+      "source": "CC3",
+      "lang": "vi",
+      "line": "Chương 3: Anh ấy.",
+      "expect": "detect",
+      "group": "tradeoff",
+      "scope": "line"
+    },
+    {
+      "id": "CC2-elder-prose",
+      "source": "CC2",
+      "lang": "vi",
+      "line": "Chương 3: Ông lão bước vào căn phòng tối",
+      "expect": "reject",
+      "group": "tradeoff",
+      "scope": "document",
+      "document": "Chương 55: Gió nổi\nNội dung năm mươi lăm đủ dài để không bị coi là tiêu đề ngắn.\n\nChương 56: Mưa đêm\nNội dung năm mươi sáu tiếp tục câu chuyện trong đêm mưa.\n\nChương 3: Ông lão bước vào căn phòng tối\nNội dung lạc giữa chương.\n\nChương 57: Lửa\nNội dung năm mươi bảy khép lại đoạn này.\n",
+      "keep_titles": [
+        "Chương 55: Gió nổi",
+        "Chương 56: Mưa đêm",
+        "Chương 57: Lửa"
+      ],
+      "notes": "Line-level candidate. Document numbering rejects it."
+    },
+    {
+      "id": "CC2-anh-nhin",
+      "source": "CC2",
+      "lang": "vi",
+      "line": "Chương 5: Anh nhìn cô rồi lặng lẽ bỏ đi",
+      "expect": "reject",
+      "group": "tradeoff",
+      "scope": "document",
+      "document": "Chương 55: Gió nổi\nNội dung năm mươi lăm đủ dài để không bị coi là tiêu đề ngắn.\n\nChương 56: Mưa đêm\nNội dung năm mươi sáu tiếp tục câu chuyện trong đêm mưa.\n\nChương 5: Anh nhìn cô rồi lặng lẽ bỏ đi\nNội dung lạc giữa chương.\n\nChương 57: Lửa\nNội dung năm mươi bảy khép lại đoạn này.\n",
+      "keep_titles": [
+        "Chương 55: Gió nổi",
+        "Chương 56: Mưa đêm",
+        "Chương 57: Lửa"
+      ]
+    },
+    {
+      "id": "S3-chapter-i",
+      "source": "S3",
+      "lang": "en",
+      "line": "CHAPTER I.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "S3-beginning",
+      "source": "S3",
+      "lang": "en",
+      "line": "Chapter 1. The Beginning.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "S1-en-nbsp",
+      "source": "S1",
+      "lang": "en",
+      "line": "Chapter 1 The Beginning",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R2-hello",
+      "source": "R2",
+      "lang": "en",
+      "line": "Chapter 1: Hello, World",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R2-quotes",
+      "source": "R2",
+      "lang": "en",
+      "line": "Chapter 3: \"The Return\"",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U1-the-end",
+      "source": "U1",
+      "lang": "en",
+      "line": "Chapter 1: The End.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X1-the-end",
+      "source": "X1",
+      "lang": "en",
+      "line": "Chapter 1. The End.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-it-begins",
+      "source": "V1",
+      "lang": "en",
+      "line": "Chapter 2: It Begins",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-robot",
+      "source": "V1",
+      "lang": "en",
+      "line": "Chapter 4: I, Robot",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-none",
+      "source": "V1",
+      "lang": "en",
+      "line": "Chapter 6: And Then There Were None",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-legion",
+      "source": "V1",
+      "lang": "en",
+      "line": "Chapter 10: We Are Legion",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-so-long",
+      "source": "V1",
+      "lang": "en",
+      "line": "Chapter 3: So Long",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X2-dark",
+      "source": "X2",
+      "lang": "en",
+      "line": "Chapter 5: It Was a Dark Night",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "Y1-it-ends",
+      "source": "Y1",
+      "lang": "en",
+      "line": "Chapter 7: It Ends.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "Y1-we-rise",
+      "source": "Y1",
+      "lang": "en",
+      "line": "Chapter 5: We Rise.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "T2-iv",
+      "source": "T2",
+      "lang": "en",
+      "line": "Chapter IV",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "T2-xii",
+      "source": "T2",
+      "lang": "en",
+      "line": "CHAPTER XII.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "T2-book-ii",
+      "source": "T2",
+      "lang": "en",
+      "line": "Book II",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V2-boy",
+      "source": "V2",
+      "lang": "en",
+      "line": "Chapter 7: The Boy Who Lived.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V2-old-town",
+      "source": "V2",
+      "lang": "en",
+      "line": "Chapter 1: A Long Night in the Old Town.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V2-long-way",
+      "source": "V2",
+      "lang": "en",
+      "line": "Chapter 1: The Long Way Home.",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V3-iphone",
+      "source": "V3",
+      "lang": "en",
+      "line": "Chapter 9: iPhone",
+      "expect": "detect",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "N2-best",
+      "source": "N2",
+      "lang": "en",
+      "line": "Chapter 3 was the best part, he said.",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R2-best-wrap",
+      "source": "R2",
+      "lang": "en",
+      "line": "Chapter 3 was the best part of the",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "R2-i-think",
+      "source": "R2",
+      "lang": "en",
+      "line": "Chapter 3 I think was the",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-he-walked-space",
+      "source": "V1",
+      "lang": "en",
+      "line": "Chapter 3 He walked in",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "T1-he-walked-dot",
+      "source": "T1",
+      "lang": "en",
+      "line": "Chapter 3. He walked in.",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "T1-i-came",
+      "source": "T1",
+      "lang": "en",
+      "line": "Chapter 3: I came home late that night.",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U2-i-came",
+      "source": "U2",
+      "lang": "en",
+      "line": "Chapter 3: I came home late that night",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U2-dash",
+      "source": "U2",
+      "lang": "en",
+      "line": "Chapter 3 — he walked in",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U2-hyphen",
+      "source": "U2",
+      "lang": "en",
+      "line": "Chapter 3- and then he was gone",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "U1-he-left",
+      "source": "U1",
+      "lang": "en",
+      "line": "Chapter 3:He left.",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "V1-he-walked",
+      "source": "V1",
+      "lang": "en",
+      "line": "Chapter 3: He walked in",
+      "expect": "reject",
+      "group": "must",
+      "scope": "line"
+    },
+    {
+      "id": "X3-door",
+      "source": "X3",
+      "lang": "en",
+      "line": "Chapter 3. The door opened.",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chapter 55. The Road\nThey walked until the lamps went out and the river turned black.\n\nChapter 56. The Gate\nSomeone was waiting with a lantern and would not give a name.\n\nChapter 3. The door opened.\nHe said nothing and stepped inside as if the house were his.\n\nChapter 57. The Key\nThe key was cold and far too small for the lock.\n",
+      "keep_titles": [
+        "Chapter 55. The Road",
+        "Chapter 56. The Gate",
+        "Chapter 57. The Key"
+      ],
+      "notes": "Line-level candidate. Number 3 inside chapters 55–57 is not a split."
+    },
+    {
+      "id": "T2-mild",
+      "source": "T2",
+      "lang": "en",
+      "line": "Book mild",
+      "expect": "reject",
+      "group": "tradeoff",
+      "scope": "line",
+      "notes": "Ordinary word, not a Roman numeral."
+    },
+    {
+      "id": "T2-civil",
+      "source": "T2",
+      "lang": "en",
+      "line": "Act civil",
+      "expect": "reject",
+      "group": "tradeoff",
+      "scope": "line",
+      "notes": "Ordinary word, not a Roman numeral."
+    },
+    {
+      "id": "T2-lower-iv",
+      "source": "T2",
+      "lang": "en",
+      "line": "chapter iv",
+      "expect": "reject",
+      "group": "tradeoff",
+      "scope": "line",
+      "notes": "Lowercase Roman numerals are not detected."
+    },
+    {
+      "id": "T2-mixed-iv",
+      "source": "T2",
+      "lang": "en",
+      "line": "Chapter iv: Hi",
+      "expect": "reject",
+      "group": "tradeoff",
+      "scope": "line",
+      "notes": "Lowercase Roman numerals are not detected."
+    },
+    {
+      "id": "T4-the-end",
+      "source": "T4",
+      "lang": "en",
+      "line": "Chapter 2 The End.",
+      "expect": "detect",
+      "group": "tradeoff",
+      "scope": "line",
+      "notes": "Short title after a space. A trailing period alone is not prose."
+    },
+    {
+      "id": "T4-mr",
+      "source": "T4",
+      "lang": "en",
+      "line": "Chapter 1 Mr.",
+      "expect": "detect",
+      "group": "tradeoff",
+      "scope": "line",
+      "notes": "Short title after a space, including an abbreviation period."
+    },
+    {
+      "id": "C1-forward",
+      "source": "C1",
+      "lang": "zh",
+      "line": "第四章 丁",
+      "expect": "detect",
+      "group": "must",
+      "scope": "document",
+      "document": "第一章 甲\n正文第一章 甲。\n第二章 乙\n正文第二章 乙。\n第三十章 误\n正文第三十章 误。\n第四章 丁\n正文第四章 丁。\n第五章 戊\n正文第五章 戊。\n第六章 己\n正文第六章 己。\n第七章 庚\n正文第七章 庚。\n第八章 辛\n正文第八章 辛。\n第九章 壬\n正文第九章 壬。\n第十章 癸\n正文第十章 癸。\n",
+      "keep_titles": [
+        "第一章 甲",
+        "第二章 乙",
+        "第四章 丁",
+        "第五章 戊",
+        "第六章 己",
+        "第七章 庚",
+        "第八章 辛",
+        "第九章 壬",
+        "第十章 癸"
+      ],
+      "notes": "A forward typo 第三十章 must not hide chapters 4 through 10."
+    },
+    {
+      "id": "C1-forward-typo",
+      "source": "C1",
+      "lang": "zh",
+      "line": "第三十章 误",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "第一章 甲\n正文第一章 甲。\n第二章 乙\n正文第二章 乙。\n第三十章 误\n正文第三十章 误。\n第四章 丁\n正文第四章 丁。\n第五章 戊\n正文第五章 戊。\n第六章 己\n正文第六章 己。\n第七章 庚\n正文第七章 庚。\n第八章 辛\n正文第八章 辛。\n第九章 壬\n正文第九章 壬。\n第十章 癸\n正文第十章 癸。\n",
+      "keep_titles": [
+        "第一章 甲",
+        "第二章 乙",
+        "第四章 丁",
+        "第五章 戊",
+        "第六章 己",
+        "第七章 庚",
+        "第八章 辛",
+        "第九章 壬",
+        "第十章 癸"
+      ],
+      "notes": "The isolated jump is dropped; the run that continues from 2 is kept."
+    },
+    {
+      "id": "C1-backward",
+      "source": "C1",
+      "lang": "vi",
+      "line": "Chương 3: Lạc giữa chương năm mươi bảy",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 1: Mục 1\nNội dung mục 1.\nChương 2: Mục 2\nNội dung mục 2.\nChương 3: Mục 3\nNội dung mục 3.\nChương 4: Mục 4\nNội dung mục 4.\nChương 5: Mục 5\nNội dung mục 5.\nChương 6: Mục 6\nNội dung mục 6.\nChương 7: Mục 7\nNội dung mục 7.\nChương 8: Mục 8\nNội dung mục 8.\nChương 9: Mục 9\nNội dung mục 9.\nChương 10: Mục 10\nNội dung mục 10.\nChương 11: Mục 11\nNội dung mục 11.\nChương 12: Mục 12\nNội dung mục 12.\nChương 13: Mục 13\nNội dung mục 13.\nChương 14: Mục 14\nNội dung mục 14.\nChương 15: Mục 15\nNội dung mục 15.\nChương 16: Mục 16\nNội dung mục 16.\nChương 17: Mục 17\nNội dung mục 17.\nChương 18: Mục 18\nNội dung mục 18.\nChương 19: Mục 19\nNội dung mục 19.\nChương 20: Mục 20\nNội dung mục 20.\nChương 21: Mục 21\nNội dung mục 21.\nChương 22: Mục 22\nNội dung mục 22.\nChương 23: Mục 23\nNội dung mục 23.\nChương 24: Mục 24\nNội dung mục 24.\nChương 25: Mục 25\nNội dung mục 25.\nChương 26: Mục 26\nNội dung mục 26.\nChương 27: Mục 27\nNội dung mục 27.\nChương 28: Mục 28\nNội dung mục 28.\nChương 29: Mục 29\nNội dung mục 29.\nChương 30: Mục 30\nNội dung mục 30.\nChương 31: Mục 31\nNội dung mục 31.\nChương 32: Mục 32\nNội dung mục 32.\nChương 33: Mục 33\nNội dung mục 33.\nChương 34: Mục 34\nNội dung mục 34.\nChương 35: Mục 35\nNội dung mục 35.\nChương 36: Mục 36\nNội dung mục 36.\nChương 37: Mục 37\nNội dung mục 37.\nChương 38: Mục 38\nNội dung mục 38.\nChương 39: Mục 39\nNội dung mục 39.\nChương 40: Mục 40\nNội dung mục 40.\nChương 41: Mục 41\nNội dung mục 41.\nChương 42: Mục 42\nNội dung mục 42.\nChương 43: Mục 43\nNội dung mục 43.\nChương 44: Mục 44\nNội dung mục 44.\nChương 45: Mục 45\nNội dung mục 45.\nChương 46: Mục 46\nNội dung mục 46.\nChương 47: Mục 47\nNội dung mục 47.\nChương 48: Mục 48\nNội dung mục 48.\nChương 49: Mục 49\nNội dung mục 49.\nChương 50: Mục 50\nNội dung mục 50.\nChương 51: Mục 51\nNội dung mục 51.\nChương 52: Mục 52\nNội dung mục 52.\nChương 53: Mục 53\nNội dung mục 53.\nChương 54: Mục 54\nNội dung mục 54.\nChương 55: Mục 55\nNội dung mục 55.\nChương 56: Mục 56\nNội dung mục 56.\nChương 57: Mục 57\nNội dung mục 57.\nChương 3: Lạc giữa chương năm mươi bảy\nNội dung mục 3.\nChương 58: Mục 58\nNội dung mục 58.\nChương 59: Mục 59\nNội dung mục 59.\nChương 60: Mục 60\nNội dung mục 60.\n",
+      "keep_titles": [
+        "Chương 57: Mục 57",
+        "Chương 58: Mục 58"
+      ],
+      "notes": "A backward stray between 57 and 58 is not a split."
+    },
+    {
+      "id": "C5-two-books",
+      "source": "C5",
+      "lang": "vi",
+      "line": "Chương 1: Sau",
+      "expect": "detect",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 1: Trước\nNội dung Trước 1.\nChương 2: Trước\nNội dung Trước 2.\nChương 3: Trước\nNội dung Trước 3.\nChương 4: Trước\nNội dung Trước 4.\nChương 5: Trước\nNội dung Trước 5.\nChương 1: Sau\nNội dung Sau 1.\nChương 2: Sau\nNội dung Sau 2.\nChương 3: Sau\nNội dung Sau 3.\nChương 4: Sau\nNội dung Sau 4.\nChương 5: Sau\nNội dung Sau 5.\n",
+      "keep_titles": [
+        "Chương 1: Trước",
+        "Chương 2: Trước",
+        "Chương 3: Trước",
+        "Chương 4: Trước",
+        "Chương 5: Trước",
+        "Chương 1: Sau",
+        "Chương 2: Sau",
+        "Chương 3: Sau",
+        "Chương 4: Sau",
+        "Chương 5: Sau"
+      ],
+      "notes": "A second book that restarts at 1 without a volume line is kept."
+    },
+    {
+      "id": "vi-small-jump-21-typo",
+      "source": "D1",
+      "lang": "vi",
+      "line": "Chương 21: Lỗi 21",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 1: Mục 1\nNội dung 1 dòng 0.\nChương 2: Mục 2\nNội dung 2 dòng 1.\nChương 3: Mục 3\nNội dung 3 dòng 2.\nChương 4: Mục 4\nNội dung 4 dòng 3.\nChương 5: Mục 5\nNội dung 5 dòng 4.\nChương 6: Mục 6\nNội dung 6 dòng 5.\nChương 7: Mục 7\nNội dung 7 dòng 6.\nChương 8: Mục 8\nNội dung 8 dòng 7.\nChương 9: Mục 9\nNội dung 9 dòng 8.\nChương 10: Mục 10\nNội dung 10 dòng 9.\nChương 11: Mục 11\nNội dung 11 dòng 10.\nChương 21: Lỗi 21\nNội dung 21 dòng 11.\nChương 13: Mục 13\nNội dung 13 dòng 12.\nChương 14: Mục 14\nNội dung 14 dòng 13.\nChương 15: Mục 15\nNội dung 15 dòng 14.\nChương 16: Mục 16\nNội dung 16 dòng 15.\nChương 17: Mục 17\nNội dung 17 dòng 16.\nChương 18: Mục 18\nNội dung 18 dòng 17.\nChương 19: Mục 19\nNội dung 19 dòng 18.\nChương 20: Mục 20\nNội dung 20 dòng 19.\nChương 21: Mục 21\nNội dung 21 dòng 20.\nChương 22: Mục 22\nNội dung 22 dòng 21.\nChương 23: Mục 23\nNội dung 23 dòng 22.\nChương 24: Mục 24\nNội dung 24 dòng 23.\nChương 25: Mục 25\nNội dung 25 dòng 24.\nChương 26: Mục 26\nNội dung 26 dòng 25.\nChương 27: Mục 27\nNội dung 27 dòng 26.\nChương 28: Mục 28\nNội dung 28 dòng 27.\nChương 29: Mục 29\nNội dung 29 dòng 28.\nChương 30: Mục 30\nNội dung 30 dòng 29.\n",
+      "keep_titles": [
+        "Chương 1: Mục 1",
+        "Chương 2: Mục 2",
+        "Chương 3: Mục 3",
+        "Chương 4: Mục 4",
+        "Chương 5: Mục 5",
+        "Chương 6: Mục 6",
+        "Chương 7: Mục 7",
+        "Chương 8: Mục 8",
+        "Chương 9: Mục 9",
+        "Chương 10: Mục 10",
+        "Chương 11: Mục 11",
+        "Chương 13: Mục 13",
+        "Chương 14: Mục 14",
+        "Chương 15: Mục 15",
+        "Chương 16: Mục 16",
+        "Chương 17: Mục 17",
+        "Chương 18: Mục 18",
+        "Chương 19: Mục 19",
+        "Chương 20: Mục 20",
+        "Chương 21: Mục 21",
+        "Chương 22: Mục 22",
+        "Chương 23: Mục 23",
+        "Chương 24: Mục 24",
+        "Chương 25: Mục 25",
+        "Chương 26: Mục 26",
+        "Chương 27: Mục 27",
+        "Chương 28: Mục 28",
+        "Chương 29: Mục 29",
+        "Chương 30: Mục 30"
+      ],
+      "notes": "12 written as 21"
+    },
+    {
+      "id": "vi-small-jump-16-typo",
+      "source": "D1",
+      "lang": "vi",
+      "line": "Chương 16: Lỗi 16",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 1: Mục 1\nNội dung 1 dòng 0.\nChương 2: Mục 2\nNội dung 2 dòng 1.\nChương 3: Mục 3\nNội dung 3 dòng 2.\nChương 4: Mục 4\nNội dung 4 dòng 3.\nChương 5: Mục 5\nNội dung 5 dòng 4.\nChương 16: Lỗi 16\nNội dung 16 dòng 5.\nChương 7: Mục 7\nNội dung 7 dòng 6.\nChương 8: Mục 8\nNội dung 8 dòng 7.\nChương 9: Mục 9\nNội dung 9 dòng 8.\nChương 10: Mục 10\nNội dung 10 dòng 9.\nChương 11: Mục 11\nNội dung 11 dòng 10.\nChương 12: Mục 12\nNội dung 12 dòng 11.\nChương 13: Mục 13\nNội dung 13 dòng 12.\nChương 14: Mục 14\nNội dung 14 dòng 13.\nChương 15: Mục 15\nNội dung 15 dòng 14.\nChương 16: Mục 16\nNội dung 16 dòng 15.\nChương 17: Mục 17\nNội dung 17 dòng 16.\nChương 18: Mục 18\nNội dung 18 dòng 17.\nChương 19: Mục 19\nNội dung 19 dòng 18.\nChương 20: Mục 20\nNội dung 20 dòng 19.\nChương 21: Mục 21\nNội dung 21 dòng 20.\nChương 22: Mục 22\nNội dung 22 dòng 21.\nChương 23: Mục 23\nNội dung 23 dòng 22.\nChương 24: Mục 24\nNội dung 24 dòng 23.\nChương 25: Mục 25\nNội dung 25 dòng 24.\n",
+      "keep_titles": [
+        "Chương 1: Mục 1",
+        "Chương 2: Mục 2",
+        "Chương 3: Mục 3",
+        "Chương 4: Mục 4",
+        "Chương 5: Mục 5",
+        "Chương 7: Mục 7",
+        "Chương 8: Mục 8",
+        "Chương 9: Mục 9",
+        "Chương 10: Mục 10",
+        "Chương 11: Mục 11",
+        "Chương 12: Mục 12",
+        "Chương 13: Mục 13",
+        "Chương 14: Mục 14",
+        "Chương 15: Mục 15",
+        "Chương 16: Mục 16",
+        "Chương 17: Mục 17",
+        "Chương 18: Mục 18",
+        "Chương 19: Mục 19",
+        "Chương 20: Mục 20",
+        "Chương 21: Mục 21",
+        "Chương 22: Mục 22",
+        "Chương 23: Mục 23",
+        "Chương 24: Mục 24",
+        "Chương 25: Mục 25"
+      ],
+      "notes": "6 written as 16"
+    },
+    {
+      "id": "vi-small-jump-early-typo",
+      "source": "D1",
+      "lang": "vi",
+      "line": "Chương 16: Lỗi 16",
+      "expect": "reject",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 1: Mục 1\nNội dung 1 dòng 0.\nChương 16: Lỗi 16\nNội dung 16 dòng 1.\nChương 3: Mục 3\nNội dung 3 dòng 2.\nChương 4: Mục 4\nNội dung 4 dòng 3.\nChương 5: Mục 5\nNội dung 5 dòng 4.\nChương 6: Mục 6\nNội dung 6 dòng 5.\nChương 7: Mục 7\nNội dung 7 dòng 6.\nChương 8: Mục 8\nNội dung 8 dòng 7.\nChương 9: Mục 9\nNội dung 9 dòng 8.\nChương 10: Mục 10\nNội dung 10 dòng 9.\nChương 11: Mục 11\nNội dung 11 dòng 10.\nChương 12: Mục 12\nNội dung 12 dòng 11.\nChương 13: Mục 13\nNội dung 13 dòng 12.\nChương 14: Mục 14\nNội dung 14 dòng 13.\nChương 15: Mục 15\nNội dung 15 dòng 14.\nChương 16: Mục 16\nNội dung 16 dòng 15.\nChương 17: Mục 17\nNội dung 17 dòng 16.\nChương 18: Mục 18\nNội dung 18 dòng 17.\nChương 19: Mục 19\nNội dung 19 dòng 18.\n",
+      "keep_titles": [
+        "Chương 1: Mục 1",
+        "Chương 3: Mục 3",
+        "Chương 4: Mục 4",
+        "Chương 5: Mục 5",
+        "Chương 6: Mục 6",
+        "Chương 7: Mục 7",
+        "Chương 8: Mục 8",
+        "Chương 9: Mục 9",
+        "Chương 10: Mục 10",
+        "Chương 11: Mục 11",
+        "Chương 12: Mục 12",
+        "Chương 13: Mục 13",
+        "Chương 14: Mục 14",
+        "Chương 15: Mục 15",
+        "Chương 16: Mục 16",
+        "Chương 17: Mục 17",
+        "Chương 18: Mục 18",
+        "Chương 19: Mục 19"
+      ],
+      "notes": "2 written as 16"
+    },
+    {
+      "id": "vi-real-gap-gap",
+      "source": "D1",
+      "lang": "vi",
+      "line": "Chương 12: Mục 12",
+      "expect": "detect",
+      "group": "must",
+      "scope": "document",
+      "document": "Chương 1: Mục 1\nNội dung 1 dòng 0.\nChương 2: Mục 2\nNội dung 2 dòng 1.\nChương 3: Mục 3\nNội dung 3 dòng 2.\nChương 4: Mục 4\nNội dung 4 dòng 3.\nChương 5: Mục 5\nNội dung 5 dòng 4.\nChương 6: Mục 6\nNội dung 6 dòng 5.\nChương 7: Mục 7\nNội dung 7 dòng 6.\nChương 8: Mục 8\nNội dung 8 dòng 7.\nChương 9: Mục 9\nNội dung 9 dòng 8.\nChương 10: Mục 10\nNội dung 10 dòng 9.\nChương 12: Mục 12\nNội dung 12 dòng 10.\nChương 13: Mục 13\nNội dung 13 dòng 11.\nChương 14: Mục 14\nNội dung 14 dòng 12.\nChương 15: Mục 15\nNội dung 15 dòng 13.\nChương 16: Mục 16\nNội dung 16 dòng 14.\nChương 17: Mục 17\nNội dung 17 dòng 15.\nChương 18: Mục 18\nNội dung 18 dòng 16.\nChương 19: Mục 19\nNội dung 19 dòng 17.\nChương 20: Mục 20\nNội dung 20 dòng 18.\n",
+      "keep_titles": [
+        "Chương 1: Mục 1",
+        "Chương 2: Mục 2",
+        "Chương 3: Mục 3",
+        "Chương 4: Mục 4",
+        "Chương 5: Mục 5",
+        "Chương 6: Mục 6",
+        "Chương 7: Mục 7",
+        "Chương 8: Mục 8",
+        "Chương 9: Mục 9",
+        "Chương 10: Mục 10",
+        "Chương 12: Mục 12",
+        "Chương 13: Mục 13",
+        "Chương 14: Mục 14",
+        "Chương 15: Mục 15",
+        "Chương 16: Mục 16",
+        "Chương 17: Mục 17",
+        "Chương 18: Mục 18",
+        "Chương 19: Mục 19",
+        "Chương 20: Mục 20"
+      ],
+      "notes": "real gap 10 then 12"
+    }
+  ]
+}

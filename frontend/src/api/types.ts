@@ -122,10 +122,17 @@ export type DetectLanguageResponse = {
   preview_lines: string[];
 };
 
+export type ChapterKind = "preface" | "volume" | "chapter";
+
 export type ChapterSummary = {
   index: number;
   title: string;
   char_count: number;
+  /** Unique 1-based span id. Equal to `index`. #29 file names should use this. */
+  ordinal?: number;
+  kind?: ChapterKind;
+  /** Printed chapter number. Null for preface and volume. May restart per volume. */
+  chapter_number?: number | null;
 };
 
 export type AnalyzeResponse = {
@@ -135,7 +142,12 @@ export type AnalyzeResponse = {
   needs_confirmation: boolean;
   candidates: LanguageCandidate[];
   chapters_count: number;
+  /** Every detected span, including ones past `chapters_preview`. */
+  chapters_span_count?: number;
   chapters_preview: ChapterSummary[];
+  chapters_preview_truncated?: boolean;
+  chapter_detection_confidence?: number;
+  chapter_detection_uncertain?: boolean;
   duration_estimate_seconds: number;
   process_time_estimate_seconds: number;
   preview_lines: string[];

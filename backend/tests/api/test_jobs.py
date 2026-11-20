@@ -909,10 +909,16 @@ def test_analyze_endpoint(client: TestClient) -> None:
     data = res.json()
     assert data["encoding"] == "utf-8"
     assert data["chapters_count"] == 2
+    assert data["chapters_span_count"] == 2
+    assert "confidence" not in data["chapters_preview"][0]
     assert "duration_estimate_seconds" in data
     assert "process_time_estimate_seconds" in data
     assert "preview_lines" in data
+    assert data["chapter_detection_uncertain"] is False
+    assert data["chapter_detection_confidence"] >= 0.8
     assert len(data["chapters_preview"]) == 2
+    assert data["chapters_preview"][0]["kind"] == "chapter"
+    assert data["chapters_preview"][0]["ordinal"] == 1
 
 
 def test_tts_preview_endpoint(client: TestClient) -> None:
@@ -964,11 +970,19 @@ def test_analyze_preface_and_volume_does_not_inflate_chapters_count(client: Test
     assert res.status_code == 200
     data = res.json()
     assert data["chapters_count"] == 2
-    # Chapters preview includes preface/volume with index=0, but chapters_count is 2
-    assert data["chapters_preview"][0]["index"] == 0
-    assert data["chapters_preview"][1]["index"] == 0
-    assert data["chapters_preview"][2]["index"] == 1
-    assert data["chapters_preview"][2]["title"] == "第一章 开端"
+    # Preface and volume stay in the preview but do not share index 0, and
+    # they are not counted as chapters.
+    assert data["chapter_detection_uncertain"] is False
+    assert data["chapters_preview_truncated"] is False
+    preview = data["chapters_preview"]
+    assert [item["kind"] for item in preview] == ["preface", "volume", "chapter", "chapter"]
+    assert [item["index"] for item in preview] == [1, 2, 3, 4]
+    assert [item["ordinal"] for item in preview] == [1, 2, 3, 4]
+    assert preview[2]["title"] == "第一章 开端"
+    assert preview[2]["chapter_number"] == 1
+    assert preview[3]["chapter_number"] == 2
+    assert preview[0]["chapter_number"] is None
+    assert preview[1]["chapter_number"] is None
 
 
 def test_analyze_empty_text(client: TestClient) -> None:

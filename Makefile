@@ -10,7 +10,8 @@ NPM ?= npm
 DOCKER_COMPOSE ?= docker compose
 
 .PHONY: help setup up up-build down restart logs build dev-hybrid dev-hybrid-build \
-	test-backend test-frontend test lint-backend format-backend typecheck-frontend lint check clean
+	test-backend test-frontend test lint-backend format-backend typecheck-frontend lint check clean \
+	chapters-eval
 
 help: ## Hiển thị hướng dẫn và danh sách các lệnh
 	@echo "Sử dụng: make [lệnh]"
@@ -60,6 +61,9 @@ dev-hybrid-build: ## Alias cũ của dev-hybrid (in cảnh báo rồi chạy dev
 
 test-backend: ## Chạy unit test backend với pytest
 	$(PYTEST) -m "not integration"
+
+chapters-eval: ## Precision/recall of chapter detection on labelled book excerpts
+	$(PYTEST) backend/tests/application/test_chapters_eval.py -q -s --tb=short
 
 test-frontend: ## Chạy unit test frontend với vitest
 	cd frontend && $(NPM) test
