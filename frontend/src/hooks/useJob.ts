@@ -36,9 +36,11 @@ export function useJob(): JobView & {
   submit: (input: CreateJobInput) => Promise<void>;
   continueWithEdge: (jobId: string) => Promise<void>;
   continuing: boolean;
+  continueError: string | null;
 } {
   const [view, setView] = useState<JobView>({ status: "idle" });
   const [continuing, setContinuing] = useState(false);
+  const [continueError, setContinueError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   const failureCountRef = useRef(0);
 
@@ -138,10 +140,12 @@ export function useJob(): JobView & {
     async (jobId: string) => {
       failureCountRef.current = 0;
       setContinuing(true);
+      setContinueError(null);
       try {
         await continueWithEdgeRequest(jobId);
         applyJob(await getJob(jobId));
       } catch (error) {
+        const apiError = toApiError(error);
         try {
           const latest = await getJob(jobId);
           if (latest.status !== "failed") {
@@ -151,11 +155,16 @@ export function useJob(): JobView & {
         } catch {
           // Keep the original failure when the follow-up read also fails.
         }
-        setView((current) => ({
-          status: "error",
-          error: toApiError(error),
-          job: current.status === "idle" ? undefined : current.job,
-        }));
+        setContinueError(apiError.message);
+        setView((current) => {
+          if (current.status === "idle") {
+            return { status: "error", error: apiError };
+          }
+          if (current.status === "error") {
+            return current;
+          }
+          return { status: "error", error: apiError, job: current.job };
+        });
       } finally {
         setContinuing(false);
       }
@@ -163,5 +172,5 @@ export function useJob(): JobView & {
     [applyJob],
   );
 
-  return { ...view, submit, continueWithEdge, continuing };
+  return { ...view, submit, continueWithEdge, continuing, continueError };
 }

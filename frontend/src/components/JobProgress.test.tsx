@@ -89,4 +89,24 @@ describe("JobProgress", () => {
     );
     expect(screen.queryByRole("button", { name: "Continue with Edge" })).toBeNull();
   });
+
+  it("shows an Edge availability error next to the button", () => {
+    render(
+      <JobProgress
+        job={queuedJob({
+          status: "failed",
+          stage: "failed",
+          error_type: "TTS_FAILED",
+          message: "tts connection failed",
+          continue_with_edge: true,
+          tts_mix_warning: "Later chapters use Edge. Finished chapters keep their original voice.",
+        })}
+        onContinueWithEdge={() => undefined}
+        continueError="Edge is not available right now"
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Continue with Edge" })).toBeInTheDocument();
+    expect(screen.getByText("Edge is not available right now")).toBeInTheDocument();
+    expect(screen.getByText(/Speech synthesis failed/)).toBeInTheDocument();
+  });
 });

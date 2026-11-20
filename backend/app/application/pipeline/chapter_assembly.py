@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from app.application.pipeline.checkpoint import STAGE_CHAPTER, STAGE_NORMALIZED, CheckpointStore
+from app.application.pipeline.edge_fallback import EDGE_CHAPTER_NOTE, EDGE_ENGINE
 from app.application.pipeline.merge import merge_artifacts
 from app.domain.chapters import (
     ChapterManifest,
@@ -186,9 +187,16 @@ async def _assemble_one(
 
 
 def _remember_engine(record: ChapterRecord, job: Job) -> None:
-    if record.tts_engine or not job.tts_engine:
+    """Stamp the engine that actually finished this chapter.
+
+    A crashed continue can leave an Edge note on a chapter before the job pin
+    changes. Becoming ready with the job's engine overwrites that label.
+    """
+    if not job.tts_engine:
         return
     record.tts_engine = job.tts_engine
+    if job.tts_engine != EDGE_ENGINE and record.note == EDGE_CHAPTER_NOTE:
+        record.note = None
 
 
 def _become(record: ChapterRecord, status: ChapterStatus) -> None:

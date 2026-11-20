@@ -77,10 +77,10 @@ class Settings(BaseSettings):
     tts_provider: str = Field(default="fake")
     # Comma list of extra engines a job may pin; the default engine is always allowed.
     tts_engines_enabled: str = Field(default="")
-    # Which engine the explicit "Continue with Edge" action pins. Empty hides the button.
-    # Scope off hides it too. chapter offers it for unfinished chapters only.
-    # There is no automatic engine switch.
-    tts_fallback_engine: str = Field(default="edge")
+    # Explicit "Continue with Edge" only. Empty hides the button. Any other value
+    # is rejected at startup. Scope off hides it too. chapter offers it for
+    # unfinished chapters. Nothing switches engines on its own.
+    tts_fallback_engine: Literal["", "edge"] = "edge"
     tts_fallback_scope: Literal["off", "chapter"] = "chapter"
     fish_audio_model: str = Field(default="s2.1-pro-free", min_length=1)
     fish_audio_api_key: SecretStr | None = Field(default=None)

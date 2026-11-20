@@ -55,7 +55,7 @@ _TRANSLATION_MARKERS = (
     "translation_provider",
     "when translation_provider",
 )
-_TTS_MARKERS = ("tts", "fish", "vieneu", "quota", "sidecar", "voice service", "voice engine")
+_TTS_MARKERS = ("tts", "fish", "vieneu", "sidecar", "voice service", "voice engine")
 _CHUNK_ID = re.compile(r"^chunk-\d+$")
 _RESYNTH_STAGES = frozenset({STAGE_TTS, STAGE_NORMALIZED})
 
@@ -67,19 +67,33 @@ def continuation_warning(manifest: ChapterManifest | None) -> str:
 
 
 def is_tts_engine_failure(job: Job) -> bool:
-    """True when this failure is the pinned voice engine, not translation or the run budget."""
+    """True when this failure is the pinned voice engine, not translation or the run budget.
+
+    A recorded ``error_stage`` wins. Message text is only a hint for jobs that
+    failed before stages were stored, or for a configuration error at queue time.
+    """
     if job.error_type not in _ENGINE_ERRORS:
         return False
     stage = job.error_stage
+    if stage is not None and stage not in _AUDIO_STAGES and stage != JobStatus.QUEUED.value:
+        return False
     message = (job.message or "").lower()
     if job.error_type is ErrorType.TTS_FAILED:
         return stage is None or stage in _AUDIO_STAGES
     if job.error_type is ErrorType.TIMEOUT:
         return "tts" in message and (stage is None or stage in _AUDIO_STAGES)
+    if stage in _AUDIO_STAGES:
+        return job.error_type in {
+            ErrorType.PROVIDER_RATE_LIMIT,
+            ErrorType.PROVIDER_CONFIGURATION_ERROR,
+        }
+    if (
+        stage == JobStatus.QUEUED.value
+        and job.error_type is not ErrorType.PROVIDER_CONFIGURATION_ERROR
+    ):
+        return False
     if _looks_like_translation(message) and not _looks_like_tts(message):
         return False
-    if stage in _AUDIO_STAGES:
-        return True
     if job.error_type is ErrorType.PROVIDER_RATE_LIMIT and stage is None:
         return job.mode is JobMode.NARRATE or _looks_like_tts(message)
     if job.error_type is ErrorType.PROVIDER_CONFIGURATION_ERROR and stage in {
@@ -88,13 +102,27 @@ def is_tts_engine_failure(job: Job) -> bool:
     }:
         pinned = (job.tts_engine or "").strip().lower()
         return _looks_like_tts(message) or pinned not in {"", "edge", "fake"}
-    return _looks_like_tts(message)
+    return False
 
 
-def manifest_has_engine_chapter_failure(manifest: ChapterManifest | None) -> bool:
+def stamp_edge_on_unfinished(manifest_store: ChapterManifestStore | None) -> None:
+    """Record Edge on chapters that are not ready. Call this after the job pin is saved."""
+    if manifest_store is None:
+        return
+    manifest = manifest_store.load()
     if manifest is None:
-        return False
-    return any(_chapter_engine_failure(chapter) for chapter in manifest.chapters)
+        return
+    changed = False
+    for record in manifest.chapters:
+        if record.status is ChapterStatus.READY:
+            continue
+        if record.tts_engine == EDGE_ENGINE and record.note == EDGE_CHAPTER_NOTE:
+            continue
+        record.tts_engine = EDGE_ENGINE
+        record.note = EDGE_CHAPTER_NOTE
+        changed = True
+    if changed:
+        manifest_store.save(manifest)
 
 
 def retarget_unfinished_chapters(
@@ -135,8 +163,7 @@ def retarget_unfinished_chapters(
         _unlink_under(workspace, workspace / chapter_disk_name(record.ordinal, ext))
         if record.status is not ChapterStatus.PENDING:
             record.invalidate()
-        record.tts_engine = EDGE_ENGINE
-        record.note = EDGE_CHAPTER_NOTE
+        # The Edge label is written only after the job pin is saved.
         changed = True
     if drop_ids:
         # Chunk rows are tts/normalized. The chapter file row is stage "chapter".
@@ -145,23 +172,6 @@ def retarget_unfinished_chapters(
         manifest_store.save(manifest)
     _unlink_output(workspace, ext)
     return warning
-
-
-def _chapter_engine_failure(record: ChapterRecord) -> bool:
-    if record.status is not ChapterStatus.FAILED or not record.error_type:
-        return False
-    try:
-        error_type = ErrorType(record.error_type)
-    except ValueError:
-        return False
-    if error_type is ErrorType.TTS_FAILED:
-        return True
-    message = (record.message or "").lower()
-    if error_type is ErrorType.TIMEOUT:
-        return "tts" in message
-    if error_type not in {ErrorType.PROVIDER_RATE_LIMIT, ErrorType.PROVIDER_CONFIGURATION_ERROR}:
-        return False
-    return _looks_like_tts(message) or not _looks_like_translation(message)
 
 
 def _looks_like_translation(message: str) -> bool:

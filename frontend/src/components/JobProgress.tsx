@@ -11,12 +11,14 @@ type JobProgressProps = {
   job: JobStatusResponse;
   onContinueWithEdge?: () => void;
   continuePending?: boolean;
+  continueError?: string | null;
 };
 
 export function JobProgress({
   job,
   onContinueWithEdge,
   continuePending = false,
+  continueError = null,
 }: JobProgressProps) {
   const copy = progressCopy(
     job.status,
@@ -128,6 +130,11 @@ export function JobProgress({
         >
           Continue with Edge
         </button>
+      ) : null}
+      {continueError ? (
+        <p className="alert-banner alert-error" role="alert">
+          {continueError}
+        </p>
       ) : null}
 
       {job.status === "failed" && (job.error_type || job.message) ? (() => {

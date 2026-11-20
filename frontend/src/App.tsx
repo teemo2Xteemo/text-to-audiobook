@@ -166,6 +166,7 @@ export default function App() {
             <JobProgress
               job={currentJob}
               continuePending={job.continuing}
+              continueError={job.continueError}
               onContinueWithEdge={() => void job.continueWithEdge(currentJob.job_id)}
             />
           ) : null}

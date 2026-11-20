@@ -150,6 +150,41 @@ def _failed(
     )
 
 
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (ErrorType.PROVIDER_RATE_LIMIT, "OpenRouter quota exceeded"),
+        (ErrorType.PROVIDER_CONFIGURATION_ERROR, "Gemini quota exceeded"),
+        (ErrorType.PROVIDER_RATE_LIMIT, "tts rate limited"),
+        (ErrorType.TTS_FAILED, "tts connection failed"),
+    ],
+)
+def test_translation_stage_is_not_a_voice_engine_failure(error: ErrorType, message: str) -> None:
+    job = _failed(
+        mode=JobMode.TRANSLATE,
+        error=error,
+        message=message,
+        stage="translating",
+    )
+    assert is_tts_engine_failure(job) is False
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (ErrorType.PROVIDER_RATE_LIMIT, "tts rate limited"),
+        (
+            ErrorType.PROVIDER_CONFIGURATION_ERROR,
+            "tts provider quota or plan limit reached (HTTP 402)",
+        ),
+        (ErrorType.TTS_FAILED, "tts connection failed"),
+    ],
+)
+def test_audio_stage_engine_errors_can_continue(error: ErrorType, message: str) -> None:
+    job = _failed(error=error, message=message, stage="generating_audio")
+    assert is_tts_engine_failure(job) is True
+
+
 def test_engine_failure_classifier_keeps_translation_and_worker_timeouts() -> None:
     fish = _failed()
     assert is_tts_engine_failure(fish)
@@ -260,18 +295,55 @@ def test_second_click_does_not_rebuild_and_a_locked_job_is_rejected(tmp_path: Pa
     asyncio.run(_locked())
 
 
-def test_paused_generating_job_with_an_engine_error_can_continue(tmp_path: Path) -> None:
+def test_continue_after_budget_yield_does_not_enqueue_a_second_run(tmp_path: Path) -> None:
     service, queue, filesystem = _service(tmp_path)
-    job = _failed(status=JobStatus.GENERATING_AUDIO)
+    job = replace(
+        _failed(status=JobStatus.GENERATING_AUDIO),
+        continue_requested=True,
+        run_count=2,
+    )
 
-    async def _go() -> Job:
+    async def _go() -> None:
         await filesystem.save_job(job)
-        return await service.continue_with_edge(job.id)
+        continued = await service.continue_if_requested(job.id)
+        assert continued is not None
+        assert continued.status is JobStatus.GENERATING_AUDIO
+        assert continued.continue_requested is False
+        assert continued.run_count == 3
+        assert queue.job_ids == [job.id]
+        offered, _warning = service.edge_continue_view(continued, None)
+        assert offered is False
+        with pytest.raises(DomainError, match="cannot continue"):
+            await service.continue_with_edge(job.id)
+        assert queue.job_ids == [job.id]
+        fresh = await filesystem.get_job(job.id)
+        assert fresh is not None
+        assert fresh.status is JobStatus.GENERATING_AUDIO
+        assert fresh.run_count == 3
+        assert fresh.tts_engine == "fish"
+        assert fresh.handled_rq_id is None
 
-    queued = asyncio.run(_go())
-    assert queued.status is JobStatus.QUEUED
-    assert queued.tts_engine == "edge"
-    assert queue.job_ids == [job.id]
+    asyncio.run(_go())
+
+
+def test_translation_quota_is_rejected_by_the_endpoint(tmp_path: Path) -> None:
+    service, queue, filesystem = _service(tmp_path)
+    job = _failed(
+        mode=JobMode.TRANSLATE,
+        error=ErrorType.PROVIDER_RATE_LIMIT,
+        message="OpenRouter quota exceeded",
+        stage="translating",
+    )
+
+    async def _go() -> None:
+        await filesystem.save_job(job)
+        offered, _warning = service.edge_continue_view(job, None)
+        assert offered is False
+        with pytest.raises(DomainError, match="voice engine"):
+            await service.continue_with_edge(job.id)
+
+    asyncio.run(_go())
+    assert queue.job_ids == []
 
 
 def test_fish_failure_keeps_chapter_one_and_resynthesizes_the_rest(tmp_path: Path) -> None:
@@ -546,3 +618,22 @@ def test_api_continue_with_edge_queues_and_rejects_a_translation_failure(
         rejected = client.post(f"/api/jobs/{job.id}/continue-with-edge")
         assert rejected.status_code == 409
         assert rejected.json()["message"] == "job did not fail because of the voice engine"
+        quota_id = "22222222-2222-4222-8222-222222222222"
+        quota = replace(
+            job,
+            id=quota_id,
+            status=JobStatus.FAILED,
+            error_type=ErrorType.PROVIDER_RATE_LIMIT,
+            message="OpenRouter quota exceeded",
+            error_stage="translating",
+            tts_engine="fish",
+            edge_fallback_note=None,
+        )
+        asyncio.run(filesystem.save_job(quota))
+        asyncio.run(store.save(quota))
+        listed = client.get(f"/api/jobs/{quota_id}")
+        assert listed.status_code == 200
+        assert listed.json()["continue_with_edge"] is False
+        quota_rejected = client.post(f"/api/jobs/{quota_id}/continue-with-edge")
+        assert quota_rejected.status_code == 409
+        assert quota_rejected.json()["message"] == "job did not fail because of the voice engine"

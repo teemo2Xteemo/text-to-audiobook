@@ -18,8 +18,8 @@ from app.application.pipeline.edge_fallback import (
     EDGE_ENGINE,
     continuation_warning,
     is_tts_engine_failure,
-    manifest_has_engine_chapter_failure,
     retarget_unfinished_chapters,
+    stamp_edge_on_unfinished,
 )
 from app.application.pipeline.parse import is_srt_document, strip_srt
 from app.application.pipeline.tts import resolve_voice
@@ -415,7 +415,7 @@ class JobService:
             return False, warning
         if _edge_continue_already_queued(job):
             return False, warning
-        if not _edge_continue_eligible(job, manifest, default_engine=self._default_tts_engine):
+        if not _edge_continue_eligible(job, default_engine=self._default_tts_engine):
             return False, warning
         return True, warning or continuation_warning(manifest)
 
@@ -448,15 +448,10 @@ class JobService:
             if _edge_continue_already_queued(current):
                 return current
             self._reject_unless_edge_continue(current)
-            if current.status is not JobStatus.FAILED:
-                assert_legal_transition(current.status, JobStatus.FAILED)
-                current = replace(
-                    current,
-                    status=JobStatus.FAILED,
-                    error_stage=current.error_stage or current.status.value,
-                )
-                await self._jobs.save(current)
             previous = _effective_engine(current, self._default_tts_engine)
+            # Drop old-engine audio before the pin changes. The Edge label on
+            # the manifest is written after that save, so a crash cannot leave
+            # "edge" on chapters while the job is still pinned to Fish.
             warning = self._retarget_for_edge(current, previous)
             assert_legal_transition(current.status, JobStatus.QUEUED)
             queued = replace(
@@ -479,6 +474,7 @@ class JobService:
                 edge_fallback_note=warning,
             )
             await self._jobs.save(queued)
+            self._stamp_edge_chapters(queued)
         await self._queue.enqueue(queued.id, run_count=0, keep_running=False)
         logger.info(
             "job_continue_with_edge",
@@ -492,8 +488,7 @@ class JobService:
         return queued
 
     def _reject_unless_edge_continue(self, job: Job) -> None:
-        manifest = self.load_chapter_manifest(job.id)
-        if _edge_continue_eligible(job, manifest, default_engine=self._default_tts_engine):
+        if _edge_continue_eligible(job, default_engine=self._default_tts_engine):
             return
         if _effective_engine(job, self._default_tts_engine) == EDGE_ENGINE:
             raise DomainError(ErrorType.INVALID_INPUT, "job already uses Edge")
@@ -536,6 +531,13 @@ class JobService:
             checkpoints=checkpoints,
             previous_engine=previous_engine,
         )
+
+    def _stamp_edge_chapters(self, job: Job) -> None:
+        factory = self._chapter_manifest_factory
+        workspace = self._job_directory(job.id)
+        if factory is None or not workspace.is_dir():
+            return
+        stamp_edge_on_unfinished(factory(workspace))
 
     @contextmanager
     def _exclusive_job_lock(self, job_id: str) -> Iterator[bool]:
@@ -820,20 +822,13 @@ def _edge_continue_already_queued(job: Job) -> bool:
     )
 
 
-def _edge_continue_eligible(
-    job: Job, manifest: ChapterManifest | None, *, default_engine: str
-) -> bool:
+def _edge_continue_eligible(job: Job, *, default_engine: str) -> bool:
+    """Only a failed voice-engine job. A yielded run still has its own RQ continuation."""
+    if job.status is not JobStatus.FAILED:
+        return False
     if _effective_engine(job, default_engine) == EDGE_ENGINE:
         return False
-    if job.continue_requested:
-        return False
-    if job.status is JobStatus.FAILED:
-        return is_tts_engine_failure(job)
-    if is_terminal(job.status):
-        return False
-    if is_tts_engine_failure(job):
-        return True
-    return manifest_has_engine_chapter_failure(manifest)
+    return is_tts_engine_failure(job)
 
 
 def _parse_output_format(value: str) -> OutputFormat:
