@@ -616,7 +616,7 @@ def test_narrate_yield_mid_chapter_does_not_publish_a_partial_file(
     second = _run(orchestrator, first, workspace, text=text, deadline=100)
     assert second.status is JobStatus.COMPLETED
     assert len(tts.calls) == len(chunks)
-    assert tts.calls[0][0] not in [call[0] for call in tts.calls[1:]]
+    assert [call[0] for call in tts.calls].count(tts.calls[0][0]) == 1
     # One merge per span, then one merge for the book. The partial chapter was not built early.
     assert len(audio.merge_calls) == len(spans) + 1
     assert (workspace / "chapters" / "0001.mp3").is_file()

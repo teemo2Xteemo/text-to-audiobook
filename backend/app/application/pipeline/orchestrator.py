@@ -31,9 +31,14 @@ from app.application.pipeline.chunk import chunk_source
 from app.application.pipeline.merge import merge_artifacts
 from app.application.pipeline.merge_srt import merge_srt_cues
 from app.application.pipeline.narrate import narrate_chunk
-from app.application.pipeline.narrate_plan import load_narrate_plan, save_narrate_plan
+from app.application.pipeline.narrate_plan import (
+    load_narrate_plan,
+    plan_narration_chunks,
+    prepared_narration_text,
+    save_narrate_plan,
+)
 from app.application.pipeline.normalize import normalize_chunk
-from app.application.pipeline.parse import is_srt_document, parse_source, prepare_narration_text
+from app.application.pipeline.parse import is_srt_document, parse_source
 from app.application.pipeline.parse_srt import parse_srt_cues, serialize_srt_cues
 from app.application.pipeline.retry import with_chunk_retry
 from app.application.pipeline.speech_normalization import normalization_problem
@@ -271,14 +276,14 @@ class PipelineOrchestrator:
         workspace: Path,
         checkpoints: CheckpointStore,
     ) -> Job:
-        normalized, resolved = await parse_source(text, job.source_language, self._detector)
-        cleaned_text = prepare_narration_text(normalized)
+        _, resolved = await parse_source(text, job.source_language, self._detector)
         chunks = self._chunks_for(
-            cleaned_text,
+            text,
             workspace,
             checkpoints,
             forget_on_plan=True,
             legacy_if_in_flight=False,
+            narration=True,
         )
         if not chunks:
             raise DomainError(ErrorType.INVALID_INPUT, "No readable text found for narration")
@@ -1041,6 +1046,7 @@ class PipelineOrchestrator:
         *,
         forget_on_plan: bool,
         legacy_if_in_flight: bool,
+        narration: bool = False,
     ) -> list[Chunk]:
         """Reuse the saved split. A job already in flight without one keeps the old packer.
 
@@ -1058,11 +1064,15 @@ class PipelineOrchestrator:
             return planned
         if legacy_if_in_flight and _legacy_chunk_progress(workspace, checkpoints):
             return chunk_source(text, max_chars=self._max_chars)
-        chapters = split_chapters(text)
-        chunks, spans = plan_chapter_chunks(chapters, max_chars=self._max_chars)
+        if narration:
+            source = prepared_narration_text(text)
+            chunks, spans = plan_narration_chunks(text, max_chars=self._max_chars)
+        else:
+            source = text
+            chunks, spans = plan_chapter_chunks(split_chapters(source), max_chars=self._max_chars)
         if not chunks:
-            if text.strip():
-                return chunk_source(text, max_chars=self._max_chars)
+            if source.strip():
+                return chunk_source(source, max_chars=self._max_chars)
             return []
         if self._chapter_manifest_factory is not None and spans:
             store = self._chapter_manifest_factory(workspace)

@@ -1697,6 +1697,8 @@ def test_unheaded_narrate_and_srt_keep_the_single_download(
     aligned_id = "15151515-1515-1515-1515-151515151515"
     _run_narrate_job(tmp_path, store, job_id=aligned_id, text=srt, srt_timing=SrtTiming.ALIGNED)
     aligned = jobs_client.get(f"/api/jobs/{aligned_id}").json()
+    # Analyze still counts one synthetic chapter for cue text. Aligned narration
+    # keeps a single timeline and writes no chapter manifest, so the job reports 0.
     assert aligned["chapters_total"] == 0
     assert aligned["chapters_url"] is None
     assert aligned["zip_url"] is None
