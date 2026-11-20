@@ -45,6 +45,33 @@ def refresh_translated_title(record: ChapterRecord, workspace: Path) -> None:
         record.title = first
 
 
+def invalidate_chapters_for_chunks(
+    *,
+    checkpoints: CheckpointStore,
+    store: ChapterManifestStore,
+    chunk_indexes: list[int],
+) -> None:
+    """Drop chapter files whose chunks were forgotten, so they are built again."""
+    if not chunk_indexes:
+        return
+    manifest = store.load()
+    if manifest is None:
+        return
+    dirty = False
+    seen: set[int] = set()
+    for index in chunk_indexes:
+        record = manifest.record_for_chunk(index)
+        if record is None or record.ordinal in seen:
+            continue
+        seen.add(record.ordinal)
+        checkpoints.forget_chunk(chapter_checkpoint_id(record.ordinal))
+        if record.status is not ChapterStatus.PENDING:
+            record.invalidate()
+            dirty = True
+    if dirty:
+        store.save(manifest)
+
+
 async def assemble_ready_chapters(
     *,
     audio: AudioProcessor,
@@ -52,17 +79,17 @@ async def assemble_ready_chapters(
     chunks: list[Chunk],
     workspace: Path,
     checkpoints: CheckpointStore,
+    manifest: ChapterManifest,
     store: ChapterManifestStore,
     only_chunk_index: int | None = None,
 ) -> None:
     """Write ``chapters/{ordinal}.ext`` for every span whose chunks are normalized.
 
-    A complete ``chapter-NNNN`` checkpoint is not rebuilt. A failed assembly is
-    recorded on that span and re-raised so the job fails; spans already ``ready``
-    stay downloadable. Whole-job retry calls this again and retries ``failed``.
+    ``manifest`` is the in-memory copy for this run. The file is saved only when
+    a span changes state, not once per chunk. A complete ``chapter-NNNN`` checkpoint
+    is not rebuilt. A failed assembly is recorded on that span and re-raised.
     """
-    manifest = store.load()
-    if manifest is None or not manifest.chapters:
+    if not manifest.chapters:
         return
     for record in manifest.chapters:
         if only_chunk_index is not None and not (
@@ -96,7 +123,7 @@ async def _assemble_one(
     if checkpoints.is_complete(key, STAGE_CHAPTER):
         if record.status is not ChapterStatus.READY:
             _become(record, ChapterStatus.READY)
-            _fill_stats(record, workspace, job)
+            await _fill_stats(record, workspace, job, audio)
             store.save(manifest)
         return
     owned = [chunk for chunk in chunks if record.chunk_first <= chunk.index <= record.chunk_last]
@@ -109,7 +136,6 @@ async def _assemble_one(
     if record.status is not ChapterStatus.GENERATING:
         _become(record, ChapterStatus.GENERATING)
     record.attempts += 1
-    store.save(manifest)
     ext = job.output_format.value
     relative = chapter_disk_name(record.ordinal, ext)
     destination = workspace / relative
@@ -123,15 +149,26 @@ async def _assemble_one(
             bitrate_kbps=job.output_bitrate_kbps,
         )
         if not destination.is_file() or destination.stat().st_size == 0:
-            raise DomainError(ErrorType.AUDIO_PROCESSING_FAILED, "chapter assembly failed")
+            raise DomainError(
+                ErrorType.AUDIO_PROCESSING_FAILED,
+                f"chapter {record.ordinal} assembly failed",
+            )
         duration_ms = await audio.get_duration_ms(destination)
         checkpoints.record(key, STAGE_CHAPTER, destination)
-    except DomainError as exc:
-        record.error_type = exc.error_type.value
-        record.message = exc.message
+    except Exception as exc:
+        if isinstance(exc, DomainError):
+            record.error_type = exc.error_type.value
+            record.message = exc.message
+            failure = exc
+        else:
+            record.error_type = ErrorType.AUDIO_PROCESSING_FAILED.value
+            record.message = f"chapter {record.ordinal} assembly failed"
+            failure = DomainError(ErrorType.AUDIO_PROCESSING_FAILED, record.message)
         _become(record, ChapterStatus.FAILED)
         store.save(manifest)
-        raise
+        if isinstance(exc, DomainError):
+            raise
+        raise failure from exc
     record.file = relative
     record.duration_ms = duration_ms
     record.size_bytes = destination.stat().st_size
@@ -148,17 +185,23 @@ async def _assemble_one(
 def _become(record: ChapterRecord, status: ChapterStatus) -> None:
     if record.status is status:
         return
-    if record.status is ChapterStatus.PENDING and status is ChapterStatus.READY:
-        record.mark(ChapterStatus.GENERATING)
-    if record.status is ChapterStatus.FAILED and status is ChapterStatus.READY:
+    if record.status is not ChapterStatus.GENERATING and status is not ChapterStatus.GENERATING:
         record.mark(ChapterStatus.GENERATING)
     if record.status is not status:
         record.mark(status)
 
 
-def _fill_stats(record: ChapterRecord, workspace: Path, job: Job) -> None:
+async def _fill_stats(
+    record: ChapterRecord,
+    workspace: Path,
+    job: Job,
+    audio: AudioProcessor,
+) -> None:
     relative = record.file or chapter_disk_name(record.ordinal, job.output_format.value)
     path = workspace / relative
     record.file = relative
-    if path.is_file():
-        record.size_bytes = path.stat().st_size
+    if not path.is_file():
+        return
+    record.size_bytes = path.stat().st_size
+    if record.duration_ms is None:
+        record.duration_ms = await audio.get_duration_ms(path)

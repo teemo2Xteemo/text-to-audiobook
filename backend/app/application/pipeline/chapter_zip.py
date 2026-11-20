@@ -12,11 +12,17 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 _CHUNK = 1024 * 1024
+_PUT_TIMEOUT_SECONDS = 0.2
 
 
 class _QueueWriter(io.RawIOBase):
-    def __init__(self, messages: queue.Queue[bytes | BaseException | None]) -> None:
+    def __init__(
+        self,
+        messages: queue.Queue[bytes | BaseException | None],
+        cancelled: threading.Event,
+    ) -> None:
         self._messages = messages
+        self._cancelled = cancelled
 
     def writable(self) -> bool:
         return True
@@ -25,10 +31,31 @@ class _QueueWriter(io.RawIOBase):
         return False
 
     def write(self, b: bytes) -> int:  # type: ignore[override]
+        if self._cancelled.is_set():
+            raise BrokenPipeError("zip cancelled")
         payload = bytes(b)
-        if payload:
-            self._messages.put(payload)
-        return len(payload)
+        if not payload:
+            return 0
+        while not self._cancelled.is_set():
+            try:
+                self._messages.put(payload, timeout=_PUT_TIMEOUT_SECONDS)
+                return len(payload)
+            except queue.Full:
+                continue
+        raise BrokenPipeError("zip cancelled")
+
+
+def _offer(
+    messages: queue.Queue[bytes | BaseException | None],
+    cancelled: threading.Event,
+    item: bytes | BaseException | None,
+) -> None:
+    while not cancelled.is_set():
+        try:
+            messages.put(item, timeout=_PUT_TIMEOUT_SECONDS)
+            return
+        except queue.Full:
+            continue
 
 
 async def iter_stored_zip(entries: list[tuple[str, Path]]) -> AsyncIterator[bytes]:
@@ -36,19 +63,23 @@ async def iter_stored_zip(entries: list[tuple[str, Path]]) -> AsyncIterator[byte
 
     The writer thread reads each chapter from disk in 1 MiB pieces. The event
     loop only waits on the bounded queue, so a multi-gigabyte book is not
-    buffered in RAM.
+    buffered in RAM. If the client disconnects, the generator's ``finally``
+    stops the thread and closes the chapter file it was reading.
     """
+    cancelled = threading.Event()
     messages: queue.Queue[bytes | BaseException | None] = queue.Queue(maxsize=8)
 
     def _produce() -> None:
         try:
             with zipfile.ZipFile(
-                _QueueWriter(messages),
+                _QueueWriter(messages, cancelled),
                 "w",
                 compression=zipfile.ZIP_STORED,
                 allowZip64=True,
             ) as archive:
                 for name, path in entries:
+                    if cancelled.is_set():
+                        return
                     info = zipfile.ZipInfo(filename=name)
                     info.compress_type = zipfile.ZIP_STORED
                     with (
@@ -57,15 +88,21 @@ async def iter_stored_zip(entries: list[tuple[str, Path]]) -> AsyncIterator[byte
                     ):
                         shutil.copyfileobj(source, dest, length=_CHUNK)
         except BaseException as exc:  # noqa: BLE001 - the consumer re-raises it
-            messages.put(exc)
+            if not cancelled.is_set():
+                _offer(messages, cancelled, exc)
         finally:
-            messages.put(None)
+            _offer(messages, cancelled, None)
 
-    threading.Thread(target=_produce, name="chapter-zip", daemon=True).start()
-    while True:
-        item = await asyncio.to_thread(messages.get)
-        if item is None:
-            return
-        if isinstance(item, BaseException):
-            raise item
-        yield item
+    thread = threading.Thread(target=_produce, name="chapter-zip", daemon=True)
+    thread.start()
+    try:
+        while True:
+            item = await asyncio.to_thread(messages.get)
+            if item is None:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        cancelled.set()
+        await asyncio.to_thread(thread.join, 2.0)

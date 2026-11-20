@@ -99,6 +99,16 @@ class ChapterRecord:
         self.status = status
         self.updated_at = _now()
 
+    def invalidate(self) -> None:
+        """A chunk in this span must be synthesized again, so the file is stale."""
+        self.status = ChapterStatus.PENDING
+        self.file = None
+        self.duration_ms = None
+        self.size_bytes = None
+        self.error_type = None
+        self.message = None
+        self.updated_at = _now()
+
     def to_dict(self) -> dict[str, object]:
         return {
             "ordinal": self.ordinal,
@@ -174,6 +184,12 @@ class ChapterManifest:
     def by_ordinal(self, ordinal: int) -> ChapterRecord | None:
         for chapter in self.chapters:
             if chapter.ordinal == ordinal:
+                return chapter
+        return None
+
+    def record_for_chunk(self, chunk_index: int) -> ChapterRecord | None:
+        for chapter in self.chapters:
+            if chapter.chunk_first <= chunk_index <= chapter.chunk_last:
                 return chapter
         return None
 

@@ -11,7 +11,10 @@ from shutil import copyfile, rmtree
 
 from app.application.capabilities import refresh_engine_voices
 from app.application.pipeline.artifact_cache import PipelineArtifactCache
-from app.application.pipeline.chapter_assembly import assemble_ready_chapters
+from app.application.pipeline.chapter_assembly import (
+    assemble_ready_chapters,
+    invalidate_chapters_for_chunks,
+)
 from app.application.pipeline.chapters import (
     build_chapter_manifest,
     plan_chapter_chunks,
@@ -38,6 +41,7 @@ from app.application.pipeline.timeline import schedule_srt_timeline
 from app.application.pipeline.translate import translate_chunk
 from app.application.pipeline.tts import select_voice, synthesize_chunk
 from app.domain.audio import TTSSettings
+from app.domain.chapters import ChapterManifest
 from app.domain.chunking import CHUNK_MAX_CHARS, Chunk
 from app.domain.errors import DomainError, ErrorType
 from app.domain.jobs import (
@@ -82,8 +86,13 @@ def _forget_chunks_whose_text_changed(
     workspace: Path,
     checkpoints: CheckpointStore,
     chunks: list[Chunk],
-) -> None:
-    """A checkpoint is for one text. A new split must not reuse its audio."""
+) -> list[int]:
+    """A checkpoint is for one text. A new split must not reuse its audio.
+
+    Returns chunk indexes whose checkpoints were dropped. Their chapter files
+    are stale and must be invalidated by the caller.
+    """
+    forgotten: list[int] = []
     for chunk in chunks:
         path = workspace / "chunks" / f"{chunk.id}.translated.txt"
         if not path.is_file():
@@ -94,6 +103,8 @@ def _forget_chunks_whose_text_changed(
             continue
         if saved != chunk.text:
             checkpoints.forget_chunk(chunk.id)
+            forgotten.append(chunk.index)
+    return forgotten
 
 
 class _BudgetYield(Exception):
@@ -137,6 +148,9 @@ class PipelineOrchestrator:
         self._checkpoint_storage_factory = checkpoint_storage_factory
         self._chapter_manifest_factory = chapter_manifest_factory
         self._chapter_lock = asyncio.Lock()
+        self._manifest_bound = False
+        self._manifest: ChapterManifest | None = None
+        self._manifest_store: ChapterManifestStore | None = None
         self._max_chars = max_chars
         # TODO: require retry_policy (no constructor fallback). These literals
         # duplicate Settings / factory defaults; Settings should be the only source.
@@ -1033,7 +1047,11 @@ class PipelineOrchestrator:
         planned = load_narrate_plan(workspace)
         if planned is not None:
             if forget_on_plan:
-                _forget_chunks_whose_text_changed(workspace, checkpoints, planned)
+                self._drop_stale_chapters(
+                    workspace,
+                    checkpoints,
+                    _forget_chunks_whose_text_changed(workspace, checkpoints, planned),
+                )
             return planned
         if legacy_if_in_flight and _legacy_chunk_progress(workspace, checkpoints):
             return chunk_source(text, max_chars=self._max_chars)
@@ -1048,7 +1066,11 @@ class PipelineOrchestrator:
             store.save(build_chapter_manifest(spans, max_chars=self._max_chars))
         save_narrate_plan(workspace, chunks)
         if forget_on_plan:
-            _forget_chunks_whose_text_changed(workspace, checkpoints, chunks)
+            self._drop_stale_chapters(
+                workspace,
+                checkpoints,
+                _forget_chunks_whose_text_changed(workspace, checkpoints, chunks),
+            )
         return chunks
 
     async def _assemble_chapters(
@@ -1060,8 +1082,8 @@ class PipelineOrchestrator:
         *,
         only_chunk_index: int | None = None,
     ) -> None:
-        factory = self._chapter_manifest_factory
-        if factory is None:
+        manifest, store = self._chapter_state(workspace)
+        if manifest is None or store is None:
             return
         async with self._chapter_lock:
             await assemble_ready_chapters(
@@ -1070,9 +1092,43 @@ class PipelineOrchestrator:
                 chunks=chunks,
                 workspace=workspace,
                 checkpoints=checkpoints,
-                store=factory(workspace),
+                manifest=manifest,
+                store=store,
                 only_chunk_index=only_chunk_index,
             )
+
+    def _drop_stale_chapters(
+        self,
+        workspace: Path,
+        checkpoints: CheckpointStore,
+        chunk_indexes: list[int],
+    ) -> None:
+        factory = self._chapter_manifest_factory
+        if factory is None or not chunk_indexes:
+            return
+        invalidate_chapters_for_chunks(
+            checkpoints=checkpoints,
+            store=factory(workspace),
+            chunk_indexes=chunk_indexes,
+        )
+        # The next assembly loads the file once. Drop a copy taken before this.
+        self._manifest_bound = False
+        self._manifest = None
+        self._manifest_store = None
+
+    def _chapter_state(
+        self, workspace: Path
+    ) -> tuple[ChapterManifest | None, ChapterManifestStore | None]:
+        """Load the manifest once per run. Later chunks only update that object."""
+        factory = self._chapter_manifest_factory
+        if factory is None:
+            return None, None
+        if not self._manifest_bound:
+            store = factory(workspace)
+            self._manifest_store = store
+            self._manifest = store.load()
+            self._manifest_bound = True
+        return self._manifest, self._manifest_store
 
     async def _merge(self, job: Job, chunks: list[Chunk], workspace: Path) -> Job:
         ext = job.output_format.value

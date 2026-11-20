@@ -81,7 +81,8 @@ async def get_job(
         subtitles_path = service.output_subtitles_path(job)
         if subtitles_path.is_file() and subtitles_path.stat().st_size > 0:
             subtitles_url = f"/api/jobs/{job.id}/subtitles"
-    total, ready, failed, chapters_url, zip_url = _chapter_fields(service, job)
+    manifest = await _read_manifest(service, job.id)
+    total, ready, failed, chapters_url, zip_url = _chapter_fields(job, manifest)
     return JobStatusResponse.from_job(
         job,
         subtitles_url=subtitles_url,
@@ -188,7 +189,7 @@ async def list_job_chapters(
     service: JobService = Depends(get_job_service),
 ) -> ChapterListResponse:
     job = await _require_job(job_id, service)
-    manifest = service.load_chapter_manifest(job.id)
+    manifest = await _read_manifest(service, job.id)
     if manifest is None:
         return ChapterListResponse(
             job_id=job.id,
@@ -248,7 +249,7 @@ async def download_chapter_audio(
             status_code=404,
             detail=envelope(ErrorType.INVALID_INPUT, "chapter not found"),
         )
-    manifest = service.load_chapter_manifest(job.id)
+    manifest = await _read_manifest(service, job.id)
     record = None if manifest is None else manifest.by_ordinal(ordinal)
     if record is None:
         raise HTTPException(
@@ -283,7 +284,7 @@ async def download_chapters_zip(
     service: JobService = Depends(get_job_service),
 ) -> StreamingResponse:
     job = await _require_job(job_id, service)
-    manifest = service.load_chapter_manifest(job.id)
+    manifest = await _read_manifest(service, job.id)
     total = 0 if manifest is None else len(manifest.chapters)
     entries: list[tuple[str, Path]] = []
     if manifest is not None:
@@ -326,8 +327,14 @@ async def _require_job(job_id: str, service: JobService) -> Job:
     return job
 
 
-def _chapter_fields(service: JobService, job: Job) -> tuple[int, int, int, str | None, str | None]:
-    manifest = service.load_chapter_manifest(job.id)
+async def _read_manifest(service: JobService, job_id: str) -> ChapterManifest | None:
+    """Parse off the event loop. Repeat polls hit the mtime cache inside the store."""
+    return await run_in_threadpool(service.load_chapter_manifest, job_id)
+
+
+def _chapter_fields(
+    job: Job, manifest: ChapterManifest | None
+) -> tuple[int, int, int, str | None, str | None]:
     if manifest is None:
         return 0, 0, 0, None, None
     total, ready, failed = manifest.counts()

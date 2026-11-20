@@ -409,6 +409,8 @@ curl -sS http://127.0.0.1:8000/api/jobs/${JOB_ID}
 
 Unheaded text is one chapter and the UI keeps the single audiobook button. Timed SRT stays one merged file and has no chapter list. A job that was already running when this landed (checkpoints, no manifest) finishes as a single file.
 
+New translate jobs also stop a chunk at a chapter boundary, so a short chapter is its own request. A book translated before this change misses the translation cache on those shorter chunks and may spend a few more provider calls. Chunks do not carry hidden context into the next chunk.
+
 #### 4. Retry Failed Job (`POST /api/jobs/{job_id}/retry`)
 
 Retries a job in `failed` status from its last valid checkpoint without repeating completed chunks. Returns HTTP 202.

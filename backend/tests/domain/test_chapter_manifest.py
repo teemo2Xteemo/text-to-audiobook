@@ -63,6 +63,37 @@ def test_corrupt_manifest_is_ignored(tmp_path) -> None:
     assert FilesystemChapterManifest(tmp_path).load() is None
 
 
+def test_manifest_load_parses_once_until_the_file_changes(tmp_path, monkeypatch) -> None:
+    from app.infrastructure import chapter_manifest_fs
+
+    store = FilesystemChapterManifest(tmp_path)
+    store.save(
+        ChapterManifest(
+            version=1,
+            max_chars=100,
+            chapter_aware=True,
+            detector="v2",
+            chapters=[_record()],
+        )
+    )
+    chapter_manifest_fs._CACHE.clear()
+    calls = {"n": 0}
+    real_loads = chapter_manifest_fs.json.loads
+
+    def _counting(text: str, *args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        return real_loads(text, *args, **kwargs)
+
+    monkeypatch.setattr(chapter_manifest_fs.json, "loads", _counting)
+    assert store.load() is not None
+    assert store.load() is not None
+    assert calls["n"] == 1
+    path = tmp_path / "chapters.json"
+    path.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    assert store.load() is not None
+    assert calls["n"] == 2
+
+
 def test_manifest_write_is_atomic(tmp_path) -> None:
     store = FilesystemChapterManifest(tmp_path)
     store.save(
