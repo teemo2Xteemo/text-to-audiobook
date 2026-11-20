@@ -30,7 +30,13 @@ MULTIPART_OVERHEAD = 4096
 _MULTIPART_OVERHEAD = MULTIPART_OVERHEAD
 _READ_CHUNK = 64 * 1024
 _ALLOWED_FILE_MIME = frozenset(
-    {"application/octet-stream", "application/x-subrip", "text/plain", "text/vtt"}
+    {
+        "application/octet-stream",
+        "application/x-subrip",
+        "text/plain",
+        "text/vtt",
+        "text/x-ssa",
+    }
 )
 _ALLOWED_ENCODINGS = frozenset(
     {
@@ -188,7 +194,7 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
     text, _ = await _decode_source_text_async(parsed.text.encode("utf-8"), max_upload_bytes)
     source_language = parsed.source_language.strip()
     target_language = parsed.target_language.strip()
-    if parsed.mode == JobMode.TRANSLATE:
+    if parsed.mode in {JobMode.TRANSLATE, JobMode.SUBTITLE}:
         if not source_language:
             raise DomainError(ErrorType.INVALID_INPUT, "source_language is required")
         if not target_language:
@@ -201,14 +207,17 @@ async def _parse_json(request: Request, max_upload_bytes: int) -> CreateJobComma
         source_language=source_language,
         target_language=target_language,
         text=text,
-        voice=parsed.voice,
-        speed=parsed.speed,
-        output_format=parsed.output_format,
+        voice=None if parsed.mode is JobMode.SUBTITLE else parsed.voice,
+        speed=SPEED_DEFAULT if parsed.mode is JobMode.SUBTITLE else parsed.speed,
+        output_format=(
+            OutputFormat.MP3.value if parsed.mode is JobMode.SUBTITLE else parsed.output_format
+        ),
         translation_profile_id=parsed.translation_profile_id,
         mode=parsed.mode,
-        srt_timing=parsed.srt_timing,
-        normalize_text=parsed.normalize_text,
-        tts_engine=parsed.tts_engine,
+        srt_timing=(SrtTiming.CONTINUOUS if parsed.mode is JobMode.SUBTITLE else parsed.srt_timing),
+        normalize_text=False if parsed.mode is JobMode.SUBTITLE else parsed.normalize_text,
+        tts_engine=None if parsed.mode is JobMode.SUBTITLE else parsed.tts_engine,
+        document_format=parsed.document_format,
     )
 
 
@@ -234,16 +243,30 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
     except ValueError:
         raise DomainError(ErrorType.INVALID_INPUT, f"invalid mode: {mode_raw}") from None
 
-    timing_raw = _optional_form_string(form.get("srt_timing")) or SrtTiming.CONTINUOUS.value
-    try:
-        srt_timing = SrtTiming(timing_raw)
-    except ValueError:
-        raise DomainError(
-            ErrorType.INVALID_INPUT, f"invalid srt_timing: {timing_raw[:32]}"
-        ) from None
-
     speed_raw = form.get("speed")
     output_raw = form.get("output_format")
+    subtitle = mode is JobMode.SUBTITLE
+
+    if subtitle:
+        srt_timing = SrtTiming.CONTINUOUS
+        speed = SPEED_DEFAULT
+        output_format = OutputFormat.MP3.value
+        normalize_text = False
+        voice = None
+        tts_engine = None
+    else:
+        timing_raw = _optional_form_string(form.get("srt_timing")) or SrtTiming.CONTINUOUS.value
+        try:
+            srt_timing = SrtTiming(timing_raw)
+        except ValueError:
+            raise DomainError(
+                ErrorType.INVALID_INPUT, f"invalid srt_timing: {timing_raw[:32]}"
+            ) from None
+        speed = _parse_speed(speed_raw)
+        output_format = _optional_form_string(output_raw) or OutputFormat.MP3.value
+        normalize_text = _parse_bool(form.get("normalize_text"), "normalize_text")
+        voice = _optional_form_string(form.get("voice"))
+        tts_engine = _optional_form_string(form.get("tts_engine"))
 
     if mode == JobMode.NARRATE:
         source_language = _optional_form_string(form.get("source_language")) or "auto"
@@ -252,18 +275,23 @@ async def _parse_multipart(request: Request, max_upload_bytes: int) -> CreateJob
         source_language = _form_string(form.get("source_language"), "source_language")
         target_language = _form_string(form.get("target_language"), "target_language")
 
+    source_filename = None
+    if file_present and isinstance(upload, StarletteUploadFile):
+        source_filename = upload.filename
     return CreateJobCommand(
         source_language=source_language,
         target_language=target_language,
         text=text,
-        voice=_optional_form_string(form.get("voice")),
-        speed=_parse_speed(speed_raw),
-        output_format=_optional_form_string(output_raw) or OutputFormat.MP3.value,
+        voice=voice,
+        speed=speed,
+        output_format=output_format,
         translation_profile_id=_optional_form_string(form.get("translation_profile_id")),
         mode=mode,
         srt_timing=srt_timing,
-        normalize_text=_parse_bool(form.get("normalize_text"), "normalize_text"),
-        tts_engine=_optional_form_string(form.get("tts_engine")),
+        normalize_text=normalize_text,
+        tts_engine=tts_engine,
+        document_format=_optional_form_string(form.get("document_format")),
+        source_filename=source_filename,
     )
 
 
@@ -460,8 +488,10 @@ def _assert_safe_txt_filename(filename: str | None) -> None:
     if ".." in normalized.split("/"):
         raise DomainError(ErrorType.INVALID_INPUT, "filename must not contain path traversal")
     name = Path(filename).name
-    if name in {".", ".."} or not name.lower().endswith((".txt", ".srt", ".vtt")):
-        raise DomainError(ErrorType.INVALID_INPUT, "file must be a .txt, .srt, or .vtt document")
+    if name in {".", ".."} or not name.lower().endswith((".txt", ".srt", ".vtt", ".ass")):
+        raise DomainError(
+            ErrorType.INVALID_INPUT, "file must be a .txt, .srt, .vtt, or .ass document"
+        )
 
 
 def _assert_text_mime(content_type: str | None) -> None:

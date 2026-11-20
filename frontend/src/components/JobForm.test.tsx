@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -71,7 +71,7 @@ describe("JobForm", () => {
     render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
     await user.type(screen.getByLabelText("Paste story"), "Once upon a time");
     const file = new File(["uploaded"], "story.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("Or upload a .txt or .srt file"), file);
+    await user.upload(screen.getByLabelText(/Or upload a \.txt, \.srt, \.vtt, or \.ass file/), file);
     expect(screen.getByLabelText("Paste story")).toHaveValue("");
     await user.click(screen.getByRole("button", { name: "Generate" }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -340,7 +340,7 @@ describe("JobForm", () => {
     const input = screen.getByLabelText(/upload a/i);
     fireEvent.change(input, { target: { files: [badFile] } });
     expect(
-      screen.getByText("Only .txt, .srt, and .vtt files are supported."),
+      screen.getByText("Only .txt, .srt, .vtt, and .ass files are supported."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -425,7 +425,9 @@ describe("JobForm", () => {
     const badFile = new File(["binary content"], "archive.zip", {
       type: "application/zip",
     });
-    const dropzone = screen.getByText(/Or upload a \.txt or \.srt file/i).closest(".upload-dropzone");
+    const dropzone = screen
+      .getByText(/Or upload a \.txt, \.srt, \.vtt, or \.ass file/i)
+      .closest(".upload-dropzone");
     expect(dropzone).not.toBeNull();
     fireEvent.drop(dropzone!, {
       dataTransfer: {
@@ -433,7 +435,7 @@ describe("JobForm", () => {
       },
     });
     expect(
-      screen.getByText("Only .txt, .srt, and .vtt files are supported."),
+      screen.getByText("Only .txt, .srt, .vtt, and .ass files are supported."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -863,5 +865,46 @@ describe("JobForm", () => {
       expect(onSubmit).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: "Use Edge instead" })).toBeNull();
     });
+  });
+
+  it("subtitle tab hides voice controls and defaults to txt", async () => {
+    const user = userEvent.setup();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={vi.fn()} />);
+    await user.click(screen.getByRole("tab", { name: "Translate only" }));
+    expect(screen.queryByLabelText(/^voice$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^speed$/i)).toBeNull();
+    expect(screen.getByLabelText("Translation engine")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ".txt" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("uploading .srt locks format to srt", async () => {
+    const user = userEvent.setup();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={vi.fn()} />);
+    await user.click(screen.getByRole("tab", { name: "Translate only" }));
+    const file = new File(
+      ["1\n00:00:01,000 --> 00:00:02,000\nHi\n"],
+      "notes.txt",
+      { type: "application/x-subrip" },
+    );
+    fireEvent.change(screen.getByLabelText(/upload a/i), { target: { files: [file] } });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: ".srt" })).toHaveAttribute("aria-pressed", "true");
+    });
+    expect(screen.getByRole("button", { name: ".txt" })).toBeDisabled();
+  });
+
+  it("submits mode subtitle with document_format", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<JobForm capabilities={capabilitiesFixture} disabled={false} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("tab", { name: "Translate only" }));
+    await user.click(screen.getByRole("button", { name: ".vtt" }));
+    fireEvent.change(screen.getByLabelText("Paste story"), {
+      target: { value: "Hello there." },
+    });
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "subtitle", document_format: "vtt" }),
+    );
   });
 });

@@ -7,6 +7,7 @@ from typing import Any
 
 from app.domain.audio import SPEED_DEFAULT
 from app.domain.errors import ErrorType
+from app.domain.subtitles import DocumentFormat
 
 
 class JobStatus(StrEnum):
@@ -23,6 +24,7 @@ class JobStatus(StrEnum):
 class JobMode(StrEnum):
     TRANSLATE = "translate"
     NARRATE = "narrate"
+    SUBTITLE = "subtitle"
     UNKNOWN = "unknown"
 
 
@@ -76,18 +78,27 @@ def is_at_or_past(current: JobStatus, target: JobStatus) -> bool:
     return current_index >= target_index
 
 
-def can_transition(current: JobStatus, target: JobStatus) -> bool:
+def can_transition(current: JobStatus, target: JobStatus, *, mode: JobMode | None = None) -> bool:
     if current is JobStatus.COMPLETED:
         return False
     if current is JobStatus.FAILED:
         return target is JobStatus.QUEUED
     if target is JobStatus.FAILED:
         return True
+    # Translate-only jobs write the file after translation and never enter TTS.
+    if (
+        mode is JobMode.SUBTITLE
+        and current is JobStatus.TRANSLATING
+        and target is JobStatus.MERGING
+    ):
+        return True
     return _FORWARD.get(current) is target
 
 
-def assert_legal_transition(current: JobStatus, target: JobStatus) -> None:
-    if not can_transition(current, target):
+def assert_legal_transition(
+    current: JobStatus, target: JobStatus, *, mode: JobMode | None = None
+) -> None:
+    if not can_transition(current, target, mode=mode):
         raise IllegalJobTransition(current, target)
 
 
@@ -114,6 +125,22 @@ def _optional_stage(data: Mapping[str, Any]) -> str | None:
         return JobStatus(raw).value
     except ValueError:
         return None
+
+
+def _document_format_from_mapping(data: Mapping[str, Any]) -> DocumentFormat | None:
+    if "document_format" not in data or data["document_format"] is None:
+        return None
+    raw = str(data["document_format"]).strip()
+    if not raw:
+        return None
+    return DocumentFormat(raw)
+
+
+def _optional_source_name(data: Mapping[str, Any]) -> str | None:
+    if "source_name" not in data or data["source_name"] is None:
+        return None
+    text = str(data["source_name"]).strip()
+    return text or None
 
 
 def _pin_from_mapping(data: Mapping[str, Any]) -> tuple[str | None, str | None]:
@@ -162,6 +189,11 @@ class Job:
     error_stage: str | None = None
     # Set when the user continues unfinished chapters with Edge. Omitted otherwise.
     edge_fallback_note: str | None = None
+    # Translate-only output. Omitted from ``to_dict`` when unset so older
+    # status.json files still load. ``line_total`` is the UI line count.
+    document_format: DocumentFormat | None = None
+    source_name: str | None = None
+    line_total: int = 0
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -173,9 +205,12 @@ class Job:
             ("stalled_runs", self.stalled_runs),
             ("progress_marker", self.progress_marker),
             ("run_baseline_marker", self.run_baseline_marker),
+            ("line_total", self.line_total),
         ):
             if value < 0:
                 raise ValueError(f"{name} must be >= 0")
+        if self.mode is JobMode.SUBTITLE and self.document_format is None:
+            raise ValueError("document_format is required for subtitle jobs")
 
         provider = self.translation_provider
         model = self.translation_model
@@ -231,6 +266,12 @@ class Job:
             payload["error_stage"] = self.error_stage
         if self.edge_fallback_note is not None:
             payload["edge_fallback_note"] = self.edge_fallback_note
+        if self.document_format is not None:
+            payload["document_format"] = self.document_format.value
+        if self.source_name:
+            payload["source_name"] = self.source_name
+        if self.line_total > 0:
+            payload["line_total"] = self.line_total
         return payload
 
     @classmethod
@@ -276,4 +317,7 @@ class Job:
             tts_engine=_optional_pin_value(data, "tts_engine"),
             error_stage=_optional_stage(data),
             edge_fallback_note=_optional_pin_value(data, "edge_fallback_note"),
+            document_format=_document_format_from_mapping(data),
+            source_name=_optional_source_name(data),
+            line_total=int(data.get("line_total", 0)),
         )

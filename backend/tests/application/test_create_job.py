@@ -1330,3 +1330,119 @@ def test_create_refreshes_voices_without_capabilities_backoff() -> None:
     asyncio.run(service.create(_narrate()))
     # A user action must not inherit the 30 s capabilities backoff after a blip.
     assert probe.refreshes == [0]
+
+
+SRT_TEXT = "1\n00:00:01,000 --> 00:00:02,000\nHello\n"
+
+
+def test_subtitle_mode_detects_srt_over_requested_txt() -> None:
+    from app.domain.jobs import JobMode
+    from app.domain.subtitles import DocumentFormat
+
+    service, _, _, _ = _service()
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text=SRT_TEXT,
+                mode=JobMode.SUBTITLE,
+                document_format="txt",
+            )
+        )
+    )
+    assert job.document_format is DocumentFormat.SRT
+    assert job.voice is None
+    assert job.tts_engine is None
+    assert job.normalize_text is False
+
+
+def test_pasted_text_defaults_to_txt() -> None:
+    from app.domain.jobs import JobMode
+    from app.domain.subtitles import DocumentFormat
+
+    service, _, _, _ = _service()
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello",
+                mode=JobMode.SUBTITLE,
+            )
+        )
+    )
+    assert job.document_format is DocumentFormat.TXT
+
+
+def test_subtitle_mode_ignores_tts_fields() -> None:
+    from app.domain.jobs import JobMode, SrtTiming
+
+    service, _, _, _ = _service()
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello",
+                mode=JobMode.SUBTITLE,
+                voice="v1",
+                speed=9,
+                output_format="nope",
+                tts_engine="not-enabled",
+                normalize_text=True,
+                srt_timing=SrtTiming.ALIGNED,
+            )
+        )
+    )
+    assert job.voice is None
+    assert job.speed == 1.0
+    assert job.output_format is OutputFormat.MP3
+    assert job.tts_engine is None
+    assert job.normalize_text is False
+    assert job.srt_timing is SrtTiming.CONTINUOUS
+
+
+def test_translate_mode_rejects_document_format() -> None:
+    from app.domain.jobs import JobMode
+
+    service, _, _, _ = _service()
+    with pytest.raises(DomainError) as exc:
+        asyncio.run(
+            service.create(
+                CreateJobCommand(
+                    source_language="en-US",
+                    target_language="vi-VN",
+                    text="Hello",
+                    mode=JobMode.TRANSLATE,
+                    document_format="srt",
+                )
+            )
+        )
+    assert exc.value.error_type is ErrorType.INVALID_INPUT
+
+
+def test_source_name_is_sanitised() -> None:
+    from app.application.jobs import sanitize_source_name
+
+    assert sanitize_source_name('../../ep 01\r\n".srt') == "ep_01"
+    assert sanitize_source_name(None) is None
+    assert sanitize_source_name('a"b\r\n.srt') == "a_b"
+
+
+def test_subtitle_create_stores_sanitised_source_name() -> None:
+    from app.domain.jobs import JobMode
+
+    service, _, _, _ = _service()
+    job = asyncio.run(
+        service.create(
+            CreateJobCommand(
+                source_language="en-US",
+                target_language="vi-VN",
+                text="Hello",
+                mode=JobMode.SUBTITLE,
+                source_filename='../../ep 01\r\n".srt',
+            )
+        )
+    )
+    assert job.source_name == "ep_01"

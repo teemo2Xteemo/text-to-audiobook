@@ -42,14 +42,21 @@ from app.config.settings import Settings
 from app.domain.audio import TTSSettings, ensure_valid_speed
 from app.domain.chapters import ChapterManifest, ChapterStatus
 from app.domain.errors import DomainError, ErrorType
-from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
 from app.domain.ports import LanguageDetector, TTSProvider
+from app.domain.subtitles import DocumentFormat
 
 router = APIRouter()
 
 _MEDIA_TYPES = {
     OutputFormat.MP3: "audio/mpeg",
     OutputFormat.WAV: "audio/wav",
+}
+_DOCUMENT_MEDIA = {
+    DocumentFormat.TXT: "text/plain; charset=utf-8",
+    DocumentFormat.SRT: "application/x-subrip",
+    DocumentFormat.VTT: "text/vtt; charset=utf-8",
+    DocumentFormat.ASS: "text/x-ssa; charset=utf-8",
 }
 
 
@@ -77,10 +84,23 @@ async def get_job(
             detail=envelope(ErrorType.INVALID_INPUT, "job not found"),
         )
     subtitles_url: str | None = None
-    if job.status is JobStatus.COMPLETED:
+    document_url: str | None = None
+    if job.status is JobStatus.COMPLETED and job.mode is not JobMode.SUBTITLE:
         subtitles_path = service.output_subtitles_path(job)
         if subtitles_path.is_file() and subtitles_path.stat().st_size > 0:
             subtitles_url = f"/api/jobs/{job.id}/subtitles"
+    if job.status is JobStatus.COMPLETED and job.mode is JobMode.SUBTITLE:
+        try:
+            document_path = service.output_document_path(job)
+        except DomainError:
+            document_path = None
+        ready = (
+            document_path is not None
+            and document_path.is_file()
+            and document_path.stat().st_size > 0
+        )
+        if ready:
+            document_url = f"/api/jobs/{job.id}/document"
     manifest = await _read_manifest(service, job.id)
     total, ready, failed, chapters_url, zip_url = _chapter_fields(job, manifest)
     can_continue, mix_warning = service.edge_continue_view(job, manifest)
@@ -94,6 +114,7 @@ async def get_job(
         zip_url=zip_url,
         continue_with_edge=can_continue,
         tts_mix_warning=mix_warning,
+        document_url=document_url,
     )
 
 
@@ -155,6 +176,42 @@ async def download_job_subtitles(
         path,
         media_type="application/x-subrip",
         filename=f"{job.id}.srt",
+        content_disposition_type="attachment",
+    )
+
+
+@router.get("/api/jobs/{job_id}/document")
+async def download_job_document(
+    job_id: str,
+    service: JobService = Depends(get_job_service),
+) -> FileResponse:
+    _require_uuid(job_id)
+    job = await service.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.INVALID_INPUT, "job not found"),
+        )
+    if job.status is not JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail=envelope(ErrorType.INVALID_INPUT, "document not ready"),
+        )
+    if job.document_format is None:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.STORAGE_FAILED, "document artifact missing"),
+        )
+    path = service.output_document_path(job)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=envelope(ErrorType.STORAGE_FAILED, "document artifact missing"),
+        )
+    return FileResponse(
+        path,
+        media_type=_DOCUMENT_MEDIA[job.document_format],
+        filename=service.document_download_name(job),
         content_disposition_type="attachment",
     )
 

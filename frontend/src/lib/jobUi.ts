@@ -48,8 +48,10 @@ export function canGenerate(input: {
   text: string;
   file: File | null;
   speed: number;
+  requiresVoice?: boolean;
 }): boolean {
-  if (!input.capabilitiesLoaded || !input.targetLanguage || !input.hasVoice) {
+  const needsVoice = input.requiresVoice !== false;
+  if (!input.capabilitiesLoaded || !input.targetLanguage || (needsVoice && !input.hasVoice)) {
     return false;
   }
   if (!Number.isFinite(input.speed) || input.speed < SPEED_MIN || input.speed > SPEED_MAX) {
@@ -68,6 +70,7 @@ export function progressCopy(
   runCount = 0,
   chaptersReady = 0,
   chaptersTotal = 0,
+  lineTotal = 0,
 ): string {
   let copy: string;
   switch (status) {
@@ -78,7 +81,9 @@ export function progressCopy(
       copy = "Reading story";
       break;
     case "translating":
-      if (mode === "narrate") {
+      if (mode === "subtitle") {
+        copy = "Translating lines…";
+      } else if (mode === "narrate") {
         copy = chunkTotal > 0 ? `Preparing text ${chunkCurrent}/${chunkTotal}` : "Preparing text";
       } else {
         copy = chunkTotal > 0 ? `Translating ${chunkCurrent}/${chunkTotal}` : "Translating";
@@ -92,10 +97,13 @@ export function progressCopy(
         chunkTotal > 0 ? `Generating audio ${chunkCurrent}/${chunkTotal}` : "Generating audio";
       break;
     case "merging":
-      copy = "Merging";
+      copy = mode === "subtitle" ? "Writing file" : "Merging";
       break;
     case "completed":
-      copy = "Completed";
+      copy =
+        mode === "subtitle" && lineTotal > 0
+          ? `Translated ${lineTotal} / ${lineTotal} lines`
+          : "Completed";
       break;
     case "failed":
       copy = "Failed";
@@ -213,6 +221,36 @@ function isSrtDocument(blocks: string[]): boolean {
     return nonEmpty.length >= 2 && isSrtCueBlock(nonEmpty[1]);
   }
   return isSrtCueBlock(first);
+}
+
+export type SubtitleDocumentFormat = "srt" | "vtt" | "ass";
+
+/** Content sniff matching the backend. Plain text returns null. */
+export function detectSubtitleFormat(text: string): SubtitleDocumentFormat | null {
+  const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
+  let hasSection = false;
+  let hasDialogue = false;
+  for (const line of lines) {
+    const stripped = line.trim().toLowerCase();
+    if (stripped === "[script info]" || stripped === "[events]") {
+      hasSection = true;
+    }
+    if (stripped.startsWith("dialogue:")) {
+      hasDialogue = true;
+    }
+    if (hasSection && hasDialogue) {
+      return "ass";
+    }
+  }
+  const first = lines.map((line) => line.trim()).find((line) => line.length > 0) ?? "";
+  if (first.toUpperCase().startsWith("WEBVTT")) {
+    return "vtt";
+  }
+  if (isSrtContent(normalized)) {
+    return "srt";
+  }
+  return null;
 }
 
 export function isSrtContent(text: string): boolean {
@@ -368,6 +406,15 @@ export const PIPELINE_STEPS: readonly PipelineStep[] = [
 ];
 
 export function pipelineStepsForMode(mode?: JobMode): readonly PipelineStep[] {
+  if (mode === "subtitle") {
+    return [
+      { key: "queued", label: "Queue" },
+      { key: "parsing", label: "Parse" },
+      { key: "translating", label: "Translate" },
+      { key: "merging", label: "Write" },
+      { key: "completed", label: "Ready" },
+    ];
+  }
   return [
     { key: "queued", label: "Queue" },
     { key: "parsing", label: "Parse" },

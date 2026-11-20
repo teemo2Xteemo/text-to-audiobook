@@ -22,8 +22,9 @@ from app.config.factory import (
     tts_model_identity,
 )
 from app.config.settings import Settings
-from app.domain.jobs import Job, JobStatus, OutputFormat
+from app.domain.jobs import Job, JobMode, JobStatus, OutputFormat
 from app.domain.retry import RetryPolicy
+from app.domain.subtitles import DocumentFormat
 from app.infrastructure.artifact_cache_fs import FilesystemArtifactCache
 from app.infrastructure.fake_audio import FakeAudioProcessor
 from app.infrastructure.ffmpeg_audio import FFmpegAudioProcessor
@@ -793,3 +794,42 @@ def test_build_tts_engines_and_pin_rewrites_provider(tmp_path: Path) -> None:
     from dataclasses import replace
 
     assert settings_for_tts_pin(settings, replace(job, tts_engine="fish")).tts_provider == "fish"
+    subtitle = replace(
+        job,
+        mode=JobMode.SUBTITLE,
+        document_format=DocumentFormat.TXT,
+        tts_engine="fish",
+    )
+    assert settings_for_tts_pin(settings, subtitle) is settings
+
+
+def test_subtitle_orchestrator_does_not_build_tts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(settings: Settings) -> object:
+        del settings
+        raise UnknownProviderError("tts is not configured")
+
+    monkeypatch.setattr(
+        "app.config.factory._infrastructure",
+        lambda settings: (object(), object(), object()),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_translation_provider",
+        lambda settings: FakeTranslationProvider(),
+    )
+    monkeypatch.setattr(
+        "app.config.factory.build_audio_processor",
+        lambda settings: FakeAudioProcessor(),
+    )
+    monkeypatch.setattr("app.config.factory.build_tts_provider", boom)
+    settings = Settings(
+        _env_file=None,
+        storage_path=tmp_path,
+        translation_provider="fake",
+        tts_provider="not-a-provider",
+    )
+    orchestrator = build_orchestrator(settings, for_mode=JobMode.SUBTITLE)
+    assert orchestrator is not None
+    with pytest.raises(UnknownProviderError):
+        build_orchestrator(settings, for_mode=JobMode.TRANSLATE)

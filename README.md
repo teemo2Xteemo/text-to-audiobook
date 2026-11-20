@@ -331,16 +331,17 @@ Creates an asynchronous generation job. Accepts JSON (`CreateJobJsonBody`) or mu
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `text` / `file` | string / file | *Required* | Exactly one of plain text string or uploaded file (`.txt` or `.srt`). |
-| `mode` | string | `"translate"` | `"translate"` (translate then narrate) or `"narrate"` (direct narration in source language, zero model cost). |
+| `text` / `file` | string / file | *Required* | Exactly one of plain text or an uploaded `.txt`, `.srt`, `.vtt`, or `.ass` file. |
+| `mode` | string | `"translate"` | `"translate"` (translate then narrate), `"narrate"` (direct narration, zero model cost), or `"subtitle"` (translate subtitles or text and download the file; no audio). |
+| `document_format` | string | `"txt"` | Subtitle mode only. `"txt"`, `"srt"`, `"vtt"`, or `"ass"`. Ignored when the content is itself SRT, WebVTT, or ASS: the output keeps that format. |
 | `source_language` | string | `"auto"` | BCP-47 language tag or `"auto"` (auto-detected via language detector). |
 | `target_language` | string | `""` | Target language tag. Required in `translate` mode. In `narrate` mode, optional (defaults to resolved source language). |
 | `voice` | string | `null` | Voice ID. If omitted, resolved via language-family fallback matching the language. |
 | `speed` | float | `1.0` | Speech rate multiplier (`0.5` to `2.0`). |
 | `output_format` | string | `"mp3"` | Audio output container: `"mp3"` or `"wav"`. |
 | `translation_profile_id` | string | `null` | Optional translation profile from capabilities. Allowed in `translate` mode; rejected in `narrate` mode. |
-| `srt_timing` | string | `"continuous"` | Narrate mode with `.srt`/`.vtt` input only. `"continuous"` reads the subtitles as one story (cues joined; a new paragraph after a > 2 s pause that ends a sentence). `"aligned"` voices each cue on its timestamp and also writes timed subtitles. Rejected in `translate` mode, which always uses the cue timeline. Ignored for non-subtitle input. |
-| `normalize_text` | boolean | `false` | Narrate mode only (rejected in `translate`). Rewrite numbers, dates and abbreviations as spoken words with an LLM before narration (no translation). Output that fails a fidelity check (changed lines, lost text, new script, preamble) is discarded and the original chunk is narrated. Requires `TEXT_NORMALIZER_PROVIDER` (`groq` or `openrouter`, reusing that provider's key and model); otherwise `PROVIDER_CONFIGURATION_ERROR`. Adds model cost. |
+| `srt_timing` | string | `"continuous"` | Narrate mode with `.srt`/`.vtt` input only. `"continuous"` reads the subtitles as one story (cues joined; a new paragraph after a > 2 s pause that ends a sentence). `"aligned"` voices each cue on its timestamp and also writes timed subtitles. Rejected in `translate` mode, which always uses the cue timeline. Ignored for non-subtitle input and in `subtitle` mode. |
+| `normalize_text` | boolean | `false` | Narrate mode only (rejected in `translate`). Rewrite numbers, dates and abbreviations as spoken words with an LLM before narration (no translation). Output that fails a fidelity check (changed lines, lost text, new script, preamble) is discarded and the original chunk is narrated. Requires `TEXT_NORMALIZER_PROVIDER` (`groq` or `openrouter`, reusing that provider's key and model); otherwise `PROVIDER_CONFIGURATION_ERROR`. Adds model cost. Ignored in `subtitle` mode. |
 
 **Narrate Mode Example (Direct Narration Without Translation):**
 ```bash
@@ -367,6 +368,18 @@ curl -sS -X POST http://127.0.0.1:8000/api/jobs \
   }'
 ```
 *Note:* In `translate` mode, if `source_language == target_language`, translation is automatically bypassed using pass-through checkpoints.
+
+**Translate-only example** (no voice, no audio). Voice, speed, audio format, `tts_engine`, `normalize_text`, and `srt_timing` are ignored:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/jobs \
+  -F "mode=subtitle" \
+  -F "source_language=en-US" \
+  -F "target_language=vi-VN" \
+  -F "file=@video01.srt"
+```
+
+A `.srt`, `.vtt`, or `.ass` file (or pasted subtitle text) keeps its cue count and timecodes. Plain text or a `.txt` file uses `document_format` (default `txt`). When that format is timed, cues are placed back-to-back from `00:00:00` at about 1–7 seconds each.
 
 *Note:* Narrating chaptered text inserts `NARRATE_CHAPTER_PAUSE_MS` (default 1500 ms, `0` disables) of silence between chapters in the merged audio.
 
@@ -401,8 +414,9 @@ curl -sS http://127.0.0.1:8000/api/jobs/${JOB_ID}
 
 #### 3. Download Artifacts
 
-- **Audio:** `GET /api/jobs/{job_id}/audio` — streams the generated audiobook (`audio/mpeg` or `audio/wav`) with HTTP Range (206) seek support. Available once the job is `completed`.
-- **Subtitles:** `GET /api/jobs/{job_id}/subtitles` — downloads timed SubRip subtitles (`.srt`) aligned with narration timestamps.
+- **Audio:** `GET /api/jobs/{job_id}/audio` — streams the generated audiobook (`audio/mpeg` or `audio/wav`) with HTTP Range (206) seek support. Available once the job is `completed`. Subtitle-mode jobs have no `audio_url`.
+- **Translated document:** `GET /api/jobs/{job_id}/document` — downloads the translate-only result (`text/plain`, `application/x-subrip`, `text/vtt`, or `text/x-ssa`) as `<stem>.<target_language>.<ext>`. `409` before the job is `completed`. `GET /api/jobs/{job_id}` sets `document_url` when the file is ready.
+- **Subtitles:** `GET /api/jobs/{job_id}/subtitles` — downloads timed SubRip subtitles (`.srt`) aligned with narration timestamps. Not used by subtitle mode.
 - **Chapters:** `GET /api/jobs/{job_id}/chapters` — lists spans (preface, volume, chapter) with status, duration, size, and error. `?status=ready|failed|pending|generating`, `?q=`, `?offset=`, `?limit=` (default 100, max 200). A job with no manifest returns `total: 0`. `chapters_total`, `chapters_ready`, `chapters_failed`, `chapters_url`, and `zip_url` are also on `GET /api/jobs/{job_id}` (`zip_url` is set once at least one chapter file is ready).
 - **One chapter:** `GET /api/jobs/{job_id}/chapters/{ordinal}/audio` — streams that file while the job is still running or has failed. `ordinal` is the unique span index (`0001` on disk), not the printed chapter number. `?download=1` sends `Content-Disposition: attachment`. `409` until that chapter is `ready`.
 - **ZIP:** `GET /api/jobs/{job_id}/chapters.zip` — streams the ready chapter files (`application/zip`, stored, ZIP64) named `0001 - <title>.mp3` in ordinal order. `X-Chapters-Partial: true` and `X-Chapters-Included: 412/800` until every span is included. `409` when none are ready. The archive is not stored on disk.

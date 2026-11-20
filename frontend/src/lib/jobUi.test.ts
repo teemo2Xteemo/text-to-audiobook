@@ -4,6 +4,7 @@ import type { Voice } from "../api/types";
 import {
   canGenerate,
   computeProgressPercent,
+  detectSubtitleFormat,
   estimateTextMetrics,
   formatDuration,
   friendlyError,
@@ -76,6 +77,22 @@ describe("jobUi", () => {
       "Generating audio 40/80 · 412/800 chapters ready · run 2",
     );
     expect(progressCopy("failed", 0, 0)).toBe("Failed");
+    expect(progressCopy("translating", 1, 4, "subtitle")).toBe("Translating lines…");
+    expect(progressCopy("completed", 4, 4, "subtitle", 0, 0, 0, 12)).toBe(
+      "Translated 12 / 12 lines",
+    );
+    expect(progressCopy("merging", 0, 0, "subtitle")).toBe("Writing file");
+  });
+
+  it("detectSubtitleFormat recognises pasted srt, vtt and ass", () => {
+    expect(detectSubtitleFormat("1\n00:00:01,000 --> 00:00:02,000\nHi")).toBe("srt");
+    expect(detectSubtitleFormat("\uFEFFWEBVTT\r\n\r\n00:00:01.000 --> 00:00:02.000\r\nHi")).toBe(
+      "vtt",
+    );
+    expect(
+      detectSubtitleFormat("[Script Info]\n\n[Events]\nFormat: Text\nDialogue: 0,Hi"),
+    ).toBe("ass");
+    expect(detectSubtitleFormat("plain")).toBeNull();
   });
 
   it("requires exactly one of paste or file once a voice exists", () => {

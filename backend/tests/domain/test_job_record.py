@@ -171,6 +171,67 @@ def test_job_mode_serialization_and_validation() -> None:
     assert Job.from_dict(d_invalid).mode == JobMode.UNKNOWN
 
 
+def test_subtitle_job_round_trips_document_fields() -> None:
+    from app.domain.jobs import JobMode
+    from app.domain.subtitles import DocumentFormat
+
+    job = Job(
+        id="job-sub",
+        status=JobStatus.QUEUED,
+        source_language="en-US",
+        target_language="vi-VN",
+        voice=None,
+        speed=1.0,
+        output_format=OutputFormat.MP3,
+        output_bitrate_kbps=128,
+        mode=JobMode.SUBTITLE,
+        document_format=DocumentFormat.ASS,
+        source_name="ep01",
+        line_total=4,
+    )
+    data = job.to_dict()
+    assert data["mode"] == "subtitle"
+    assert data["document_format"] == "ass"
+    assert data["source_name"] == "ep01"
+    assert data["line_total"] == 4
+    assert Job.from_dict(data) == job
+
+
+def test_translate_job_dict_has_no_document_fields() -> None:
+    assert "document_format" not in _legacy_job_payload()
+    job = Job.from_dict(_legacy_job_payload())
+    assert job.document_format is None
+    assert job.source_name is None
+    assert job.line_total == 0
+    assert "document_format" not in job.to_dict()
+    assert "source_name" not in job.to_dict()
+    assert "line_total" not in job.to_dict()
+
+
+def test_subtitle_job_requires_document_format() -> None:
+    from app.domain.jobs import JobMode
+
+    with pytest.raises(ValueError, match="document_format"):
+        Job(
+            id="job-sub",
+            status=JobStatus.QUEUED,
+            source_language="en-US",
+            target_language="vi-VN",
+            voice=None,
+            speed=1.0,
+            output_format=OutputFormat.MP3,
+            output_bitrate_kbps=128,
+            mode=JobMode.SUBTITLE,
+        )
+
+
+def test_invalid_document_format_rejected() -> None:
+    payload = _legacy_job_payload()
+    payload["document_format"] = "mp4"
+    with pytest.raises(ValueError):
+        Job.from_dict(payload)
+
+
 def test_job_from_dict_missing_required_fields_raises() -> None:
     from app.domain.jobs import Job, JobStatus, OutputFormat
 
